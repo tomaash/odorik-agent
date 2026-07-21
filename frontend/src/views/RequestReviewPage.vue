@@ -133,69 +133,69 @@ store.load(String(route.params.id))
 </script>
 
 <template>
-  <section>
-    <Button label="Back to inbox" icon="pi pi-arrow-left" severity="secondary" text class="mb-5" @click="router.push('/')" />
+  <section class="min-w-0">
+    <Button label="Back to inbox" icon="pi pi-arrow-left" severity="secondary" text class="max-w-full mb-4 sm:mb-5" @click="router.push('/')" />
     <Message v-if="store.error" severity="error" :closable="false">{{ store.error }}</Message>
     <div v-if="store.loading && !details" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <template v-else-if="details">
-      <div class="flex items-start justify-between gap-4 flex-wrap mb-7">
-        <div>
-          <div class="flex items-center gap-2 mb-2">
+      <div class="min-w-0 grid gap-4 sm:flex sm:items-start sm:justify-between mb-6 sm:mb-7">
+        <div class="min-w-0">
+          <div class="flex items-center gap-2 flex-wrap mb-2">
             <Tag value="Human review required" severity="warn" rounded />
             <Tag :value="String(details.processingRun?.model || 'Gemini')" severity="secondary" rounded />
           </div>
-          <h1 class="text-4xl font-bold tracking-tight">Review telephone intake</h1>
-          <p class="text-surface-500 mt-2">Proposals are evidence, not company truth, until you approve this form.</p>
+          <h1 class="text-3xl sm:text-4xl font-bold tracking-tight leading-tight break-words">Review telephone intake</h1>
+          <p class="text-surface-500 leading-relaxed mt-2 max-w-3xl">Proposals are evidence, not company truth, until you approve this form.</p>
         </div>
-        <Button label="Approve intake" icon="pi pi-check" size="large" :loading="saving" :disabled="!form.title.trim()" @click="saveReview" />
+        <Button label="Approve intake" icon="pi pi-check" size="large" class="w-full sm:w-auto shrink-0" :loading="saving" :disabled="!form.title.trim()" @click="saveReview" />
       </div>
 
-      <div class="grid xl:grid-cols-[minmax(0,1.05fr)_minmax(380px,.95fr)] gap-6 items-start">
-        <div class="grid gap-5">
-          <Card class="rounded-2xl border border-surface-200 shadow-sm">
-            <template #title><div class="flex items-center gap-2"><i class="pi pi-user text-emerald-700" /> Customer</div></template>
+      <div class="min-w-0 grid xl:grid-cols-[minmax(0,1.05fr)_minmax(380px,.95fr)] gap-5 sm:gap-6 items-start">
+        <div class="min-w-0 grid gap-5">
+          <Card class="min-w-0 overflow-hidden rounded-2xl border border-surface-200 shadow-sm [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+            <template #title><div class="flex items-center gap-2 break-words"><i class="pi pi-user text-emerald-700 shrink-0" /> Customer</div></template>
             <template #content>
-              <div class="grid sm:grid-cols-2 gap-4">
-                <label class="grid gap-2 text-sm font-medium">Name<InputText v-model="form.contactName" fluid /></label>
-                <label class="grid gap-2 text-sm font-medium">Phone<InputText :modelValue="String(details.contact?.phoneE164 || details.contact?.phoneRaw || '')" disabled fluid /></label>
-                <label class="grid gap-2 text-sm font-medium sm:col-span-2">Email<InputText v-model="form.email" type="email" fluid /></label>
+              <div class="min-w-0 grid sm:grid-cols-2 gap-4">
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Name<InputText v-model="form.contactName" class="min-w-0 max-w-full" fluid /></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Phone<InputText :modelValue="String(details.contact?.phoneE164 || details.contact?.phoneRaw || '')" class="min-w-0 max-w-full" disabled fluid /></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium sm:col-span-2">Email<InputText v-model="form.email" class="min-w-0 max-w-full" type="email" fluid /></label>
               </div>
             </template>
           </Card>
 
-          <Card class="rounded-2xl border border-surface-200 shadow-sm">
-            <template #title><div class="flex items-center gap-2"><i class="pi pi-briefcase text-emerald-700" /> Service request</div></template>
+          <Card class="min-w-0 overflow-hidden rounded-2xl border border-surface-200 shadow-sm [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+            <template #title><div class="flex items-center gap-2 break-words"><i class="pi pi-briefcase text-emerald-700 shrink-0" /> Service request</div></template>
             <template #content>
-              <div class="grid gap-4">
-                <label class="grid gap-2 text-sm font-medium">Request title<InputText v-model="form.title" fluid /></label>
-                <div class="grid sm:grid-cols-2 gap-4">
-                  <label class="grid gap-2 text-sm font-medium">Service type<InputText v-model="form.serviceType" fluid /></label>
-                  <label class="grid gap-2 text-sm font-medium">Urgency
-                    <Select v-model="form.urgency" :options="[{label:'Normal',value:'normal'},{label:'Urgent',value:'urgent'}]" optionLabel="label" optionValue="value" fluid />
+              <div class="min-w-0 grid gap-4">
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Request title<InputText v-model="form.title" class="min-w-0 max-w-full" fluid /></label>
+                <div class="min-w-0 grid sm:grid-cols-2 gap-4">
+                  <label class="min-w-0 grid gap-2 text-sm font-medium">Service type<InputText v-model="form.serviceType" class="min-w-0 max-w-full" fluid /></label>
+                  <label class="min-w-0 grid gap-2 text-sm font-medium">Urgency
+                    <Select v-model="form.urgency" class="min-w-0 max-w-full" :options="[{label:'Normal',value:'normal'},{label:'Urgent',value:'urgent'}]" optionLabel="label" optionValue="value" fluid />
                   </label>
                 </div>
-                <label class="grid gap-2 text-sm font-medium">Description<Textarea v-model="form.description" rows="5" autoResize fluid /></label>
-                <label class="grid gap-2 text-sm font-medium">Address<InputText v-model="form.address" fluid /></label>
-                <label class="grid gap-2 text-sm font-medium">Requested timing<InputText v-model="form.requestedTiming" fluid /><small class="font-normal text-surface-400">Customer preference, not a scheduled commitment.</small></label>
-                <label class="grid gap-2 text-sm font-medium">Notes<Textarea v-model="form.notes" rows="3" autoResize fluid /></label>
-                <label class="grid gap-2 text-sm font-medium">Missing information<Textarea v-model="form.missingInformationText" rows="4" autoResize fluid /><small class="font-normal text-surface-400">One item per line.</small></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Description<Textarea v-model="form.description" class="min-w-0 max-w-full" rows="5" autoResize fluid /></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Address<InputText v-model="form.address" class="min-w-0 max-w-full" fluid /></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Requested timing<InputText v-model="form.requestedTiming" class="min-w-0 max-w-full" fluid /><small class="font-normal text-surface-400 break-words">Customer preference, not a scheduled commitment.</small></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Notes<Textarea v-model="form.notes" class="min-w-0 max-w-full" rows="3" autoResize fluid /></label>
+                <label class="min-w-0 grid gap-2 text-sm font-medium">Missing information<Textarea v-model="form.missingInformationText" class="min-w-0 max-w-full" rows="4" autoResize fluid /><small class="font-normal text-surface-400">One item per line.</small></label>
               </div>
             </template>
           </Card>
 
-          <Card class="rounded-2xl border border-surface-200 shadow-sm">
-            <template #title>Model proposals and evidence</template>
+          <Card class="min-w-0 overflow-hidden rounded-2xl border border-surface-200 shadow-sm [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+            <template #title><span class="break-words">Model proposals and evidence</span></template>
             <template #content>
-              <div v-if="proposals.length" class="grid gap-3">
-                <div v-for="proposal in proposals" :key="proposal.field" class="border border-surface-200 rounded-xl p-4">
-                  <div class="flex justify-between gap-3 items-center mb-2">
-                    <strong>{{ proposal.field }}</strong>
+              <div v-if="proposals.length" class="min-w-0 grid gap-3">
+                <div v-for="proposal in proposals" :key="proposal.field" class="min-w-0 border border-surface-200 rounded-xl p-3 sm:p-4 overflow-hidden">
+                  <div class="min-w-0 flex justify-between gap-2 sm:gap-3 items-center flex-wrap mb-2">
+                    <strong class="min-w-0 break-words">{{ proposal.field }}</strong>
                     <Tag :value="proposal.support" :severity="proposal.support === 'explicit' ? 'success' : 'warn'" rounded />
                   </div>
-                  <p class="m-0 text-surface-700">{{ proposal.value }}</p>
-                  <div v-if="proposal.evidence.length" class="flex gap-2 flex-wrap mt-3">
-                    <button v-for="evidence in proposal.evidence" :key="`${proposal.field}-${evidence.segmentIndex}`" type="button" class="text-left text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg px-3 py-2 cursor-pointer hover:bg-emerald-100" @click="focusEvidence(evidence.segmentIndex)">
+                  <p class="max-w-full m-0 text-surface-700 leading-relaxed break-words">{{ proposal.value }}</p>
+                  <div v-if="proposal.evidence.length" class="min-w-0 flex gap-2 flex-wrap mt-3">
+                    <button v-for="evidence in proposal.evidence" :key="`${proposal.field}-${evidence.segmentIndex}`" type="button" class="max-w-full whitespace-normal break-words text-left text-xs bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-lg px-3 py-2 cursor-pointer hover:bg-emerald-100" @click="focusEvidence(evidence.segmentIndex)">
                       “{{ evidence.quote }}”
                     </button>
                   </div>
@@ -206,22 +206,22 @@ store.load(String(route.params.id))
           </Card>
         </div>
 
-        <Card class="rounded-2xl border border-surface-200 shadow-sm xl:sticky xl:top-24 max-h-[calc(100vh-8rem)] overflow-hidden">
-          <template #title><div class="flex items-center gap-2"><i class="pi pi-align-left text-emerald-700" /> Transcript</div></template>
-          <template #subtitle>{{ details.interaction?.summary }}</template>
+        <Card class="min-w-0 overflow-hidden rounded-2xl border border-surface-200 shadow-sm xl:sticky xl:top-24 xl:max-h-[calc(100vh-8rem)] [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+          <template #title><div class="flex items-center gap-2 break-words"><i class="pi pi-align-left text-emerald-700 shrink-0" /> Transcript</div></template>
+          <template #subtitle><span class="block max-w-full break-words leading-relaxed">{{ details.interaction?.summary }}</span></template>
           <template #content>
-            <div class="overflow-y-auto max-h-[calc(100vh-16rem)] pr-2 grid gap-3">
+            <div class="min-w-0 grid gap-3 xl:overflow-y-auto xl:max-h-[calc(100vh-16rem)] xl:pr-2">
               <div
                 v-for="(segment, index) in segments"
                 :key="index"
                 :ref="(element) => setSegmentElement(element, index)"
-                class="transcript-segment border border-surface-200 rounded-xl p-4 transition"
+                class="transcript-segment min-w-0 border border-surface-200 rounded-xl p-3 sm:p-4 transition overflow-hidden"
                 :data-active="activeSegment === index"
               >
                 <div class="text-xs uppercase tracking-wide text-surface-400 mb-1">{{ segment.speaker || `Speaker ${index + 1}` }}</div>
-                <p class="m-0 leading-relaxed">{{ segment.text }}</p>
+                <p class="max-w-full m-0 leading-relaxed break-words">{{ segment.text }}</p>
               </div>
-              <p v-if="segments.length === 0" class="whitespace-pre-wrap leading-relaxed">{{ details.interaction?.transcript }}</p>
+              <p v-if="segments.length === 0" class="max-w-full whitespace-pre-wrap leading-relaxed break-words">{{ details.interaction?.transcript }}</p>
             </div>
           </template>
         </Card>

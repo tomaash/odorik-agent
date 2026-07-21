@@ -26,8 +26,8 @@ async function signIn() {
 </script>
 
 <template>
-  <main class="app-gradient min-h-screen flex items-center justify-center p-5">
-    <div class="w-full max-w-5xl grid lg:grid-cols-[1.2fr_.8fr] gap-10 items-center">
+  <main class="app-gradient min-h-screen min-w-0 overflow-x-hidden flex items-center justify-center p-4 sm:p-5">
+    <div class="min-w-0 w-full max-w-5xl grid lg:grid-cols-[1.2fr_.8fr] gap-8 lg:gap-10 items-center">
       <section class="hidden lg:block">
         <div class="inline-flex items-center gap-2 rounded-full bg-emerald-100 text-emerald-900 px-4 py-2 text-sm font-semibold mb-7">
           <i class="pi pi-phone" /> Odorik → Gemini → Firestore
@@ -40,13 +40,13 @@ async function signIn() {
         </p>
       </section>
 
-      <Card class="shadow-xl border border-surface-200 rounded-3xl overflow-hidden">
+      <Card class="min-w-0 shadow-xl border border-surface-200 rounded-3xl overflow-hidden [&_.p-card-body]:p-0">
         <template #content>
           <div class="p-4 sm:p-7">
             <div class="w-14 h-14 rounded-2xl bg-emerald-800 text-white flex items-center justify-center mb-7">
               <i class="pi pi-comments text-2xl" />
             </div>
-            <h2 class="text-3xl font-semibold mb-3">{{ $t('app.name') }}</h2>
+            <h2 class="text-2xl sm:text-3xl font-semibold mb-3 break-words">{{ $t('app.name') }}</h2>
             <p class="text-surface-500 mb-8 leading-relaxed">{{ $t('login.subtitle') }}</p>
             <Button
               :label="$t('login.google')"

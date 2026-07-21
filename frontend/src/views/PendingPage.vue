@@ -30,22 +30,22 @@ async function signOut() {
 </script>
 
 <template>
-  <main class="app-gradient min-h-screen flex items-center justify-center p-5">
-    <Card class="w-full max-w-xl shadow-lg rounded-3xl">
+  <main class="app-gradient min-h-screen min-w-0 overflow-x-hidden flex items-center justify-center p-4 sm:p-5">
+    <Card class="min-w-0 w-full max-w-xl overflow-hidden shadow-lg rounded-3xl [&_.p-card-body]:p-0">
       <template #content>
         <div class="p-5 sm:p-9 text-center">
           <div class="w-16 h-16 mx-auto rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mb-6">
             <i class="pi pi-lock text-2xl" />
           </div>
-          <h1 class="text-3xl font-semibold mb-3">{{ $t('pending.title') }}</h1>
+          <h1 class="text-2xl sm:text-3xl font-semibold mb-3 break-words">{{ $t('pending.title') }}</h1>
           <p class="text-surface-500 leading-relaxed mb-6">{{ $t('pending.description') }}</p>
-          <div class="rounded-xl bg-surface-100 p-4 mb-6 text-sm">
+          <div class="min-w-0 rounded-xl bg-surface-100 p-4 mb-6 text-sm overflow-hidden">
             <strong>{{ authStore.user?.displayName }}</strong><br />
-            <span class="text-surface-500">{{ authStore.user?.email }}</span>
+            <span class="text-surface-500 break-all">{{ authStore.user?.email }}</span>
           </div>
-          <div class="flex gap-3 justify-center flex-wrap">
-            <Button :label="$t('pending.refresh')" icon="pi pi-refresh" :loading="checking" @click="check" />
-            <Button label="Odhlásit" icon="pi pi-sign-out" severity="secondary" outlined @click="signOut" />
+          <div class="grid sm:flex gap-3 sm:justify-center sm:flex-wrap">
+            <Button :label="$t('pending.refresh')" icon="pi pi-refresh" class="w-full sm:w-auto" :loading="checking" @click="check" />
+            <Button label="Odhlásit" icon="pi pi-sign-out" class="w-full sm:w-auto" severity="secondary" outlined @click="signOut" />
           </div>
           <Message v-if="info" severity="info" :closable="false" class="mt-5">{{ info }}</Message>
         </div>
