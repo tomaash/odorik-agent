@@ -1,46 +1,95 @@
-# Odorik transcription spike
+# Odorik CRM
 
-This spike receives completed Odorik call recordings, stores them privately,
-transcribes and summarizes them with Gemini Flash-Lite, persists application
-data in Firestore Enterprise, and exposes an authenticated tRPC dashboard.
+Odorik CRM turns recorded phone calls into reviewable service requests. Odorik
+uploads each completed recording directly to a private Cloud Run endpoint, so
+the system does not require Asterisk, a SIP server, or a speaking agent.
 
-## Services
+## Live application
 
-- `odorik-ingest`: public HTTP integration secured with dedicated Basic
-  credentials. It accepts Odorik's `multipart/form-data` recording upload.
-- `odorik-processor`: private Eventarc destination. It transcribes new Cloud
-  Storage objects with `gemini-3.1-flash-lite`.
-- `odorik-api`: tRPC API and minimal browser dashboard secured by a dashboard
-  token.
-
-Audio lives in a private Cloud Storage bucket and is deleted after 30 days.
-Call metadata and transcripts live in the named `odorik` Firestore Enterprise
-Native mode database. Call documents carry a 90-day `expiresAt` value and the
-database TTL policy removes them automatically.
-
-## Live spike
-
+- CRM: <https://odorik-tx-260720-c58d.web.app>
 - Google Cloud project: `odorik-tx-260720-c58d`
-- Dashboard: <https://odorik-api-apf5skngva-ey.a.run.app/>
-- Region: `europe-west3`
+- Region and Firestore location: `europe-west3`
+- Database: named Firestore Enterprise database `odorik`
+- Extraction model: `gemini-3.1-flash-lite`
 
-The dashboard token and Odorik upload credentials are stored in Secret Manager.
-The configured Odorik destination uses the dedicated ingest service with the
-`!opus` format suffix; no SIP PBX or Asterisk service is involved.
+The former token dashboard remains deployed at
+<https://odorik-api-apf5skngva-ey.a.run.app> while the CRM is being accepted.
 
-## Local checks
+## Flow
+
+1. `odorik-ingest` accepts Odorik's authenticated multipart recording upload.
+2. A private bucket stores the audio and emits an Eventarc event.
+3. `odorik-processor` transcribes and summarizes the call with Gemini.
+4. The `processCallCrm` Firestore trigger creates an interaction, deterministic
+   phone contact, proposed service request, processing run, and review task.
+5. A signed-in, enabled person reviews the proposals against linked transcript
+   evidence. Only that approval writes canonical CRM fields.
+
+The Vue application calls one Firebase Gen 2 HTTP function through tRPC. Browser
+Firestore access is denied; authentication and authorization are checked in the
+API on every request.
+
+## Access control
+
+Google sign-in authenticates identity but does not grant CRM access. On first
+sign-in, the API creates:
+
+```text
+access/{firebaseUid}
+  enabled: false
+  admin: false
+```
+
+To authorize someone, open the named `odorik` database in Firebase Console,
+find their document in the `access` collection, and change `enabled` to `true`.
+There is deliberately no approval screen or bootstrap exception in the app.
+
+## Data and retention
+
+- Audio is private and deleted by bucket lifecycle after 30 days.
+- Calls, interactions, and Gemini processing runs carry `expiresAt` and have
+  Firestore TTL policies. Evidence data expires after 90 days.
+- Contacts, canonical service requests, reviews, tasks, and audit events are
+  retained as business records.
+- Gemini and integration credentials live in Secret Manager and are never sent
+  to the browser or committed.
+
+## Repository
+
+- `src/`, `Dockerfile.*`, `infra/`: recording ingestion and transcription spike
+- `functions/`: Firebase Auth context, tRPC router, CRM extraction and review
+- `frontend/`: Vue 3, TypeScript, Pinia, PrimeVue, Tailwind, and Firebase Auth
+- `firestore.rules`, `firestore.indexes.json`: named-database security, indexes,
+  and TTL policies
+
+## Local verification
 
 ```bash
 npm install
 npm test
+
+npm --prefix functions ci
+npm --prefix functions test
+
+npm --prefix frontend ci
+npm --prefix frontend run typecheck
+npm --prefix frontend run build
 ```
 
 ## Deployment
 
-`infra/bootstrap.sh` creates the isolated project infrastructure.
-`infra/deploy.sh` builds and deploys the three Cloud Run services.
-`scripts/smoke-test.sh` generates a synthetic call and submits it through the
-same HTTP endpoint Odorik uses.
+Firebase resources can be deployed manually with:
 
-Secrets belong in Secret Manager and must never be committed. The local `.env`
-file is ignored.
+```bash
+functions/node_modules/.bin/firebase deploy \
+  --only functions:crm,firestore:odorik,hosting \
+  --project odorik-tx-260720-c58d
+```
+
+Pushes to `main` also deploy through GitHub Actions. The workflow uses Google
+Workload Identity Federation scoped to `tomaash/odorik-agent`; it has no service
+account key. GitHub contains only the provider resource name and deploy service
+account address.
+
+The Odorik destination, its recording format, and existing production secrets
+must not be changed as part of ordinary CRM deployments.

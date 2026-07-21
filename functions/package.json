@@ -1,0 +1,27 @@
+{
+  "name": "odorik-crm-functions",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "lib/index.js",
+  "engines": {
+    "node": "22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "npm run build && node --test lib/test/*.test.js",
+    "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting"
+  },
+  "dependencies": {
+    "@trpc/server": "11.18.0",
+    "firebase-admin": "13.8.0",
+    "firebase-functions": "7.2.5",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "firebase-tools": "15.14.0",
+    "typescript": "5.9.3"
+  }
+}
