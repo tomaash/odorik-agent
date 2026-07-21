@@ -1,0 +1,36 @@
+{
+  "name": "odorik-transcription-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start:api": "node dist/api.js",
+    "start:ingest": "node dist/ingest.js",
+    "start:processor": "node dist/processor.js",
+    "dev:api": "tsx watch src/api.ts",
+    "dev:ingest": "tsx watch src/ingest.ts",
+    "dev:processor": "tsx watch src/processor.ts",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@fastify/multipart": "10.1.0",
+    "@google-cloud/firestore": "8.6.0",
+    "@google-cloud/storage": "7.21.0",
+    "@trpc/server": "11.18.0",
+    "fastify": "5.10.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "24.10.1",
+    "tsx": "4.21.0",
+    "typescript": "7.0.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.0"
+  }
+}
