@@ -68,10 +68,12 @@ export async function reviewIntake(input: ReviewInput, actorUid: string) {
       urgency: input.request.urgency,
       notes: nonEmpty(input.request.notes),
       missingInformation: input.request.missingInformation,
-      status: "open",
+      status: "new",
       revision: nextRevision,
       reviewedAt: FieldValue.serverTimestamp(),
       reviewedBy: actorUid,
+      statusChangedAt: FieldValue.serverTimestamp(),
+      statusChangedBy: actorUid,
       updatedAt: FieldValue.serverTimestamp(),
     };
 
@@ -108,13 +110,13 @@ export async function reviewIntake(input: ReviewInput, actorUid: string) {
         revision: currentRevision,
       },
       after: {
-        status: "open",
+        status: "new",
         revision: nextRevision,
         decisions: input.decisions,
       },
       createdAt: Timestamp.now(),
     });
 
-    return { requestId: input.requestId, revision: nextRevision, status: "open" as const };
+    return { requestId: input.requestId, revision: nextRevision, status: "new" as const };
   });
 }

@@ -12,6 +12,11 @@ const authStore = useAuthStore()
 const router = useRouter()
 const locale = ref(i18n.global.locale.value)
 const localeOptions = [{ label: 'Česky', value: 'cs' }, { label: 'English', value: 'en' }]
+const navigation = [
+  { to: '/', icon: 'pi pi-inbox', label: 'nav.intake' },
+  { to: '/requests', icon: 'pi pi-briefcase', label: 'nav.requests' },
+  { to: '/contacts', icon: 'pi pi-users', label: 'nav.contacts' },
+]
 
 function changeLocale(value: string) {
   locale.value = value as 'cs' | 'en'
@@ -38,6 +43,17 @@ async function signOut() {
             <div class="text-xs text-surface-400 truncate">Reviewable intake</div>
           </div>
         </router-link>
+        <nav class="hidden md:flex items-center gap-1 bg-surface-100 rounded-xl p-1" :aria-label="$t('nav.primary')">
+          <router-link
+            v-for="item in navigation"
+            :key="item.to"
+            :to="item.to"
+            class="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium no-underline text-surface-500 hover:text-surface-900 hover:bg-white transition"
+            exact-active-class="!bg-white !text-emerald-800 shadow-sm"
+          >
+            <i :class="item.icon" />{{ $t(item.label) }}
+          </router-link>
+        </nav>
         <div class="shrink-0 flex items-center gap-1.5 sm:gap-3">
           <Select
             :modelValue="locale"
@@ -59,8 +75,19 @@ async function signOut() {
         </div>
       </div>
     </header>
-    <main class="w-full min-w-0 max-w-7xl mx-auto px-4 sm:px-5 py-6 sm:py-8">
+    <main class="w-full min-w-0 max-w-7xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-28 md:pb-8">
       <router-view />
     </main>
+    <nav class="mobile-nav fixed md:hidden left-0 right-0 bottom-0 z-30 grid grid-cols-3 gap-1 px-3 pt-2 bg-white/95 backdrop-blur border-t border-surface-200" :aria-label="$t('nav.primary')">
+      <router-link
+        v-for="item in navigation"
+        :key="item.to"
+        :to="item.to"
+        class="min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-xs font-medium no-underline text-surface-500 transition"
+        exact-active-class="!bg-emerald-50 !text-emerald-800"
+      >
+        <i :class="[item.icon, 'text-lg']" /><span class="truncate max-w-full">{{ $t(item.label) }}</span>
+      </router-link>
+    </nav>
   </div>
 </template>

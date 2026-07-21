@@ -54,7 +54,7 @@ onMounted(() => store.loadList())
         :key="item.id"
         type="button"
         class="block min-w-0 max-w-full w-full overflow-hidden text-left bg-white border border-surface-200 rounded-2xl p-4 sm:p-6 shadow-sm hover:shadow-md hover:border-emerald-300 transition cursor-pointer"
-        @click="router.push(`/requests/${item.requestId}`)"
+        @click="router.push(`/intake/${item.requestId}`)"
       >
         <div class="min-w-0 flex items-start gap-3 sm:gap-4">
           <div class="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0">

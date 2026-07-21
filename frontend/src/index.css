@@ -56,3 +56,7 @@ img, svg {
   background: #edf8f1;
   box-shadow: 0 0 0 2px rgba(47, 133, 90, .12);
 }
+
+.mobile-nav {
+  padding-bottom: max(.5rem, env(safe-area-inset-bottom));
+}

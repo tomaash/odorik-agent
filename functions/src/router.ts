@@ -1,4 +1,4 @@
-import { FieldValue } from "firebase-admin/firestore";
+import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { defineSecret } from "firebase-functions/params";
@@ -7,6 +7,15 @@ import { enabledProcedure, router, signedInProcedure } from "./trpc.js";
 import { processCompletedCall } from "./crm/process.js";
 import { reviewIntake } from "./crm/review.js";
 import { reviewInputSchema } from "./crm/schemas.js";
+import {
+  allowedRequestTransitions,
+  canTransitionRequestStatus,
+  normalizeRequestStatus,
+  openRequestStatuses,
+  requestStatusValues,
+  storedStatusesFor,
+  type RequestStatus,
+} from "./crm/lifecycle.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
@@ -47,6 +56,50 @@ async function intakeDetails(requestId: string) {
     processingRun: processingRun.exists ? { id: processingRun.id, ...processingRun.data() } : null,
     task: task.exists ? { id: task.id, ...task.data() } : null,
   });
+}
+
+async function requestCounts(): Promise<Record<RequestStatus, number>> {
+  const results = await Promise.all(requestStatusValues.map(async (status) => {
+    const stored = storedStatusesFor([status]);
+    const snapshots = await Promise.all(stored.map((value) => db.collection("serviceRequests")
+      .where("status", "==", value)
+      .count()
+      .get()));
+    return [status, snapshots.reduce((sum, snapshot) => sum + snapshot.data().count, 0)] as const;
+  }));
+  return Object.fromEntries(results) as Record<RequestStatus, number>;
+}
+
+async function listServiceRequests(input: {
+  statuses?: RequestStatus[];
+  contactId?: string;
+  limit?: number;
+}) {
+  const selectedStatuses = input.statuses?.length ? input.statuses : openRequestStatuses;
+  const storedStatuses = storedStatusesFor(selectedStatuses);
+  let query = db.collection("serviceRequests").where("status", "in", storedStatuses);
+  if (input.contactId) query = query.where("contactId", "==", input.contactId);
+  const snapshot = await query.orderBy("updatedAt", "desc").limit(input.limit || 50).get();
+  const contactIds = [...new Set(snapshot.docs.map((doc) => String(doc.data().contactId || "")).filter(Boolean))];
+  const contacts = contactIds.length
+    ? await db.getAll(...contactIds.map((id) => db.doc(`contacts/${id}`)))
+    : [];
+  const contactById = new Map(contacts.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()!]));
+  return jsonSafe(snapshot.docs.map((doc) => {
+    const data = doc.data();
+    const contact = contactById.get(String(data.contactId || "")) || {};
+    return {
+      id: doc.id,
+      ...data,
+      status: normalizeRequestStatus(data.status),
+      contact: {
+        id: String(data.contactId || ""),
+        displayName: contact.displayName || null,
+        phone: contact.phoneE164 || contact.phoneRaw || null,
+        email: contact.email || null,
+      },
+    };
+  }));
 }
 
 export const appRouter = router({
@@ -162,25 +215,96 @@ export const appRouter = router({
     get: enabledProcedure
       .input(z.object({ contactId: z.string().min(1) }))
       .query(async ({ input }) => {
-        const snapshot = await db.doc(`contacts/${input.contactId}`).get();
+        const [snapshot, requests, interactions] = await Promise.all([
+          db.doc(`contacts/${input.contactId}`).get(),
+          listServiceRequests({
+            statuses: [...requestStatusValues],
+            contactId: input.contactId,
+            limit: 50,
+          }),
+          db.collection("interactions").where("contactId", "==", input.contactId).limit(50).get(),
+        ]);
         if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
-        return jsonSafe({ id: snapshot.id, ...snapshot.data()! });
+        return jsonSafe({
+          contact: { id: snapshot.id, ...snapshot.data()! },
+          requests,
+          interactions: interactions.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+        });
       }),
   }),
 
   serviceRequests: router({
     list: enabledProcedure
-      .input(z.object({ limit: z.number().int().min(1).max(50).default(30) }).optional())
+      .input(z.object({
+        statuses: z.array(z.enum(requestStatusValues)).max(requestStatusValues.length).optional(),
+        contactId: z.string().min(1).optional(),
+        limit: z.number().int().min(1).max(100).default(50),
+      }).optional())
       .query(async ({ input }) => {
-        const snapshot = await db.collection("serviceRequests")
-          .orderBy("updatedAt", "desc")
-          .limit(input?.limit || 30)
-          .get();
-        return jsonSafe(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        const [items, counts] = await Promise.all([
+          listServiceRequests(input || {}),
+          requestCounts(),
+        ]);
+        return { items, counts };
       }),
     get: enabledProcedure
       .input(z.object({ requestId: z.string().min(1) }))
       .query(({ input }) => intakeDetails(input.requestId)),
+    transition: enabledProcedure
+      .input(z.object({
+        requestId: z.string().min(1),
+        expectedRevision: z.number().int().nonnegative(),
+        to: z.enum(requestStatusValues),
+        note: z.string().trim().max(2000).optional(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const requestRef = db.doc(`serviceRequests/${input.requestId}`);
+        const eventRef = db.collection("auditEvents").doc();
+        return db.runTransaction(async (transaction) => {
+          const snapshot = await transaction.get(requestRef);
+          if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Service request not found" });
+          const before = snapshot.data()!;
+          const from = normalizeRequestStatus(before.status);
+          if (!from) throw new TRPCError({ code: "CONFLICT", message: "This request is not ready for lifecycle changes." });
+          const currentRevision = Number(before.revision || 0);
+          if (currentRevision !== input.expectedRevision) {
+            throw new TRPCError({ code: "CONFLICT", message: "This request changed. Reload before changing its status." });
+          }
+          if (!canTransitionRequestStatus(from, input.to)) {
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: `Cannot move a request from ${from} to ${input.to}.`,
+            });
+          }
+          const now = Timestamp.now();
+          const nextRevision = currentRevision + 1;
+          transaction.update(requestRef, {
+            status: input.to,
+            revision: nextRevision,
+            statusChangedAt: now,
+            statusChangedBy: ctx.uid,
+            lastStatusNote: input.note?.trim() || null,
+            completedAt: input.to === "completed" ? now : FieldValue.delete(),
+            cancelledAt: input.to === "cancelled" ? now : FieldValue.delete(),
+            updatedAt: now,
+          });
+          transaction.set(eventRef, {
+            aggregateType: "service_request",
+            aggregateId: input.requestId,
+            type: "request_status_changed",
+            actor: { kind: "user", id: ctx.uid },
+            before: { status: from, revision: currentRevision },
+            after: { status: input.to, revision: nextRevision, note: input.note?.trim() || null },
+            createdAt: now,
+          });
+          return {
+            requestId: input.requestId,
+            status: input.to,
+            revision: nextRevision,
+            allowedTransitions: allowedRequestTransitions(input.to),
+          };
+        });
+      }),
   }),
 });
 

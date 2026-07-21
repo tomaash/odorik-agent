@@ -6,6 +6,12 @@ import {
   shouldProcessCallUpdate,
 } from "../crm/process.js";
 import { validateProposalEvidence } from "../crm/extract.js";
+import {
+  allowedRequestTransitions,
+  canTransitionRequestStatus,
+  normalizeRequestStatus,
+  storedStatusesFor,
+} from "../crm/lifecycle.js";
 
 test("normalizes Czech and international phone numbers", () => {
   assert.equal(normalizePhone("777 123 456"), "+420777123456");
@@ -53,4 +59,18 @@ test("deduplicates active processing runs but permits a stale lease retry", () =
   assert.equal(canStartProcessingRun({ status: "running", updatedAt: timestamp(now - 1_000) }, now), false);
   assert.equal(canStartProcessingRun({ status: "running", updatedAt: timestamp(now - 16 * 60_000) }, now), true);
   assert.equal(canStartProcessingRun({ status: "failed" }, now), true);
+});
+
+test("normalizes legacy request statuses and expands new for queries", () => {
+  assert.equal(normalizeRequestStatus("open"), "new");
+  assert.equal(normalizeRequestStatus("waiting_customer"), "waiting_customer");
+  assert.equal(normalizeRequestStatus("needs_review"), null);
+  assert.deepEqual(storedStatusesFor(["new", "completed"]), ["new", "completed", "open"]);
+});
+
+test("allows only explicit service-request lifecycle transitions", () => {
+  assert.equal(canTransitionRequestStatus("new", "in_progress"), true);
+  assert.equal(canTransitionRequestStatus("new", "completed"), false);
+  assert.equal(canTransitionRequestStatus("completed", "in_progress"), true);
+  assert.deepEqual(allowedRequestTransitions("waiting_customer"), ["in_progress", "completed", "cancelled"]);
 });

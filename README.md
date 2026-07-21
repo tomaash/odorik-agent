@@ -24,6 +24,17 @@ The former token dashboard remains deployed at
    phone contact, proposed service request, processing run, and review task.
 5. A signed-in, enabled person reviews the proposals against linked transcript
    evidence. Only that approval writes canonical CRM fields.
+6. Approval moves the request to `new`. People then advance it through
+   `in_progress`, `waiting_customer`, `completed`, or `cancelled`; every change
+   is revision-checked and written to the audit log.
+
+The mobile application uses three primary areas:
+
+- **Intake** contains only calls still awaiting human review.
+- **Requests** is the operational feed, with status scopes, search, request
+  details, and explicit status transitions. Larger screens can switch to a
+  board backed by the same records and filters.
+- **Contacts** joins each customer to their approved requests and call history.
 
 The Vue application calls one Firebase Gen 2 HTTP function through tRPC. Browser
 Firestore access is denied; authentication and authorization are checked in the

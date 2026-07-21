@@ -17,7 +17,11 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresEnabled: true },
       children: [
         { path: '', name: 'inbox', component: () => import('./views/InboxPage.vue') },
-        { path: 'requests/:id', name: 'request', component: () => import('./views/RequestReviewPage.vue') },
+        { path: 'intake/:id', name: 'intake-review', component: () => import('./views/RequestReviewPage.vue') },
+        { path: 'requests', name: 'requests', component: () => import('./views/RequestsPage.vue') },
+        { path: 'requests/:id', name: 'request', component: () => import('./views/ServiceRequestPage.vue') },
+        { path: 'contacts', name: 'contacts', component: () => import('./views/ContactsPage.vue') },
+        { path: 'contacts/:id', name: 'contact', component: () => import('./views/ContactDetailPage.vue') },
       ],
     },
   ],

@@ -101,7 +101,7 @@ async function saveReview() {
   if (!details.value || !form.title.trim()) return
   saving.value = true
   try {
-    await trpc.intake.review.mutate({
+    const saved = await trpc.intake.review.mutate({
       requestId: details.value.request.id,
       expectedRevision: Number(details.value.request.revision || 0),
       contact: {
@@ -121,7 +121,7 @@ async function saveReview() {
       decisions: buildDecisions(),
     })
     toast.add({ severity: 'success', summary: 'Intake approved', detail: 'Canonical CRM data was saved.', life: 3500 })
-    await router.push('/')
+    await router.push(`/requests/${saved.requestId}`)
   } catch (cause) {
     toast.add({ severity: 'error', summary: 'Could not save', detail: cause instanceof Error ? cause.message : String(cause), life: 6000 })
   } finally {

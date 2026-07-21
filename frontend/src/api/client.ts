@@ -59,6 +59,56 @@ export type IntakeDetails = {
   task: (Record<string, unknown> & { id: string; status?: string }) | null
 }
 
+export type RequestStatus = 'new' | 'in_progress' | 'waiting_customer' | 'completed' | 'cancelled'
+
+export type ServiceRequestListItem = {
+  id: string
+  title?: string | null
+  status: RequestStatus
+  revision: number
+  urgency?: 'normal' | 'urgent'
+  serviceType?: string | null
+  description?: string | null
+  requestedTiming?: string | null
+  missingInformation?: string[]
+  createdAt?: string | null
+  updatedAt?: string | null
+  statusChangedAt?: string | null
+  contact: {
+    id: string
+    displayName: string | null
+    phone: string | null
+    email: string | null
+  }
+}
+
+export type ServiceRequestListResponse = {
+  items: ServiceRequestListItem[]
+  counts: Record<RequestStatus, number>
+}
+
+export type ContactListItem = {
+  id: string
+  displayName?: string | null
+  phoneE164?: string | null
+  phoneRaw?: string | null
+  email?: string | null
+  updatedAt?: string | null
+}
+
+export type ContactDetails = {
+  contact: ContactListItem
+  requests: ServiceRequestListItem[]
+  interactions: Array<Record<string, unknown> & {
+    id: string
+    summary?: string | null
+    transcript?: string | null
+    occurredAt?: string | null
+    createdAt?: string | null
+    durationSeconds?: number | null
+  }>
+}
+
 export async function registerAccess(): Promise<AccessStatus> {
   return trpc.auth.register.mutate() as Promise<AccessStatus>
 }
@@ -73,4 +123,32 @@ export async function listIntakes(): Promise<IntakeListItem[]> {
 
 export async function getIntake(requestId: string): Promise<IntakeDetails> {
   return trpc.intake.get.query({ requestId }) as Promise<IntakeDetails>
+}
+
+export async function listServiceRequests(): Promise<ServiceRequestListResponse> {
+  return trpc.serviceRequests.list.query({
+    statuses: ['new', 'in_progress', 'waiting_customer', 'completed', 'cancelled'],
+    limit: 100,
+  }) as Promise<ServiceRequestListResponse>
+}
+
+export async function getServiceRequest(requestId: string): Promise<IntakeDetails> {
+  return trpc.serviceRequests.get.query({ requestId }) as Promise<IntakeDetails>
+}
+
+export async function transitionServiceRequest(input: {
+  requestId: string
+  expectedRevision: number
+  to: RequestStatus
+  note?: string
+}) {
+  return trpc.serviceRequests.transition.mutate(input)
+}
+
+export async function listContacts(): Promise<ContactListItem[]> {
+  return trpc.contacts.list.query({ limit: 50 }) as Promise<ContactListItem[]>
+}
+
+export async function getContact(contactId: string): Promise<ContactDetails> {
+  return trpc.contacts.get.query({ contactId }) as Promise<ContactDetails>
 }
