@@ -132,7 +132,7 @@ type QdrantPoint = {
 
 type QdrantResponse = {
   status?: string | { error?: string };
-  result?: { points?: QdrantPoint[] } | QdrantPoint[] | boolean;
+  result?: unknown;
 };
 
 const bm25Options = {
@@ -145,6 +145,12 @@ function pointId(value: string): string {
   const hex = createHash("sha256").update(value).digest("hex").slice(0, 32);
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
+
+export type QdrantCollectionStats = {
+  status: string;
+  pointsCount: number;
+  indexedVectorsCount: number;
+};
 
 export class QdrantHybridSearch implements KnowledgeSearch {
   private readonly baseUrl: string;
@@ -229,6 +235,18 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     return documents.length;
   }
 
+  async collectionStats(): Promise<QdrantCollectionStats> {
+    const payload = await this.request(`/collections/${encodeURIComponent(this.collection)}`);
+    const result = payload.result && typeof payload.result === "object"
+      ? payload.result as Record<string, unknown>
+      : {};
+    return {
+      status: String(result.status || "unknown"),
+      pointsCount: Number(result.points_count || 0),
+      indexedVectorsCount: Number(result.indexed_vectors_count || 0),
+    };
+  }
+
   async search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]> {
     const limit = Math.min(20, Math.max(1, input.limit || 8));
     const dense = await this.embedder.embedQuery(input.query);
@@ -253,9 +271,12 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         with_payload: true,
       }),
     });
+    const result = payload.result && typeof payload.result === "object"
+      ? payload.result as { points?: QdrantPoint[] }
+      : {};
     const points = Array.isArray(payload.result)
-      ? payload.result
-      : (payload.result && typeof payload.result === "object" ? payload.result.points || [] : []);
+      ? payload.result as QdrantPoint[]
+      : result.points || [];
     return points.flatMap((point) => {
       const value = point.payload as Partial<KnowledgeDocument> | undefined;
       if (
@@ -300,14 +321,25 @@ export class RepositoryKnowledgeSearch implements KnowledgeSearch {
   }
 }
 
+export function qdrantConfigurationFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): { url: string; apiKey: string } | null {
+  const url = environment.QDRANT_URL?.trim() || environment.QDRANT_CLUSTER_URL?.trim();
+  const apiKey = environment.QDRANT_API_KEY?.trim();
+  return url && apiKey ? { url, apiKey } : null;
+}
+
 export function qdrantFromEnvironment(input: {
   repository: CompanyDataRepository;
   geminiApiKey: string;
 }): { search: RepositoryKnowledgeSearch; qdrant?: QdrantHybridSearch } {
-  const url = process.env.QDRANT_URL?.trim();
-  const apiKey = process.env.QDRANT_API_KEY?.trim();
-  const qdrant = url && apiKey
-    ? new QdrantHybridSearch(url, apiKey, new GeminiEmbedder(input.geminiApiKey))
+  const configuration = qdrantConfigurationFromEnvironment();
+  const qdrant = configuration
+    ? new QdrantHybridSearch(
+      configuration.url,
+      configuration.apiKey,
+      new GeminiEmbedder(input.geminiApiKey),
+    )
     : undefined;
   return { search: new RepositoryKnowledgeSearch(input.repository, qdrant), qdrant };
 }

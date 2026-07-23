@@ -94,16 +94,28 @@ QDRANT_URL=https://your-cluster...qdrant.io
 QDRANT_API_KEY=...
 ```
 
+Local development also accepts `QDRANT_CLUSTER_URL` as an alias for
+`QDRANT_URL`. Deployments bind `QDRANT_URL` and `QDRANT_API_KEY` to the API
+function through Secret Manager.
+
 Never commit the key or expose it to the browser. Local development can read
-these from `.env`. For Firebase deployment, store the API key in Secret Manager
-and bind it only to the `api` function; use a non-secret runtime parameter for
-the URL. Until that binding is deliberately added, deployed code reports and
+these from `.env`. For the current Firebase deployment, bind both values from
+Secret Manager only to the `api` function. The URL is not sensitive, but using
+the same binding mechanism avoids an interactive runtime-parameter prompt in
+CI. Until those bindings are deliberately added, deployed code reports and
 uses `firestore_lexical_fallback`.
 
 An application administrator can call `assistant.reindex` to create a fresh
 `company_context_v1` collection and rebuild it from safe Firestore records.
 The rebuild deliberately replaces the collection so stale chunks cannot
 survive. Incremental indexing is Slice 2.
+
+Operators can perform the same rebuild with application-default Google Cloud
+credentials and receive a count/checksum/retrieval reconciliation report:
+
+```bash
+npm --prefix functions run qdrant:reindex
+```
 
 ## Prompt-injection and data boundaries
 
@@ -159,4 +171,3 @@ confidence on abstention, and an aggregate pass-rate threshold.
 6. Track cost, latency, tool count, abstention, and index freshness by prompt,
    model, embedding, and corpus version.
 7. Make deployment fail when the held-out regression thresholds fall.
-

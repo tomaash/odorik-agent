@@ -1,6 +1,6 @@
 import { createHTTPHandler } from "@trpc/server/adapters/standalone";
 import { onRequest } from "firebase-functions/v2/https";
-import { appRouter, geminiApiKey } from "./router.js";
+import { appRouter, geminiApiKey, qdrantApiKey, qdrantUrl } from "./router.js";
 import { createContext } from "./trpc.js";
 
 const handler = createHTTPHandler({ router: appRouter, createContext });
@@ -14,7 +14,7 @@ export const api = onRequest(
     minInstances: 0,
     maxInstances: 3,
     serviceAccount: runtimeServiceAccount,
-    secrets: [geminiApiKey],
+    secrets: [geminiApiKey, qdrantApiKey, qdrantUrl],
     cors: true,
   },
   (request, response) => {

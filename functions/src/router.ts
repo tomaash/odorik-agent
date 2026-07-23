@@ -19,10 +19,12 @@ import {
 import { GeminiRestAgentModel } from "./agent/gemini.js";
 import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
 import { FirestoreCompanyData } from "./agent/knowledge.js";
-import { qdrantFromEnvironment } from "./agent/search.js";
+import { qdrantConfigurationFromEnvironment, qdrantFromEnvironment } from "./agent/search.js";
 import { CompanyFactTools } from "./agent/tools.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
+export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
+export const qdrantUrl = defineSecret("QDRANT_URL");
 
 async function getAccess(uid: string) {
   const snapshot = await db.doc(`access/${uid}`).get();
@@ -153,7 +155,7 @@ export const appRouter = router({
     status: enabledProcedure.query(() => ({
       model: "gemini-3.1-flash-lite",
       promptVersion: factAgentPromptVersion,
-      search: process.env.QDRANT_URL?.trim() && process.env.QDRANT_API_KEY?.trim()
+      search: qdrantConfigurationFromEnvironment()
         ? "qdrant_hybrid_rrf"
         : "firestore_lexical_fallback",
       readOnly: true,

@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentModel, ModelTurn } from "../agent/gemini.js";
 import { parseAgentFinal, runFactAgent } from "../agent/loop.js";
-import { bm25Search, reciprocalRankFusion } from "../agent/search.js";
+import {
+  bm25Search,
+  qdrantConfigurationFromEnvironment,
+  reciprocalRankFusion,
+} from "../agent/search.js";
 import { CitationRegistry, type AgentToolExecutor } from "../agent/tools.js";
 import type { KnowledgeDocument } from "../agent/types.js";
 
@@ -45,6 +49,25 @@ test("RRF combines rankings without comparing incompatible raw scores", () => {
     { k: 60 },
   );
   assert.equal(result[0]?.item, "both");
+});
+
+test("Qdrant configuration supports deployed and local URL variable names", () => {
+  assert.deepEqual(qdrantConfigurationFromEnvironment({
+    QDRANT_URL: " https://deployed.example ",
+    QDRANT_CLUSTER_URL: "https://local.example",
+    QDRANT_API_KEY: " key ",
+  }), {
+    url: "https://deployed.example",
+    apiKey: "key",
+  });
+  assert.deepEqual(qdrantConfigurationFromEnvironment({
+    QDRANT_CLUSTER_URL: " https://local.example/ ",
+    QDRANT_API_KEY: " local-key ",
+  }), {
+    url: "https://local.example/",
+    apiKey: "local-key",
+  });
+  assert.equal(qdrantConfigurationFromEnvironment({ QDRANT_URL: "https://missing-key.example" }), null);
 });
 
 test("parses structured final answers and recovers citation IDs from plain text", () => {
