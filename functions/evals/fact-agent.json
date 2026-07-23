@@ -1,0 +1,36 @@
+[
+  {
+    "id": "contact_phone_exact",
+    "question": "What is Eva Novakova's phone number?",
+    "expectedSourcePaths": ["contacts/contact_eva"],
+    "expectedTerms": ["+420777123456"]
+  },
+  {
+    "id": "call_followup_fact",
+    "question": "What furniture did Eva want transported, between which cities, and when?",
+    "expectedSourcePaths": ["interactions/odorik_call_1"],
+    "expectedTerms": ["wardrobe", "Brno", "Prague", "Tuesday"]
+  },
+  {
+    "id": "request_wait_reason",
+    "question": "Why is the wardrobe request waiting for the customer?",
+    "expectedSourcePaths": ["auditEvents/event_move_waiting"],
+    "expectedTerms": ["floor"],
+    "retrieval": false
+  },
+  {
+    "id": "request_status_count",
+    "question": "How many service requests are there in each status?",
+    "expectedSourcePaths": ["aggregate/service_request/all/status"],
+    "expectedTerms": ["waiting", "completed", "1"],
+    "retrieval": false
+  },
+  {
+    "id": "unanswerable_revenue",
+    "question": "What was the company's revenue last month?",
+    "expectedSourcePaths": [],
+    "expectedTerms": [],
+    "shouldAbstain": true,
+    "retrieval": false
+  }
+]

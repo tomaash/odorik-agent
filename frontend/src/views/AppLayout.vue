@@ -13,7 +13,8 @@ const router = useRouter()
 const locale = ref(i18n.global.locale.value)
 const localeOptions = [{ label: 'Česky', value: 'cs' }, { label: 'English', value: 'en' }]
 const navigation = [
-  { to: '/', icon: 'pi pi-inbox', label: 'nav.intake' },
+  { to: '/', icon: 'pi pi-sparkles', label: 'nav.assistant' },
+  { to: '/intake', icon: 'pi pi-inbox', label: 'nav.intake' },
   { to: '/requests', icon: 'pi pi-briefcase', label: 'nav.requests' },
   { to: '/contacts', icon: 'pi pi-users', label: 'nav.contacts' },
 ]
@@ -40,7 +41,7 @@ async function signOut() {
           </span>
           <div class="min-w-0">
             <div class="font-bold leading-tight truncate">{{ $t('app.name') }}</div>
-            <div class="text-xs text-surface-400 truncate">Reviewable intake</div>
+            <div class="text-xs text-surface-400 truncate">{{ $t('app.subtitle') }}</div>
           </div>
         </router-link>
         <nav class="hidden md:flex items-center gap-1 bg-surface-100 rounded-xl p-1" :aria-label="$t('nav.primary')">
@@ -78,7 +79,7 @@ async function signOut() {
     <main class="w-full min-w-0 max-w-7xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-28 md:pb-8">
       <router-view />
     </main>
-    <nav class="mobile-nav fixed md:hidden left-0 right-0 bottom-0 z-30 grid grid-cols-3 gap-1 px-3 pt-2 bg-white/95 backdrop-blur border-t border-surface-200" :aria-label="$t('nav.primary')">
+    <nav class="mobile-nav fixed md:hidden left-0 right-0 bottom-0 z-30 grid grid-cols-4 gap-1 px-2 pt-2 bg-white/95 backdrop-blur border-t border-surface-200" :aria-label="$t('nav.primary')">
       <router-link
         v-for="item in navigation"
         :key="item.to"

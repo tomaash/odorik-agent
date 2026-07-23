@@ -1,0 +1,281 @@
+import { z } from "zod";
+import type { CompanyDataRepository, CompanyRecord } from "./knowledge.js";
+import type { KnowledgeSearch } from "./search.js";
+import {
+  knowledgeKinds,
+  type KnowledgeKind,
+  type ToolCitation,
+} from "./types.js";
+
+const kindSchema = z.enum(knowledgeKinds);
+const filterSchema = z.object({
+  field: z.string().trim().min(1).max(100),
+  value: z.string().trim().min(1).max(500),
+});
+
+const searchSchema = z.object({
+  query: z.string().trim().min(1).max(1000),
+  kinds: z.array(kindSchema).max(knowledgeKinds.length).optional(),
+  limit: z.number().int().min(1).max(10).optional(),
+});
+
+const getSchema = z.object({
+  kind: kindSchema,
+  record_id: z.string().trim().min(1).max(500),
+});
+
+const listSchema = z.object({
+  kind: kindSchema,
+  filters: z.array(filterSchema).max(6).optional(),
+  limit: z.number().int().min(1).max(30).optional(),
+});
+
+const aggregateSchema = z.object({
+  kind: kindSchema,
+  filters: z.array(filterSchema).max(6).optional(),
+  group_by: z.string().trim().min(1).max(100).optional(),
+});
+
+export const factToolDeclarations = [
+  {
+    name: "search_company_data",
+    description:
+      "Hybrid semantic and full-text search across calls, transcripts, contacts, service requests, tasks, reviews, and audit events. Use this first for names, topics, phrases, and broad factual questions.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        query: { type: "STRING", description: "A focused search query, preferably one fact or concept at a time." },
+        kinds: {
+          type: "ARRAY",
+          items: { type: "STRING", enum: [...knowledgeKinds] },
+          description: "Optional record kinds to search.",
+        },
+        limit: { type: "INTEGER", description: "Number of evidence chunks, from 1 to 10." },
+      },
+      required: ["query"],
+    },
+  },
+  {
+    name: "get_company_record",
+    description:
+      "Fetch one complete safe company record after its kind and exact ID are known from search or another tool.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        kind: { type: "STRING", enum: [...knowledgeKinds] },
+        record_id: { type: "STRING", description: "Exact record ID returned by another tool." },
+      },
+      required: ["kind", "record_id"],
+    },
+  },
+  {
+    name: "list_company_records",
+    description:
+      "List recent records of one kind with exact equality filters. Use for questions such as which requests have a status or which interactions belong to a contact.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        kind: { type: "STRING", enum: [...knowledgeKinds] },
+        filters: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              field: { type: "STRING" },
+              value: { type: "STRING" },
+            },
+            required: ["field", "value"],
+          },
+        },
+        limit: { type: "INTEGER", description: "Maximum records from 1 to 30." },
+      },
+      required: ["kind"],
+    },
+  },
+  {
+    name: "aggregate_company_records",
+    description:
+      "Count records, optionally filtered or grouped by an allowed exact field. Use for totals and status distributions instead of estimating from search results.",
+    parameters: {
+      type: "OBJECT",
+      properties: {
+        kind: { type: "STRING", enum: [...knowledgeKinds] },
+        filters: {
+          type: "ARRAY",
+          items: {
+            type: "OBJECT",
+            properties: {
+              field: { type: "STRING" },
+              value: { type: "STRING" },
+            },
+            required: ["field", "value"],
+          },
+        },
+        group_by: { type: "STRING", description: "Optional allowed field, such as status, type, urgency, or language." },
+      },
+      required: ["kind"],
+    },
+  },
+] as const;
+
+function excerpt(value: string, max = 900): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
+}
+
+function compactRecord(record: CompanyRecord): Record<string, unknown> {
+  const json = JSON.stringify(record.data);
+  const data = json.length <= 12_000
+    ? record.data
+    : { truncated: true, content: `${json.slice(0, 11_900)}…` };
+  return {
+    kind: record.kind,
+    recordId: record.recordId,
+    title: record.title,
+    occurredAt: record.occurredAt,
+    data,
+  };
+}
+
+export class CitationRegistry {
+  private readonly byKey = new Map<string, ToolCitation>();
+  private readonly byId = new Map<string, ToolCitation>();
+
+  add(input: Omit<ToolCitation, "citationId">, key = input.sourcePath): ToolCitation {
+    const existing = this.byKey.get(key);
+    if (existing) return existing;
+    const citation = { ...input, citationId: `C${this.byId.size + 1}` };
+    this.byKey.set(key, citation);
+    this.byId.set(citation.citationId, citation);
+    return citation;
+  }
+
+  get(citationId: string): ToolCitation | undefined {
+    return this.byId.get(citationId);
+  }
+
+  resolve(citationIds: string[]): ToolCitation[] {
+    return [...new Set(citationIds)].flatMap((id) => {
+      const citation = this.get(id);
+      return citation ? [citation] : [];
+    });
+  }
+
+  all(): ToolCitation[] {
+    return [...this.byId.values()];
+  }
+}
+
+export type ToolExecution = {
+  result: Record<string, unknown>;
+  citationIds: string[];
+};
+
+export interface AgentToolExecutor {
+  execute(name: string, args: unknown): Promise<ToolExecution>;
+  citations: CitationRegistry;
+}
+
+export class CompanyFactTools implements AgentToolExecutor {
+  readonly citations = new CitationRegistry();
+
+  constructor(
+    private readonly repository: CompanyDataRepository,
+    private readonly search: KnowledgeSearch,
+  ) {}
+
+  async execute(name: string, args: unknown): Promise<ToolExecution> {
+    if (name === "search_company_data") {
+      const input = searchSchema.parse(args);
+      const hits = await this.search.search(input);
+      const matches = hits.map((hit) => {
+        const citation = this.citations.add({
+          kind: hit.kind,
+          recordId: hit.recordId,
+          sourcePath: hit.sourcePath,
+          title: hit.title,
+          excerpt: excerpt(hit.text),
+          occurredAt: hit.occurredAt,
+        }, hit.id);
+        return {
+          citationId: citation.citationId,
+          kind: hit.kind,
+          recordId: hit.recordId,
+          title: hit.title,
+          excerpt: citation.excerpt,
+          occurredAt: hit.occurredAt,
+          score: Number(hit.score.toFixed(6)),
+          retrieval: hit.retrieval,
+        };
+      });
+      return { result: { matches }, citationIds: matches.map((match) => match.citationId) };
+    }
+
+    if (name === "get_company_record") {
+      const input = getSchema.parse(args);
+      const record = await this.repository.getRecord(input.kind, input.record_id);
+      if (!record) return { result: { found: false }, citationIds: [] };
+      const citation = this.citations.add({
+        kind: record.kind,
+        recordId: record.recordId,
+        sourcePath: record.sourcePath,
+        title: record.title,
+        excerpt: excerpt(JSON.stringify(record.data)),
+        occurredAt: record.occurredAt,
+      });
+      return {
+        result: { found: true, citationId: citation.citationId, record: compactRecord(record) },
+        citationIds: [citation.citationId],
+      };
+    }
+
+    if (name === "list_company_records") {
+      const input = listSchema.parse(args);
+      const records = await this.repository.listRecords(input.kind, input.filters, input.limit);
+      const items = records.map((record) => {
+        const citation = this.citations.add({
+          kind: record.kind,
+          recordId: record.recordId,
+          sourcePath: record.sourcePath,
+          title: record.title,
+          excerpt: excerpt(JSON.stringify(record.data)),
+          occurredAt: record.occurredAt,
+        });
+        return { citationId: citation.citationId, ...compactRecord(record) };
+      });
+      return { result: { items, count: items.length }, citationIds: items.map((item) => item.citationId) };
+    }
+
+    if (name === "aggregate_company_records") {
+      const input = aggregateSchema.parse(args);
+      const aggregate = await this.repository.aggregateRecords({
+        kind: input.kind,
+        filters: input.filters,
+        groupBy: input.group_by,
+      });
+      const filterText = (input.filters || []).map((filter) => `${filter.field}=${filter.value}`).join(", ");
+      const sourcePath = `aggregate/${input.kind}/${filterText || "all"}/${input.group_by || "total"}`;
+      const citation = this.citations.add({
+        kind: input.kind,
+        recordId: "aggregate",
+        sourcePath,
+        title: `Computed ${input.kind} aggregate`,
+        excerpt: JSON.stringify({ ...aggregate, filters: input.filters || [], groupBy: input.group_by || null }),
+        occurredAt: null,
+      });
+      return {
+        result: { citationId: citation.citationId, ...aggregate },
+        citationIds: [citation.citationId],
+      };
+    }
+
+    throw new Error(`Unknown agent tool: ${name}`);
+  }
+}
+
+export function kindsFromStrings(values: string[] | undefined): KnowledgeKind[] | undefined {
+  if (!values) return undefined;
+  const allowed = new Set<string>(knowledgeKinds);
+  return values.filter((value): value is KnowledgeKind => allowed.has(value));
+}
+

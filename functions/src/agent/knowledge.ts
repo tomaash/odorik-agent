@@ -1,0 +1,258 @@
+import type { Firestore } from "firebase-admin/firestore";
+import { jsonSafe } from "../firestore.js";
+import {
+  knowledgeKinds,
+  type KnowledgeDocument,
+  type KnowledgeKind,
+  type RecordFilter,
+} from "./types.js";
+
+const collectionByKind: Record<KnowledgeKind, string> = {
+  call: "calls",
+  interaction: "interactions",
+  contact: "contacts",
+  service_request: "serviceRequests",
+  task: "tasks",
+  review: "reviews",
+  audit_event: "auditEvents",
+};
+
+const safeFields: Record<KnowledgeKind, string[]> = {
+  call: [
+    "status", "from", "to", "duration", "odorikTime", "lineName", "language",
+    "summary", "transcript", "segments", "actionItems", "uploadedAt", "processedAt",
+  ],
+  interaction: [
+    "kind", "source", "sourceCallId", "contactId", "serviceRequestId", "from", "to",
+    "occurredAt", "durationSeconds", "summary", "transcript", "segments", "language",
+    "createdAt",
+  ],
+  contact: [
+    "displayName", "phoneE164", "phoneRaw", "email", "createdFromInteractionId",
+    "createdAt", "updatedAt",
+  ],
+  service_request: [
+    "contactId", "status", "title", "serviceType", "description", "address",
+    "requestedTiming", "urgency", "notes", "missingInformation", "interactionIds",
+    "reviewedAt", "reviewedBy", "createdAt", "updatedAt",
+  ],
+  task: [
+    "type", "status", "interactionId", "serviceRequestId", "processingRunId",
+    "createdAt", "updatedAt", "completedAt",
+  ],
+  review: [
+    "serviceRequestId", "actorUid", "decisions", "requestAfter", "contactAfter",
+    "createdAt",
+  ],
+  audit_event: [
+    "aggregateType", "aggregateId", "type", "actor", "before", "after", "createdAt",
+  ],
+};
+
+const filterFields: Record<KnowledgeKind, string[]> = {
+  call: ["status", "language", "from", "to"],
+  interaction: ["kind", "source", "contactId", "serviceRequestId", "language", "from", "to"],
+  contact: ["displayName", "phoneE164", "phoneRaw", "email"],
+  service_request: ["status", "urgency", "serviceType", "contactId"],
+  task: ["type", "status", "serviceRequestId", "interactionId"],
+  review: ["serviceRequestId", "actorUid"],
+  audit_event: ["aggregateType", "aggregateId", "type"],
+};
+
+export type CompanyRecord = {
+  kind: KnowledgeKind;
+  recordId: string;
+  sourcePath: string;
+  title: string;
+  occurredAt: string | null;
+  data: Record<string, unknown>;
+};
+
+export interface CompanyDataRepository {
+  allDocuments(kinds?: KnowledgeKind[]): Promise<KnowledgeDocument[]>;
+  getRecord(kind: KnowledgeKind, recordId: string): Promise<CompanyRecord | null>;
+  listRecords(kind: KnowledgeKind, filters?: RecordFilter[], limit?: number): Promise<CompanyRecord[]>;
+  aggregateRecords(input: {
+    kind: KnowledgeKind;
+    filters?: RecordFilter[];
+    groupBy?: string;
+  }): Promise<{ total: number; groups?: Record<string, number> }>;
+}
+
+function plainObject(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  return value as Record<string, unknown>;
+}
+
+function selectSafeFields(kind: KnowledgeKind, value: Record<string, unknown>): Record<string, unknown> {
+  const safe = jsonSafe(value) as Record<string, unknown>;
+  return Object.fromEntries(
+    safeFields[kind]
+      .filter((field) => safe[field] !== undefined)
+      .map((field) => [field, safe[field]]),
+  );
+}
+
+function titleFor(kind: KnowledgeKind, id: string, data: Record<string, unknown>): string {
+  if (kind === "call") return `Call ${String(data.from || "unknown")} → ${String(data.to || "unknown")}`;
+  if (kind === "interaction") return `Call interaction ${String(data.from || id)}`;
+  if (kind === "contact") return String(data.displayName || data.phoneE164 || data.phoneRaw || `Contact ${id}`);
+  if (kind === "service_request") return String(data.title || `Service request ${id}`);
+  if (kind === "task") return `${String(data.type || "Task")} · ${String(data.status || "unknown")}`;
+  if (kind === "review") return `Review of ${String(data.serviceRequestId || id)}`;
+  return `${String(data.type || "Audit event")} · ${String(data.aggregateId || id)}`;
+}
+
+function occurredAtFor(data: Record<string, unknown>): string | null {
+  for (const field of ["occurredAt", "createdAt", "processedAt", "uploadedAt", "updatedAt", "odorikTime"]) {
+    const value = data[field];
+    if (typeof value === "string") return value;
+  }
+  return null;
+}
+
+function textFor(title: string, data: Record<string, unknown>): string {
+  const lines = [title];
+  for (const [field, value] of Object.entries(data)) {
+    if (value === null || value === undefined || value === "") continue;
+    if (typeof value === "object") lines.push(`${field}: ${JSON.stringify(value)}`);
+    else lines.push(`${field}: ${String(value)}`);
+  }
+  return lines.join("\n");
+}
+
+export function chunkRecord(record: CompanyRecord, companyId = "default"): KnowledgeDocument[] {
+  const fullText = textFor(record.title, record.data);
+  const chunkSize = 1800;
+  const overlap = 220;
+  if (fullText.length <= chunkSize) {
+    return [{
+      id: `${record.kind}:${record.recordId}:0`,
+      companyId,
+      kind: record.kind,
+      recordId: record.recordId,
+      sourcePath: record.sourcePath,
+      title: record.title,
+      text: fullText,
+      occurredAt: record.occurredAt,
+      metadata: {},
+    }];
+  }
+
+  const chunks: KnowledgeDocument[] = [];
+  let offset = 0;
+  let chunkIndex = 0;
+  while (offset < fullText.length && chunkIndex < 100) {
+    let end = Math.min(fullText.length, offset + chunkSize);
+    if (end < fullText.length) {
+      const boundary = Math.max(fullText.lastIndexOf("\n", end), fullText.lastIndexOf(" ", end));
+      if (boundary > offset + chunkSize / 2) end = boundary;
+    }
+    const text = fullText.slice(offset, end).trim();
+    if (text) {
+      chunks.push({
+        id: `${record.kind}:${record.recordId}:${chunkIndex}`,
+        companyId,
+        kind: record.kind,
+        recordId: record.recordId,
+        sourcePath: record.sourcePath,
+        title: record.title,
+        text,
+        occurredAt: record.occurredAt,
+        metadata: { chunk: chunkIndex },
+      });
+    }
+    if (end >= fullText.length) break;
+    offset = Math.max(offset + 1, end - overlap);
+    chunkIndex += 1;
+  }
+  return chunks;
+}
+
+function validateFilters(kind: KnowledgeKind, filters: RecordFilter[]): RecordFilter[] {
+  const allowed = new Set(filterFields[kind]);
+  return filters.filter((filter) => allowed.has(filter.field) && filter.value.trim());
+}
+
+function matchesFilters(record: CompanyRecord, filters: RecordFilter[]): boolean {
+  return filters.every((filter) => {
+    const actual = record.data[filter.field];
+    if (Array.isArray(actual)) return actual.map(String).includes(filter.value);
+    return String(actual ?? "").toLocaleLowerCase() === filter.value.toLocaleLowerCase();
+  });
+}
+
+function sortTime(record: CompanyRecord): number {
+  const value = record.occurredAt ? new Date(record.occurredAt).getTime() : 0;
+  return Number.isFinite(value) ? value : 0;
+}
+
+export class FirestoreCompanyData implements CompanyDataRepository {
+  constructor(private readonly firestore: Firestore, private readonly companyId = "default") {}
+
+  private async records(kind: KnowledgeKind, max = 500): Promise<CompanyRecord[]> {
+    const collection = collectionByKind[kind];
+    const snapshot = await this.firestore.collection(collection).limit(max).get();
+    return snapshot.docs.map((document) => {
+      const data = selectSafeFields(kind, plainObject(document.data()));
+      return {
+        kind,
+        recordId: document.id,
+        sourcePath: `${collection}/${document.id}`,
+        title: titleFor(kind, document.id, data),
+        occurredAt: occurredAtFor(data),
+        data,
+      };
+    }).sort((a, b) => sortTime(b) - sortTime(a));
+  }
+
+  async allDocuments(kinds: KnowledgeKind[] = [...knowledgeKinds]): Promise<KnowledgeDocument[]> {
+    const records = (await Promise.all(kinds.map((kind) => this.records(kind)))).flat();
+    return records.flatMap((record) => chunkRecord(record, this.companyId));
+  }
+
+  async getRecord(kind: KnowledgeKind, recordId: string): Promise<CompanyRecord | null> {
+    const collection = collectionByKind[kind];
+    const snapshot = await this.firestore.doc(`${collection}/${recordId}`).get();
+    if (!snapshot.exists) return null;
+    const data = selectSafeFields(kind, plainObject(snapshot.data()));
+    return {
+      kind,
+      recordId,
+      sourcePath: snapshot.ref.path,
+      title: titleFor(kind, recordId, data),
+      occurredAt: occurredAtFor(data),
+      data,
+    };
+  }
+
+  async listRecords(kind: KnowledgeKind, filters: RecordFilter[] = [], limit = 20): Promise<CompanyRecord[]> {
+    const validFilters = validateFilters(kind, filters);
+    const records = await this.records(kind);
+    return records.filter((record) => matchesFilters(record, validFilters)).slice(0, Math.min(50, limit));
+  }
+
+  async aggregateRecords(input: {
+    kind: KnowledgeKind;
+    filters?: RecordFilter[];
+    groupBy?: string;
+  }): Promise<{ total: number; groups?: Record<string, number> }> {
+    const validFilters = validateFilters(input.kind, input.filters || []);
+    const records = (await this.records(input.kind, 1000))
+      .filter((record) => matchesFilters(record, validFilters));
+    if (!input.groupBy || !filterFields[input.kind].includes(input.groupBy)) {
+      return { total: records.length };
+    }
+    const groups: Record<string, number> = {};
+    for (const record of records) {
+      const key = String(record.data[input.groupBy] ?? "unknown");
+      groups[key] = (groups[key] || 0) + 1;
+    }
+    return { total: records.length, groups };
+  }
+}
+
+export function isKnowledgeKind(value: string): value is KnowledgeKind {
+  return (knowledgeKinds as readonly string[]).includes(value);
+}
+

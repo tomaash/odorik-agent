@@ -30,13 +30,13 @@ async function signIn() {
     <div class="min-w-0 w-full max-w-5xl grid lg:grid-cols-[1.2fr_.8fr] gap-8 lg:gap-10 items-center">
       <section class="hidden lg:block">
         <div class="inline-flex items-center gap-2 rounded-full bg-emerald-100 text-emerald-900 px-4 py-2 text-sm font-semibold mb-7">
-          <i class="pi pi-phone" /> Odorik → Gemini → Firestore
+          <i class="pi pi-sparkles" /> {{ $t('login.flow') }}
         </div>
         <h1 class="text-6xl font-bold tracking-tight leading-[1.02] text-surface-900 max-w-2xl">
           {{ $t('login.title') }}
         </h1>
         <p class="text-xl text-surface-500 mt-6 max-w-xl leading-relaxed">
-          Evidence-backed customer intake, reviewed by a person before it becomes company truth.
+          {{ $t('login.hero') }}
         </p>
       </section>
 
@@ -58,7 +58,7 @@ async function signIn() {
             />
             <Message v-if="error" severity="error" :closable="false" class="mt-4">{{ error }}</Message>
             <p class="text-xs text-surface-400 mt-6">
-              New accounts are disabled by default. Authentication does not grant CRM access.
+              {{ $t('login.accessNote') }}
             </p>
           </div>
         </template>

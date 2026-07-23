@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { defineSecret } from "firebase-functions/params";
 import { db, jsonSafe } from "./firestore.js";
-import { enabledProcedure, router, signedInProcedure } from "./trpc.js";
+import { adminProcedure, enabledProcedure, router, signedInProcedure } from "./trpc.js";
 import { processCompletedCall } from "./crm/process.js";
 import { reviewIntake } from "./crm/review.js";
 import { reviewInputSchema } from "./crm/schemas.js";
@@ -16,6 +16,11 @@ import {
   storedStatusesFor,
   type RequestStatus,
 } from "./crm/lifecycle.js";
+import { GeminiRestAgentModel } from "./agent/gemini.js";
+import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
+import { FirestoreCompanyData } from "./agent/knowledge.js";
+import { qdrantFromEnvironment } from "./agent/search.js";
+import { CompanyFactTools } from "./agent/tools.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
@@ -141,6 +146,113 @@ export const appRouter = router({
         databaseEdition: "Firestore Enterprise",
         model: "gemini-3.1-flash-lite",
       };
+    }),
+  }),
+
+  assistant: router({
+    status: enabledProcedure.query(() => ({
+      model: "gemini-3.1-flash-lite",
+      promptVersion: factAgentPromptVersion,
+      search: process.env.QDRANT_URL?.trim() && process.env.QDRANT_API_KEY?.trim()
+        ? "qdrant_hybrid_rrf"
+        : "firestore_lexical_fallback",
+      readOnly: true,
+    })),
+    history: enabledProcedure
+      .input(z.object({ threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general") }).optional())
+      .query(async ({ input }) => {
+        const snapshot = await db.collection(`agentThreads/${input?.threadId || "general"}/messages`)
+          .orderBy("createdAt", "desc")
+          .limit(40)
+          .get();
+        return jsonSafe(snapshot.docs.reverse().map((document) => ({ id: document.id, ...document.data() })));
+      }),
+    ask: enabledProcedure
+      .input(z.object({
+        threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general"),
+        question: z.string().trim().min(1).max(3000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const threadRef = db.doc(`agentThreads/${input.threadId}`);
+        const messagesRef = threadRef.collection("messages");
+        const historySnapshot = await messagesRef.orderBy("createdAt", "desc").limit(8).get();
+        const priorMessages = historySnapshot.docs.reverse().flatMap((document) => {
+          const data = document.data();
+          const role = data.role === "assistant" ? "model" as const : data.role === "user" ? "user" as const : null;
+          const text = typeof data.text === "string"
+            ? data.text.replace(/\[C\d+(?:\s*,\s*C\d+)*\]/g, "[previous sources omitted; re-check with tools]")
+            : "";
+          return role && text ? [{ role, text }] : [];
+        });
+        const apiKey = geminiApiKey.value();
+        const repository = new FirestoreCompanyData(db);
+        const { search } = qdrantFromEnvironment({ repository, geminiApiKey: apiKey });
+        const tools = new CompanyFactTools(repository, search);
+        const startedAt = Date.now();
+        const answer = await runFactAgent({
+          question: input.question,
+          model: new GeminiRestAgentModel(apiKey),
+          tools,
+          priorMessages,
+        });
+        const userAt = Timestamp.now();
+        const answerAt = Timestamp.fromMillis(userAt.toMillis() + 1);
+        const userMessageRef = messagesRef.doc();
+        const answerMessageRef = messagesRef.doc();
+        const runRef = db.collection("agentRuns").doc();
+        const batch = db.batch();
+        batch.set(threadRef, {
+          title: "Company facts",
+          updatedAt: answerAt,
+          lastMessageAt: answerAt,
+        }, { merge: true });
+        batch.set(userMessageRef, {
+          role: "user",
+          text: input.question,
+          actorUid: ctx.uid,
+          createdAt: userAt,
+        });
+        batch.set(answerMessageRef, {
+          role: "assistant",
+          text: answer.answer,
+          citations: answer.citations,
+          confidence: answer.confidence,
+          limitations: answer.limitations,
+          runId: runRef.id,
+          createdAt: answerAt,
+        });
+        batch.set(runRef, {
+          kind: "fact_agent",
+          threadId: input.threadId,
+          question: input.question,
+          answer: answer.answer,
+          citations: answer.citations,
+          confidence: answer.confidence,
+          limitations: answer.limitations,
+          toolTrace: answer.toolTrace,
+          usage: answer.usage,
+          model: "gemini-3.1-flash-lite",
+          promptVersion: factAgentPromptVersion,
+          actorUid: ctx.uid,
+          latencyMs: Date.now() - startedAt,
+          createdAt: answerAt,
+        });
+        await batch.commit();
+        return { ...answer, runId: runRef.id, messageId: answerMessageRef.id };
+      }),
+    reindex: adminProcedure.mutation(async () => {
+      const apiKey = geminiApiKey.value();
+      const repository = new FirestoreCompanyData(db);
+      const { qdrant } = qdrantFromEnvironment({ repository, geminiApiKey: apiKey });
+      if (!qdrant) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "QDRANT_URL and QDRANT_API_KEY are not configured; lexical fallback remains available.",
+        });
+      }
+      const documents = await repository.allDocuments();
+      const indexed = await qdrant.replaceDocuments(documents);
+      return { indexed, collection: "company_context_v1", fusion: "rrf", dense: "gemini-embedding-001", sparse: "qdrant/bm25" };
     }),
   }),
 

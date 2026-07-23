@@ -57,3 +57,10 @@ export const enabledProcedure = t.procedure.use(async ({ ctx, next }) => {
     },
   });
 });
+
+export const adminProcedure = enabledProcedure.use(async ({ ctx, next }) => {
+  if (ctx.access.admin !== true) {
+    throw new TRPCError({ code: "FORBIDDEN", message: "Administrator access required" });
+  }
+  return next({ ctx });
+});

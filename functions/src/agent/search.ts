@@ -1,0 +1,313 @@
+import { createHash } from "node:crypto";
+import type { CompanyDataRepository } from "./knowledge.js";
+import type { KnowledgeDocument, KnowledgeKind, SearchHit } from "./types.js";
+
+export interface KnowledgeSearch {
+  search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]>;
+}
+
+export type RankedItem<T> = { item: T; score: number };
+
+export function reciprocalRankFusion<T>(
+  rankings: Array<Array<RankedItem<T>>>,
+  identity: (item: T) => string,
+  options: { k?: number; weights?: number[]; limit?: number } = {},
+): RankedItem<T>[] {
+  const k = options.k ?? 60;
+  const totals = new Map<string, { item: T; score: number }>();
+  rankings.forEach((ranking, rankingIndex) => {
+    const weight = options.weights?.[rankingIndex] ?? 1;
+    ranking.forEach((entry, rank) => {
+      const id = identity(entry.item);
+      const existing = totals.get(id) || { item: entry.item, score: 0 };
+      existing.score += weight / (k + rank + 1);
+      totals.set(id, existing);
+    });
+  });
+  return [...totals.values()]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, options.limit ?? 10);
+}
+
+export function tokenize(value: string): string[] {
+  return value
+    .toLocaleLowerCase()
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .match(/[\p{L}\p{N}][\p{L}\p{N}_.+@-]*/gu) || [];
+}
+
+export function bm25Search(
+  query: string,
+  documents: KnowledgeDocument[],
+  limit = 10,
+): SearchHit[] {
+  const queryTerms = [...new Set(tokenize(query))];
+  if (queryTerms.length === 0 || documents.length === 0) return [];
+  const tokenized = documents.map((document) => {
+    const titleTokens = tokenize(document.title);
+    return [...titleTokens, ...titleTokens, ...tokenize(document.text)];
+  });
+  const averageLength = tokenized.reduce((sum, tokens) => sum + tokens.length, 0) / tokenized.length || 1;
+  const documentFrequency = new Map<string, number>();
+  for (const tokens of tokenized) {
+    for (const token of new Set(tokens)) {
+      documentFrequency.set(token, (documentFrequency.get(token) || 0) + 1);
+    }
+  }
+  const k1 = 1.2;
+  const b = 0.75;
+  const scored = documents.map((document, index) => {
+    const tokens = tokenized[index] || [];
+    const frequencies = new Map<string, number>();
+    for (const token of tokens) frequencies.set(token, (frequencies.get(token) || 0) + 1);
+    let score = 0;
+    for (const term of queryTerms) {
+      const frequency = frequencies.get(term) || 0;
+      if (!frequency) continue;
+      const df = documentFrequency.get(term) || 0;
+      const idf = Math.log(1 + ((documents.length - df + 0.5) / (df + 0.5)));
+      score += idf * ((frequency * (k1 + 1)) / (
+        frequency + k1 * (1 - b + b * (tokens.length / averageLength))
+      ));
+    }
+    return { document, score };
+  });
+  return scored
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map(({ document, score }) => ({ ...document, score, retrieval: "lexical_bm25" as const }));
+}
+
+type EmbeddingPayload = {
+  embedding?: { values?: number[] };
+  error?: { status?: string; message?: string };
+};
+
+export class GeminiEmbedder {
+  readonly dimensions = 768;
+  readonly model = "gemini-embedding-001";
+
+  constructor(private readonly apiKey: string) {}
+
+  private async embed(text: string, taskType: "RETRIEVAL_DOCUMENT" | "QUESTION_ANSWERING", title?: string) {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
+        body: JSON.stringify({
+          content: { parts: [{ text }] },
+          taskType,
+          ...(title ? { title } : {}),
+          outputDimensionality: this.dimensions,
+        }),
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    const payload = await response.json() as EmbeddingPayload;
+    if (!response.ok || !payload.embedding?.values?.length) {
+      throw new Error(
+        `Gemini embedding ${payload.error?.status || response.status}: ${payload.error?.message || "empty embedding"}`,
+      );
+    }
+    return payload.embedding.values;
+  }
+
+  embedDocument(document: KnowledgeDocument): Promise<number[]> {
+    return this.embed(document.text, "RETRIEVAL_DOCUMENT", document.title.slice(0, 200));
+  }
+
+  embedQuery(query: string): Promise<number[]> {
+    return this.embed(query, "QUESTION_ANSWERING");
+  }
+}
+
+type QdrantPoint = {
+  id?: string | number;
+  score?: number;
+  payload?: Record<string, unknown>;
+};
+
+type QdrantResponse = {
+  status?: string | { error?: string };
+  result?: { points?: QdrantPoint[] } | QdrantPoint[] | boolean;
+};
+
+const bm25Options = {
+  language: "none",
+  tokenizer: "multilingual",
+  ascii_folding: true,
+};
+
+function pointId(value: string): string {
+  const hex = createHash("sha256").update(value).digest("hex").slice(0, 32);
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+export class QdrantHybridSearch implements KnowledgeSearch {
+  private readonly baseUrl: string;
+
+  constructor(
+    url: string,
+    private readonly apiKey: string,
+    private readonly embedder: GeminiEmbedder,
+    private readonly collection = "company_context_v1",
+    private readonly companyId = "default",
+  ) {
+    this.baseUrl = url.replace(/\/$/, "");
+  }
+
+  private async request(path: string, init: RequestInit = {}): Promise<QdrantResponse> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: {
+        "content-type": "application/json",
+        "api-key": this.apiKey,
+        ...(init.headers || {}),
+      },
+      signal: init.signal || AbortSignal.timeout(60_000),
+    });
+    const payload = await response.json().catch(() => ({})) as QdrantResponse;
+    if (!response.ok) {
+      const status = typeof payload.status === "object" ? payload.status.error : payload.status;
+      throw new Error(`Qdrant ${response.status}: ${status || "request failed"}`);
+    }
+    return payload;
+  }
+
+  async ensureCollection(reset = false): Promise<void> {
+    if (reset) {
+      await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "DELETE" })
+        .catch((error) => {
+          if (!String(error).includes("404")) throw error;
+        });
+    }
+    const exists = await fetch(`${this.baseUrl}/collections/${encodeURIComponent(this.collection)}`, {
+      headers: { "api-key": this.apiKey },
+      signal: AbortSignal.timeout(20_000),
+    });
+    if (exists.ok) return;
+    if (exists.status !== 404) throw new Error(`Qdrant collection check failed: ${exists.status}`);
+    await this.request(`/collections/${encodeURIComponent(this.collection)}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        vectors: { dense: { size: this.embedder.dimensions, distance: "Cosine" } },
+        sparse_vectors: { bm25: { modifier: "idf" } },
+      }),
+    });
+    for (const field of ["companyId", "kind", "sourcePath"]) {
+      await this.request(`/collections/${encodeURIComponent(this.collection)}/index?wait=true`, {
+        method: "PUT",
+        body: JSON.stringify({ field_name: field, field_schema: "keyword" }),
+      });
+    }
+  }
+
+  async replaceDocuments(documents: KnowledgeDocument[]): Promise<number> {
+    await this.ensureCollection(true);
+    const batchSize = 8;
+    for (let offset = 0; offset < documents.length; offset += batchSize) {
+      const batch = documents.slice(offset, offset + batchSize);
+      const vectors = await Promise.all(batch.map((document) => this.embedder.embedDocument(document)));
+      await this.request(`/collections/${encodeURIComponent(this.collection)}/points?wait=true`, {
+        method: "PUT",
+        body: JSON.stringify({
+          points: batch.map((document, index) => ({
+            id: pointId(document.id),
+            vector: {
+              dense: vectors[index],
+              bm25: { text: document.text, model: "qdrant/bm25", options: bm25Options },
+            },
+            payload: document,
+          })),
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    }
+    return documents.length;
+  }
+
+  async search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]> {
+    const limit = Math.min(20, Math.max(1, input.limit || 8));
+    const dense = await this.embedder.embedQuery(input.query);
+    const must: Array<Record<string, unknown>> = [
+      { key: "companyId", match: { value: this.companyId } },
+    ];
+    if (input.kinds?.length) must.push({ key: "kind", match: { any: input.kinds } });
+    const payload = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/query`, {
+      method: "POST",
+      body: JSON.stringify({
+        prefetch: [
+          { query: dense, using: "dense", limit: Math.max(20, limit * 3), filter: { must } },
+          {
+            query: { text: input.query, model: "qdrant/bm25", options: bm25Options },
+            using: "bm25",
+            limit: Math.max(20, limit * 3),
+            filter: { must },
+          },
+        ],
+        query: { rrf: { k: 60 } },
+        limit,
+        with_payload: true,
+      }),
+    });
+    const points = Array.isArray(payload.result)
+      ? payload.result
+      : (payload.result && typeof payload.result === "object" ? payload.result.points || [] : []);
+    return points.flatMap((point) => {
+      const value = point.payload as Partial<KnowledgeDocument> | undefined;
+      if (
+        !value || typeof value.id !== "string" || typeof value.kind !== "string" ||
+        typeof value.recordId !== "string" || typeof value.sourcePath !== "string" ||
+        typeof value.title !== "string" || typeof value.text !== "string"
+      ) return [];
+      return [{
+        id: value.id,
+        companyId: String(value.companyId || this.companyId),
+        kind: value.kind as KnowledgeKind,
+        recordId: value.recordId,
+        sourcePath: value.sourcePath,
+        title: value.title,
+        text: value.text,
+        occurredAt: typeof value.occurredAt === "string" ? value.occurredAt : null,
+        metadata: (value.metadata || {}) as KnowledgeDocument["metadata"],
+        score: Number(point.score || 0),
+        retrieval: "hybrid_rrf" as const,
+      }];
+    });
+  }
+}
+
+export class RepositoryKnowledgeSearch implements KnowledgeSearch {
+  constructor(
+    private readonly repository: CompanyDataRepository,
+    private readonly qdrant?: QdrantHybridSearch,
+  ) {}
+
+  async search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]> {
+    if (this.qdrant) {
+      try {
+        const hits = await this.qdrant.search(input);
+        if (hits.length) return hits;
+      } catch (error) {
+        console.warn("Qdrant search unavailable; using Firestore lexical fallback", error);
+      }
+    }
+    const documents = await this.repository.allDocuments(input.kinds);
+    return bm25Search(input.query, documents, input.limit || 8);
+  }
+}
+
+export function qdrantFromEnvironment(input: {
+  repository: CompanyDataRepository;
+  geminiApiKey: string;
+}): { search: RepositoryKnowledgeSearch; qdrant?: QdrantHybridSearch } {
+  const url = process.env.QDRANT_URL?.trim();
+  const apiKey = process.env.QDRANT_API_KEY?.trim();
+  const qdrant = url && apiKey
+    ? new QdrantHybridSearch(url, apiKey, new GeminiEmbedder(input.geminiApiKey))
+    : undefined;
+  return { search: new RepositoryKnowledgeSearch(input.repository, qdrant), qdrant };
+}

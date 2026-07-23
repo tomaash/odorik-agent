@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "npm run build && node --test lib/test/*.test.js",
+    "eval": "npm run build && node lib/eval/run.js",
+    "eval:live": "npm run build && node lib/eval/run.js --live",
     "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting"
   },
   "dependencies": {

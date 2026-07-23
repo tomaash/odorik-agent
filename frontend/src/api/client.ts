@@ -109,6 +109,41 @@ export type ContactDetails = {
   }>
 }
 
+export type AssistantCitation = {
+  citationId: string
+  kind: 'call' | 'interaction' | 'contact' | 'service_request' | 'task' | 'review' | 'audit_event'
+  recordId: string
+  sourcePath: string
+  title: string
+  excerpt: string
+  occurredAt: string | null
+}
+
+export type AssistantAnswer = {
+  answer: string
+  citations: AssistantCitation[]
+  confidence: 'high' | 'medium' | 'low'
+  limitations: string[]
+  runId: string
+  messageId: string
+  usage: {
+    promptTokens: number
+    outputTokens: number
+    thinkingTokens: number
+    totalTokens: number
+  }
+}
+
+export type AssistantMessage = {
+  id: string
+  role: 'user' | 'assistant'
+  text: string
+  citations?: AssistantCitation[]
+  confidence?: 'high' | 'medium' | 'low'
+  limitations?: string[]
+  createdAt?: string | null
+}
+
 export async function registerAccess(): Promise<AccessStatus> {
   return trpc.auth.register.mutate() as Promise<AccessStatus>
 }
@@ -151,4 +186,16 @@ export async function listContacts(): Promise<ContactListItem[]> {
 
 export async function getContact(contactId: string): Promise<ContactDetails> {
   return trpc.contacts.get.query({ contactId }) as Promise<ContactDetails>
+}
+
+export async function getAssistantStatus() {
+  return trpc.assistant.status.query()
+}
+
+export async function getAssistantHistory(threadId = 'general'): Promise<AssistantMessage[]> {
+  return trpc.assistant.history.query({ threadId }) as Promise<AssistantMessage[]>
+}
+
+export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {
+  return trpc.assistant.ask.mutate({ threadId, question }) as Promise<AssistantAnswer>
 }
