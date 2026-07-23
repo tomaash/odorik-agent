@@ -13,6 +13,7 @@ import {
   storedStatusesFor,
 } from "../crm/lifecycle.js";
 import { decryptCredentials, encryptCredentials } from "../connectors/credentials.js";
+import { calendarAuthorizationLifetimeMs } from "../connectors/google-calendar.js";
 import {
   odorikContextItem,
   odorikContextItemId,
@@ -90,6 +91,10 @@ test("encrypts connector credentials with authenticated encryption", () => {
     password: "secret-value",
   });
   assert.throws(() => decryptCredentials(`${encrypted.slice(0, -2)}xx`, key));
+});
+
+test("keeps Google authorization state alive for a manual consent handoff", () => {
+  assert.equal(calendarAuthorizationLifetimeMs, 60 * 60 * 1000);
 });
 
 test("normalizes Odorik calls into connection-aware context items", () => {

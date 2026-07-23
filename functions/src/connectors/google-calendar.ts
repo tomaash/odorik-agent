@@ -13,6 +13,10 @@ export const defaultGoogleRedirectUri =
   process.env.GOOGLE_CONNECTOR_REDIRECT_URI?.trim()
   || "https://odorik-tx-260720-c58d.web.app/oauth/google/callback";
 
+// The consent warning for an unverified test app can require a manual handoff.
+// Keep the state short-lived, but leave enough time for the user to review it.
+export const calendarAuthorizationLifetimeMs = 60 * 60 * 1000;
+
 type GoogleTokens = {
   access_token?: string;
   expires_in?: number;
@@ -135,7 +139,7 @@ export async function createCalendarAuthorization(input: {
     displayName: input.displayName,
     redirectUri: defaultGoogleRedirectUri,
     createdAt: now,
-    expiresAt: Timestamp.fromMillis(now.toMillis() + 10 * 60 * 1000),
+    expiresAt: Timestamp.fromMillis(now.toMillis() + calendarAuthorizationLifetimeMs),
   });
   const query = new URLSearchParams({
     client_id: input.clientId,
