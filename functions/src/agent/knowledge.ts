@@ -7,7 +7,7 @@ import {
   type RecordFilter,
 } from "./types.js";
 
-const collectionByKind: Record<KnowledgeKind, string> = {
+export const collectionByKnowledgeKind: Record<KnowledgeKind, string> = {
   call: "calls",
   interaction: "interactions",
   contact: "contacts",
@@ -15,7 +15,12 @@ const collectionByKind: Record<KnowledgeKind, string> = {
   task: "tasks",
   review: "reviews",
   audit_event: "auditEvents",
+  context_item: "contextItems",
 };
+
+const knowledgeKindByCollection = Object.fromEntries(
+  Object.entries(collectionByKnowledgeKind).map(([kind, collection]) => [collection, kind]),
+) as Record<string, KnowledgeKind>;
 
 const safeFields: Record<KnowledgeKind, string[]> = {
   call: [
@@ -47,6 +52,11 @@ const safeFields: Record<KnowledgeKind, string[]> = {
   audit_event: [
     "aggregateType", "aggregateId", "type", "actor", "before", "after", "createdAt",
   ],
+  context_item: [
+    "companyId", "kind", "source", "title", "text", "occurredAt", "observedAt",
+    "artifactRefs", "participantRefs", "access", "metadata", "provenance",
+    "indexingEnabled", "createdAt", "updatedAt",
+  ],
 };
 
 const filterFields: Record<KnowledgeKind, string[]> = {
@@ -57,6 +67,7 @@ const filterFields: Record<KnowledgeKind, string[]> = {
   task: ["type", "status", "serviceRequestId", "interactionId"],
   review: ["serviceRequestId", "actorUid"],
   audit_event: ["aggregateType", "aggregateId", "type"],
+  context_item: ["kind", "source.adapterId", "source.connectionId", "source.resourceId"],
 };
 
 export type CompanyRecord = {
@@ -93,6 +104,10 @@ function selectSafeFields(kind: KnowledgeKind, value: Record<string, unknown>): 
   );
 }
 
+export function knowledgeKindForCollection(collection: string): KnowledgeKind | null {
+  return knowledgeKindByCollection[collection] || null;
+}
+
 function titleFor(kind: KnowledgeKind, id: string, data: Record<string, unknown>): string {
   if (kind === "call") return `Call ${String(data.from || "unknown")} → ${String(data.to || "unknown")}`;
   if (kind === "interaction") return `Call interaction ${String(data.from || id)}`;
@@ -100,6 +115,7 @@ function titleFor(kind: KnowledgeKind, id: string, data: Record<string, unknown>
   if (kind === "service_request") return String(data.title || `Service request ${id}`);
   if (kind === "task") return `${String(data.type || "Task")} · ${String(data.status || "unknown")}`;
   if (kind === "review") return `Review of ${String(data.serviceRequestId || id)}`;
+  if (kind === "context_item") return String(data.title || `Context item ${id}`);
   return `${String(data.type || "Audit event")} · ${String(data.aggregateId || id)}`;
 }
 
@@ -176,7 +192,10 @@ function validateFilters(kind: KnowledgeKind, filters: RecordFilter[]): RecordFi
 
 function matchesFilters(record: CompanyRecord, filters: RecordFilter[]): boolean {
   return filters.every((filter) => {
-    const actual = record.data[filter.field];
+    const actual = filter.field.split(".").reduce<unknown>((value, part) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+      return (value as Record<string, unknown>)[part];
+    }, record.data);
     if (Array.isArray(actual)) return actual.map(String).includes(filter.value);
     return String(actual ?? "").toLocaleLowerCase() === filter.value.toLocaleLowerCase();
   });
@@ -191,14 +210,21 @@ export class FirestoreCompanyData implements CompanyDataRepository {
   constructor(private readonly firestore: Firestore, private readonly companyId = "default") {}
 
   private async records(kind: KnowledgeKind, max = 500): Promise<CompanyRecord[]> {
-    const collection = collectionByKind[kind];
-    const snapshot = await this.firestore.collection(collection).limit(max).get();
-    return snapshot.docs.map((document) => {
+    const collection = collectionByKnowledgeKind[kind];
+    const source = kind === "context_item"
+      ? this.firestore.collection(`companies/${this.companyId}/contextItems`)
+      : this.firestore.collection(collection);
+    const snapshot = await source.limit(max).get();
+    return snapshot.docs.filter((document) => (
+      kind !== "context_item" || document.data().indexingEnabled !== false
+    )).map((document) => {
       const data = selectSafeFields(kind, plainObject(document.data()));
       return {
         kind,
         recordId: document.id,
-        sourcePath: `${collection}/${document.id}`,
+        sourcePath: kind === "context_item"
+          ? `companies/${this.companyId}/contextItems/${document.id}`
+          : `${collection}/${document.id}`,
         title: titleFor(kind, document.id, data),
         occurredAt: occurredAtFor(data),
         data,
@@ -212,9 +238,13 @@ export class FirestoreCompanyData implements CompanyDataRepository {
   }
 
   async getRecord(kind: KnowledgeKind, recordId: string): Promise<CompanyRecord | null> {
-    const collection = collectionByKind[kind];
-    const snapshot = await this.firestore.doc(`${collection}/${recordId}`).get();
+    const collection = collectionByKnowledgeKind[kind];
+    const path = kind === "context_item"
+      ? `companies/${this.companyId}/contextItems/${recordId}`
+      : `${collection}/${recordId}`;
+    const snapshot = await this.firestore.doc(path).get();
     if (!snapshot.exists) return null;
+    if (kind === "context_item" && snapshot.data()?.indexingEnabled === false) return null;
     const data = selectSafeFields(kind, plainObject(snapshot.data()));
     return {
       kind,
@@ -255,4 +285,3 @@ export class FirestoreCompanyData implements CompanyDataRepository {
 export function isKnowledgeKind(value: string): value is KnowledgeKind {
   return (knowledgeKinds as readonly string[]).includes(value);
 }
-

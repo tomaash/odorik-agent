@@ -19,12 +19,35 @@ import {
 import { GeminiRestAgentModel } from "./agent/gemini.js";
 import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
 import { FirestoreCompanyData } from "./agent/knowledge.js";
-import { qdrantConfigurationFromEnvironment, qdrantFromEnvironment } from "./agent/search.js";
+import {
+  embeddingDimensions,
+  embeddingModel,
+  qdrantCollection,
+  qdrantConfigurationFromEnvironment,
+  qdrantFromEnvironment,
+} from "./agent/search.js";
 import { CompanyFactTools } from "./agent/tools.js";
+import { encryptCredentials } from "./connectors/credentials.js";
+import {
+  createOdorikConnection,
+  listSources,
+  migrateLegacyOdorik,
+  setConnectionStatus,
+  setResourceStatus,
+} from "./connectors/repository.js";
+import {
+  createCalendarAuthorization,
+  listGoogleCalendars,
+  selectGoogleCalendars,
+  syncGoogleCalendarConnection,
+} from "./connectors/google-calendar.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
 export const qdrantUrl = defineSecret("QDRANT_URL");
+export const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
+export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
+export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 
 async function getAccess(uid: string) {
   const snapshot = await db.doc(`access/${uid}`).get();
@@ -151,6 +174,106 @@ export const appRouter = router({
     }),
   }),
 
+  sources: router({
+    list: enabledProcedure.query(() => listSources()),
+    googleCalendar: router({
+      authorizationUrl: adminProcedure.mutation(({ ctx }) => createCalendarAuthorization({
+        uid: ctx.uid,
+        email: ctx.email,
+        displayName: ctx.displayName,
+        clientId: googleConnectorClientId.value(),
+      })),
+      calendars: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .query(({ input }) => listGoogleCalendars({
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      select: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          calendarIds: z.array(z.string().min(1).max(1000)).max(50),
+        }))
+        .mutation(({ ctx, input }) => selectGoogleCalendars({
+          ...input,
+          actorUid: ctx.uid,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      sync: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ input }) => syncGoogleCalendarConnection({
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+    }),
+    addOdorik: adminProcedure
+      .input(z.object({
+        displayName: z.string().trim().min(1).max(100),
+        accountLabel: z.string().trim().max(100).optional(),
+        username: z.string().trim().min(1).max(200),
+        password: z.string().min(8).max(500),
+        numbers: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const credentialCiphertext = encryptCredentials({
+          username: input.username,
+          password: input.password,
+        }, connectorCredentialKey.value());
+        return createOdorikConnection({
+          displayName: input.displayName,
+          accountLabel: input.accountLabel,
+          credentialCiphertext,
+          usernameHint: input.username.slice(0, 3),
+          createdBy: ctx.uid,
+          numbers: input.numbers,
+        });
+      }),
+    setConnectionStatus: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        status: z.enum(["active", "disconnected"]),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await setConnectionStatus(input.connectionId, input.status, ctx.uid);
+          return { ok: true };
+        } catch (error) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    setResourceEnabled: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        resourceId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        enabled: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          await setResourceStatus({ ...input, actorUid: ctx.uid });
+          return { ok: true };
+        } catch (error) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    migrateLegacyOdorik: adminProcedure.mutation(({ ctx }) => migrateLegacyOdorik(ctx.uid)),
+  }),
+
   assistant: router({
     status: enabledProcedure.query(() => ({
       model: "gemini-3.1-flash-lite",
@@ -158,6 +281,10 @@ export const appRouter = router({
       search: qdrantConfigurationFromEnvironment()
         ? "qdrant_hybrid_rrf"
         : "firestore_lexical_fallback",
+      embeddingModel,
+      embeddingDimensions,
+      collection: qdrantCollection,
+      synchronization: "firestore_on_write",
       readOnly: true,
     })),
     history: enabledProcedure
@@ -254,7 +381,14 @@ export const appRouter = router({
       }
       const documents = await repository.allDocuments();
       const indexed = await qdrant.replaceDocuments(documents);
-      return { indexed, collection: "company_context_v1", fusion: "rrf", dense: "gemini-embedding-001", sparse: "qdrant/bm25" };
+      return {
+        indexed,
+        collection: qdrantCollection,
+        fusion: "rrf",
+        dense: embeddingModel,
+        dimensions: embeddingDimensions,
+        sparse: "qdrant/bm25",
+      };
     }),
   }),
 

@@ -56,7 +56,8 @@ deployment serves one company. A suitable Firestore layout is:
 ```text
 companies/{companyId}
   memberships/{uid}
-  connectors/{connectorId}
+  connections/{connectionId}
+    resources/{resourceId}
   contextItems/{contextItemId}
   threads/{threadId}
     messages/{messageId}
@@ -80,6 +81,22 @@ migration. New platform code should not expand them as generic contracts.
 
 ## Core records
 
+### Adapter, Connection, and Resource
+
+These are separate concepts:
+
+- an **adapter** is application code for one provider such as `odorik` or
+  `google_calendar`;
+- a **connection** is one company-authorized provider account with its own
+  authentication, lifecycle, health, and sync state; and
+- a **resource** is an explicitly selectable unit within a connection, such as
+  a phone line or calendar.
+
+One company may therefore have several Odorik accounts, each containing
+several lines. Provider credentials belong to a connection, never to a call or
+phone number. The browser receives only public status and credential mode; the
+encrypted credential envelope stays server-side.
+
 ### ContextItem
 
 A normalized envelope around a source observation:
@@ -90,7 +107,9 @@ type ContextItem = {
   companyId: string
   kind: string                 // call, calendar.event, document, message, ...
   source: {
-    connectorId: string
+    adapterId: string
+    connectionId: string
+    resourceId: string
     externalId: string
     version?: string
   }
@@ -266,10 +285,13 @@ arguments are validated with Zod, record kinds and fields are allowlisted, and
 unknown citation IDs are removed. Retrieval content is explicitly treated as
 untrusted evidence rather than instructions.
 
-Qdrant provides the preferred dense plus BM25 candidate rankings and fuses
-them with RRF. If it is not configured or is unavailable, the application
-falls back to BM25 over safe Firestore projections. The fallback preserves
-functionality but is not intended as the long-term large-corpus index.
+Qdrant provides the preferred `gemini-embedding-2` dense plus BM25 candidate
+rankings and fuses them with RRF. Firestore remains authoritative; a
+retry-enabled write trigger incrementally replaces all derived chunks for each
+changed or deleted allowlisted record. If Qdrant is not configured or is
+unavailable, the application falls back to BM25 over safe Firestore
+projections. The fallback preserves functionality but is not intended as the
+long-term large-corpus index.
 
 ## Connector contract
 
@@ -277,6 +299,7 @@ Connectors implement independent source and action interfaces:
 
 ```ts
 interface SourceConnector {
+  discover(connection: Connection): Promise<SelectableResource[]>
   sync(cursor?: string): Promise<SourcePage>
   fetch(externalId: string): Promise<SourceObject>
   normalize(source: SourceObject): Promise<ContextItemDraft[]>
@@ -292,6 +315,31 @@ Webhook connectors may push observations instead of being polled. All paths
 converge on the same idempotent normalization contract. OAuth grants and
 secrets stay in Secret Manager or an appropriate encrypted credential store;
 they never enter prompts or browser responses.
+
+### Implemented source data plane
+
+```text
+provider payload
+→ adapter validates the configured connection
+→ raw or typed source record remains authoritative
+→ normalized companies/default/contextItems record
+→ Firestore write trigger
+→ Gemini Embedding 2 and BM25 payload
+→ Qdrant company_context_v3
+→ source-agnostic agent tools and citations
+```
+
+The Odorik compatibility endpoint maps to `odorik-primary`; new accounts use
+`/webhooks/odorik/{connectionId}/recordings`. Non-legacy stored call IDs hash
+connection ID plus provider call ID, preventing cross-account collisions.
+Phone-line resources are discovered from upload metadata and can be excluded
+from active context independently.
+
+Calendar OAuth requests only calendar-list read and event read scopes. Each
+selected calendar owns a sync token. An expired token causes a bounded full
+sync from one year ago; otherwise the adapter requests changes only. Cancelled
+events and deselected calendars remove their context and Qdrant chunks. A
+private scheduled function reconciles every 30 minutes.
 
 ## UI architecture
 

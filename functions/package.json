@@ -14,6 +14,7 @@
     "eval": "npm run build && node lib/eval/run.js",
     "eval:live": "npm run build && node lib/eval/run.js --live",
     "qdrant:reindex": "npm run build && node --env-file=../.env lib/reindex-qdrant.js",
+    "migrate:sources": "npm run build && node lib/migrate-source-adapters.js",
     "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting"
   },
   "dependencies": {

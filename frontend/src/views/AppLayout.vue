@@ -17,6 +17,7 @@ const navigation = [
   { to: '/intake', icon: 'pi pi-inbox', label: 'nav.intake' },
   { to: '/requests', icon: 'pi pi-briefcase', label: 'nav.requests' },
   { to: '/contacts', icon: 'pi pi-users', label: 'nav.contacts' },
+  { to: '/sources', icon: 'pi pi-database', label: 'nav.sources' },
 ]
 
 function changeLocale(value: string) {
@@ -79,12 +80,12 @@ async function signOut() {
     <main class="w-full min-w-0 max-w-7xl mx-auto px-4 sm:px-5 py-6 sm:py-8 pb-28 md:pb-8">
       <router-view />
     </main>
-    <nav class="mobile-nav fixed md:hidden left-0 right-0 bottom-0 z-30 grid grid-cols-4 gap-1 px-2 pt-2 bg-white/95 backdrop-blur border-t border-surface-200" :aria-label="$t('nav.primary')">
+    <nav class="mobile-nav fixed md:hidden left-0 right-0 bottom-0 z-30 grid grid-cols-5 gap-1 px-1.5 pt-2 bg-white/95 backdrop-blur border-t border-surface-200" :aria-label="$t('nav.primary')">
       <router-link
         v-for="item in navigation"
         :key="item.to"
         :to="item.to"
-        class="min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl px-2 py-2 text-xs font-medium no-underline text-surface-500 transition"
+        class="min-w-0 flex flex-col items-center justify-center gap-1 rounded-xl px-1 py-2 text-[.68rem] min-[390px]:text-xs font-medium no-underline text-surface-500 transition"
         exact-active-class="!bg-emerald-50 !text-emerald-800"
       >
         <i :class="[item.icon, 'text-lg']" /><span class="truncate max-w-full">{{ $t(item.label) }}</span>

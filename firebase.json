@@ -12,6 +12,13 @@
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
       {
+        "source": "/oauth/google/callback",
+        "function": {
+          "functionId": "googleOAuthCallback",
+          "region": "europe-west3"
+        }
+      },
+      {
         "source": "/api/**",
         "function": {
           "functionId": "api",

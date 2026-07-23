@@ -45,16 +45,19 @@ question
 - Structured final answers with source-ID validation.
 - Prompt-injection boundary: retrieved data is evidence, never instructions.
 - Qdrant hybrid RAG when configured; Firestore BM25 fallback otherwise.
+- `gemini-embedding-2` dense retrieval at 1,536 dimensions.
+- Retry-enabled per-record Qdrant synchronization after Firestore writes.
 - Qdrant indexing endpoint restricted to application administrators.
 - Deterministic retrieval/unit evaluations plus optional live Gemini cases.
 - Existing Intake, Requests, and Contacts remain available.
 
 ### Known limits
 
-- Qdrant credentials are not provisioned by this repository; the deployed
-  function uses lexical fallback until the hosted cluster and secret binding
-  are configured.
-- Index refresh is currently an explicit full rebuild, not event-driven.
+- The free Qdrant deployment is a single node without backup support.
+- Firestore-to-Qdrant synchronization is eventually consistent and does not
+  yet expose a dead-letter queue or freshness service-level metric.
+- Full reconciliation still deletes and rebuilds the target collection rather
+  than building a shadow collection and switching an alias.
 - Firestore projections are single-company and bounded for the spike.
 - Conversation history is shared but there is no thread management yet.
 - The evaluation set is intentionally small and synthetic; it establishes the
@@ -73,16 +76,16 @@ question
 - Production answers remain functional without Qdrant through the explicit
   lexical fallback.
 
-## Slice 2: durable context index and ingestion contract
+## Slice 2: durable context index and ingestion contract — implemented kernel
 
-Turn the search spike into a reliable context layer:
+The index now accepts company-scoped normalized `ContextItem` records.
+Existing calls were backfilled into this contract and the generic
+Firestore-to-Qdrant path was verified. Provisioning, secret binding, verified
+backfill, and per-record synchronization are implemented. Remaining work:
 
-- provision Qdrant Cloud and bind its URL/API key through Firebase/Secret
-  Manager;
-- backfill existing records and verify counts/checksums;
-- emit normalized context updates when calls and CRM records change;
-- incrementally upsert changed chunks and delete stale chunks;
 - add indexing leases, retries, dead-letter state, replay, and health metrics;
+- measure and alert on source-to-index freshness;
+- build a shadow collection and switch an alias for zero-downtime migrations;
 - separate raw source records from derived chunks and embedding versions;
 - implement company scoping and source permissions before a second company;
 - add corpus-size, freshness, and missing-index evaluations; and
@@ -92,22 +95,37 @@ Exit criterion: every eligible source change is searchable within a measured
 freshness target, and the index can be completely rebuilt and reconciled from
 Firestore without data loss or duplicates.
 
-## Slice 3: second source connector
+## Slice 3: adapter control plane and second source connector — implemented
 
-Add one non-call source based on a real question users need answered. A
-read-only Google Calendar or focused document source is the likely choice.
+The Sources control plane distinguishes adapters, configured connections, and
+selectable resources. Odorik was migrated onto the contract and read-only
+Google Calendar is the second adapter.
 
-- connector OAuth, grants, revocation, and health;
-- idempotent incremental sync;
-- normalized `ContextItem` provenance;
+- encrypted per-connection credentials and provider-specific grants;
+- explicit phone-line and calendar selection;
+- Calendar OAuth callback and offline refresh token;
+- idempotent incremental sync plus scheduled reconciliation;
+- normalized `ContextItem` provenance for calls and events;
 - source-level access checks before retrieval or prompting;
 - chunking appropriate to that source;
 - hybrid retrieval across calls and the second source;
 - citations back to the original object; and
 - deletion and revocation propagation.
 
-Exit criterion: the same agent can answer a question requiring both a call and
-the second source without adding a source-specific model tool.
+Operational caveat: Google OAuth remains in testing mode until verification;
+test-mode refresh tokens expire after seven days.
+
+Exit criterion: after the first interactive calendar grant and selection, the
+same agent can answer a question requiring both a call and calendar event
+without a source-specific model tool.
+
+## Slice 3b: Drive folder connector
+
+Reuse the connection/resource/context kernel for folders selected with Google
+Picker. Validate whether `drive.file` provides recursive visibility for
+existing children; use it when it does, otherwise request `drive.readonly` and
+enforce the folder boundary in the adapter. Start with Google Docs, PDF,
+Markdown, and plain text.
 
 ## Slice 4: generic proposal and human-decision cards
 
@@ -172,4 +190,3 @@ Conversational workflow authoring becomes worth testing when:
 At that point, start with a small declarative specification over registered
 capabilities. Do not generate executable code and do not begin with a universal
 visual workflow builder.
-

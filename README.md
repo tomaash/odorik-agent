@@ -64,12 +64,23 @@ The existing vertical slice remains useful as a proving ground:
 - A read-only factual agent uses Gemini tool calls to search, fetch, list, and
   aggregate the available company records. Answers retain source citations and
   run/token/tool traces.
+- Qdrant combines 1,536-dimensional `gemini-embedding-2` vectors with BM25,
+  and a Firestore write trigger keeps indexed record chunks synchronized.
+- The mobile-first **Sources** screen separates provider adapters, configured
+  account connections, and independently selectable resources.
+- Odorik is no longer a singleton integration: its legacy account is migrated
+  into an Odorik connection with selectable phone lines, while new accounts
+  receive isolated encrypted credentials and callback URLs.
+- Google Calendar has read-only OAuth, explicit calendar selection,
+  incremental sync tokens, deletion propagation, and scheduled reconciliation.
+- Calls and calendar events normalize into company-scoped `ContextItem`
+  documents before the same Qdrant indexing pipeline processes them.
 - The new **Agent** screen is the default signed-in destination; the existing
   CRM remains available as Intake, Requests, and Contacts.
 
 This code is not being discarded. During the pivot it serves as:
 
-- the first `Call` connector;
+- the first `odorik` adapter and its configured connections;
 - a supply of real and fixture context items;
 - a reference implementation for authentication, review, revision checks, and
   auditability; and
@@ -97,15 +108,18 @@ Google sign-in authenticates identity but does not grant company access. On
 first sign-in, the API creates an access document with `enabled: false`. An
 administrator manually enables the person in Firestore.
 
-This is sufficient for the current single-company deployment. Before adding
-external connectors, the platform must introduce company-scoped memberships,
-connector grants, and server-side authorization for every context read and
-action.
+Source configuration is restricted to application administrators. Enabled
+members can read company-visible normalized context through the authenticated
+API; direct Firestore browser access remains denied. Restricted per-source
+member ACLs are still required before a source can be shared with only a subset
+of enabled company members.
 
 ## Repository map
 
 - `src/`, `Dockerfile`, `infra/`: Odorik recording ingestion and transcription
 - `functions/`: Firebase Auth context, tRPC, CRM extraction and review
+- `functions/src/connectors/`: adapter registry, encrypted connection
+  credentials, Odorik projection, Calendar OAuth and incremental sync
 - `functions/src/agent/`: factual agent loop, safe company-data tools, and
   Qdrant/Firestore retrieval
 - `functions/evals/`: versioned factual and retrieval evaluation cases
@@ -136,6 +150,26 @@ functions/node_modules/.bin/firebase deploy \
   --only functions:crm,firestore:odorik,hosting \
   --project odorik-tx-260720-c58d
 ```
+
+The first deployment of the Gen-2 `syncKnowledgeIndex` Firestore trigger also
+needs its Eventarc delivery identity to invoke that one private Cloud Run
+service. This production project grants `roles/run.invoker` on
+`syncKnowledgeIndex` only to the custom `odorik-crm` service account.
+
+Connector deployments additionally use:
+
+- `CONNECTOR_CREDENTIAL_KEY`: a base64-encoded 32-byte AES-GCM key shared only
+  by the authenticated API and recording ingest service;
+- `GOOGLE_CONNECTOR_CLIENT_ID` and `GOOGLE_CONNECTOR_CLIENT_SECRET`: the
+  dedicated Google Workspace web OAuth client;
+- the exact hosted callback
+  `https://odorik-tx-260720-c58d.web.app/oauth/google/callback`; and
+- a private `syncCalendarSources` scheduled function invoked every 30 minutes.
+
+The Google OAuth application is currently in testing mode. Approved testers
+must be added in Google Auth Platform; test-mode refresh tokens expire after
+seven days. OAuth verification is required before publishing Calendar access
+to arbitrary company users.
 
 Pushes to `main` also deploy through GitHub Actions using Workload Identity
 Federation scoped to this repository. Existing Odorik destinations, production

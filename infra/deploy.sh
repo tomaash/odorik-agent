@@ -23,6 +23,9 @@ upsert_secret dashboard-token "$DASHBOARD_TOKEN"
 upsert_secret odorik-upload-user "$ODORIK_UPLOAD_USER"
 upsert_secret odorik-upload-password "$ODORIK_UPLOAD_PASSWORD"
 upsert_secret gemini-api-key "$GEMINI_API_KEY"
+if [[ -n "${CONNECTOR_CREDENTIAL_KEY:-}" ]]; then
+  upsert_secret CONNECTOR_CREDENTIAL_KEY "$CONNECTOR_CREDENTIAL_KEY"
+fi
 
 gcloud secrets add-iam-policy-binding dashboard-token \
   --member="serviceAccount:odorik-api@$PROJECT_ID.iam.gserviceaccount.com" \
@@ -34,6 +37,12 @@ for secret in odorik-upload-user odorik-upload-password; do
     --role=roles/secretmanager.secretAccessor \
     --project="$PROJECT_ID" >/dev/null
 done
+if gcloud secrets describe CONNECTOR_CREDENTIAL_KEY --project="$PROJECT_ID" >/dev/null 2>&1; then
+  gcloud secrets add-iam-policy-binding CONNECTOR_CREDENTIAL_KEY \
+    --member="serviceAccount:odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
+    --role=roles/secretmanager.secretAccessor \
+    --project="$PROJECT_ID" >/dev/null
+fi
 gcloud secrets add-iam-policy-binding gemini-api-key \
   --member="serviceAccount:odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
   --role=roles/secretmanager.secretAccessor \
@@ -64,7 +73,7 @@ gcloud run deploy odorik-ingest \
   --region="$REGION" \
   --service-account="odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
   --set-env-vars="$COMMON_ENV,RECORDINGS_BUCKET=$RECORDINGS_BUCKET" \
-  --set-secrets="ODORIK_UPLOAD_USER=odorik-upload-user:latest,ODORIK_UPLOAD_PASSWORD=odorik-upload-password:latest" \
+  --set-secrets="ODORIK_UPLOAD_USER=odorik-upload-user:latest,ODORIK_UPLOAD_PASSWORD=odorik-upload-password:latest,CONNECTOR_CREDENTIAL_KEY=CONNECTOR_CREDENTIAL_KEY:latest" \
   --allow-unauthenticated \
   --min=0 \
   --max=3 \

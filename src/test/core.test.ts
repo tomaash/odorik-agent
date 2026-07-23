@@ -7,6 +7,11 @@ import {
   recordingCallId,
   safeFileName,
 } from "../recording.js";
+import {
+  legacyConnectionId,
+  odorikResourceIdentity,
+  odorikStoredCallId,
+} from "../connectors/odorik.js";
 
 test("secure comparison and Basic auth parsing", () => {
   assert.equal(secureEquals("secret", "secret"), true);
@@ -43,3 +48,17 @@ test("structured Gemini response parsing accepts fenced JSON", () => {
   assert.equal(result.transcript, "Hello");
 });
 
+test("maps each Odorik line to a stable selectable resource", () => {
+  const byName = odorikResourceIdentity({ line_name: "Support", to: "+420123" });
+  const repeated = odorikResourceIdentity({ line_name: "Support", to: "+420999" });
+  const byNumber = odorikResourceIdentity({ to: "+420123" });
+  assert.equal(byName.resourceId, repeated.resourceId);
+  assert.equal(byName.displayName, "Support");
+  assert.notEqual(byName.resourceId, byNumber.resourceId);
+  assert.equal(odorikStoredCallId(legacyConnectionId, "call-1"), "call-1");
+  assert.match(odorikStoredCallId("second-account", "call-1"), /^odorik_[a-f0-9]{32}$/);
+  assert.notEqual(
+    odorikStoredCallId("second-account", "call-1"),
+    odorikStoredCallId("third-account", "call-1"),
+  );
+});

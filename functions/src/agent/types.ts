@@ -6,6 +6,7 @@ export const knowledgeKinds = [
   "task",
   "review",
   "audit_event",
+  "context_item",
 ] as const;
 
 export type KnowledgeKind = typeof knowledgeKinds[number];
@@ -59,4 +60,3 @@ export type AgentAnswer = {
     totalTokens: number;
   };
 };
-

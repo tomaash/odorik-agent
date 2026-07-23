@@ -1,6 +1,20 @@
 import { createHash } from "node:crypto";
-import type { CompanyDataRepository } from "./knowledge.js";
+import {
+  chunkRecord,
+  type CompanyDataRepository,
+  type CompanyRecord,
+} from "./knowledge.js";
 import type { KnowledgeDocument, KnowledgeKind, SearchHit } from "./types.js";
+
+export const embeddingModel = "gemini-embedding-2";
+export const embeddingDimensions = 1536;
+export const qdrantCollection = "company_context_v3";
+
+export interface EmbeddingProvider {
+  readonly dimensions: number;
+  embedDocument(document: KnowledgeDocument): Promise<number[]>;
+  embedQuery(query: string): Promise<number[]>;
+}
 
 export interface KnowledgeSearch {
   search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]>;
@@ -86,12 +100,12 @@ type EmbeddingPayload = {
 };
 
 export class GeminiEmbedder {
-  readonly dimensions = 768;
-  readonly model = "gemini-embedding-001";
+  readonly dimensions = embeddingDimensions;
+  readonly model = embeddingModel;
 
   constructor(private readonly apiKey: string) {}
 
-  private async embed(text: string, taskType: "RETRIEVAL_DOCUMENT" | "QUESTION_ANSWERING", title?: string) {
+  private async embed(text: string) {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${this.model}:embedContent`,
       {
@@ -99,8 +113,6 @@ export class GeminiEmbedder {
         headers: { "content-type": "application/json", "x-goog-api-key": this.apiKey },
         body: JSON.stringify({
           content: { parts: [{ text }] },
-          taskType,
-          ...(title ? { title } : {}),
           outputDimensionality: this.dimensions,
         }),
         signal: AbortSignal.timeout(30_000),
@@ -116,11 +128,12 @@ export class GeminiEmbedder {
   }
 
   embedDocument(document: KnowledgeDocument): Promise<number[]> {
-    return this.embed(document.text, "RETRIEVAL_DOCUMENT", document.title.slice(0, 200));
+    const title = document.title.trim().slice(0, 500) || "none";
+    return this.embed(`title: ${title} | text: ${document.text}`);
   }
 
   embedQuery(query: string): Promise<number[]> {
-    return this.embed(query, "QUESTION_ANSWERING");
+    return this.embed(`task: search result | query: ${query}`);
   }
 }
 
@@ -158,8 +171,8 @@ export class QdrantHybridSearch implements KnowledgeSearch {
   constructor(
     url: string,
     private readonly apiKey: string,
-    private readonly embedder: GeminiEmbedder,
-    private readonly collection = "company_context_v1",
+    private readonly embedder: EmbeddingProvider,
+    private readonly collection = qdrantCollection,
     private readonly companyId = "default",
   ) {
     this.baseUrl = url.replace(/\/$/, "");
@@ -203,7 +216,7 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         sparse_vectors: { bm25: { modifier: "idf" } },
       }),
     });
-    for (const field of ["companyId", "kind", "sourcePath"]) {
+    for (const field of ["companyId", "kind", "recordId", "sourcePath"]) {
       await this.request(`/collections/${encodeURIComponent(this.collection)}/index?wait=true`, {
         method: "PUT",
         body: JSON.stringify({ field_name: field, field_schema: "keyword" }),
@@ -213,6 +226,11 @@ export class QdrantHybridSearch implements KnowledgeSearch {
 
   async replaceDocuments(documents: KnowledgeDocument[]): Promise<number> {
     await this.ensureCollection(true);
+    await this.upsertDocuments(documents);
+    return documents.length;
+  }
+
+  private async upsertDocuments(documents: KnowledgeDocument[]): Promise<void> {
     const batchSize = 8;
     for (let offset = 0; offset < documents.length; offset += batchSize) {
       const batch = documents.slice(offset, offset + batchSize);
@@ -232,7 +250,64 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         signal: AbortSignal.timeout(120_000),
       });
     }
-    return documents.length;
+  }
+
+  async deleteRecord(kind: KnowledgeKind, recordId: string): Promise<void> {
+    await this.ensureCollection();
+    await this.request(`/collections/${encodeURIComponent(this.collection)}/points/delete?wait=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        filter: {
+          must: [
+            { key: "companyId", match: { value: this.companyId } },
+            { key: "kind", match: { value: kind } },
+            { key: "recordId", match: { value: recordId } },
+          ],
+        },
+      }),
+    });
+  }
+
+  async synchronizeRecord(input: {
+    kind: KnowledgeKind;
+    recordId: string;
+    record: CompanyRecord | null;
+  }): Promise<{ action: "upserted" | "deleted"; points: number }> {
+    await this.ensureCollection();
+    if (!input.record) {
+      await this.deleteRecord(input.kind, input.recordId);
+      return { action: "deleted", points: 0 };
+    }
+    const documents = chunkRecord(input.record, this.companyId);
+    const vectors = await Promise.all(documents.map((document) => this.embedder.embedDocument(document)));
+    await this.deleteRecord(input.kind, input.recordId);
+    await this.upsertDocumentsWithVectors(documents, vectors);
+    return { action: "upserted", points: documents.length };
+  }
+
+  private async upsertDocumentsWithVectors(
+    documents: KnowledgeDocument[],
+    vectors: number[][],
+  ): Promise<void> {
+    const batchSize = 8;
+    for (let offset = 0; offset < documents.length; offset += batchSize) {
+      const batch = documents.slice(offset, offset + batchSize);
+      const batchVectors = vectors.slice(offset, offset + batchSize);
+      await this.request(`/collections/${encodeURIComponent(this.collection)}/points?wait=true`, {
+        method: "PUT",
+        body: JSON.stringify({
+          points: batch.map((document, index) => ({
+            id: pointId(document.id),
+            vector: {
+              dense: batchVectors[index],
+              bm25: { text: document.text, model: "qdrant/bm25", options: bm25Options },
+            },
+            payload: document,
+          })),
+        }),
+        signal: AbortSignal.timeout(120_000),
+      });
+    }
   }
 
   async collectionStats(): Promise<QdrantCollectionStats> {

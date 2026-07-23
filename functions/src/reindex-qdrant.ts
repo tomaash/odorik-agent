@@ -15,7 +15,12 @@ const geminiApiKey = process.env.GEMINI_API_KEY?.trim();
 if (!geminiApiKey) throw new Error("GEMINI_API_KEY is required");
 
 process.env.GOOGLE_CLOUD_PROJECT ||= process.env.PROJECT_ID?.trim() || "odorik-tx-260720-c58d";
-const [{ FirestoreCompanyData }, { qdrantFromEnvironment }, { db }] = await Promise.all([
+const [{ FirestoreCompanyData }, {
+  embeddingDimensions,
+  embeddingModel,
+  qdrantCollection,
+  qdrantFromEnvironment,
+}, { db }] = await Promise.all([
   import("./agent/knowledge.js"),
   import("./agent/search.js"),
   import("./firestore.js"),
@@ -44,7 +49,9 @@ if (!probeHits.some((hit) => hit.sourcePath === probe.sourcePath)) {
 }
 
 console.log(JSON.stringify({
-  collection: "company_context_v1",
+  collection: qdrantCollection,
+  embeddingModel,
+  embeddingDimensions,
   documents: documents.length,
   points: stats.pointsCount,
   indexedVectors: stats.indexedVectorsCount,

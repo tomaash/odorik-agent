@@ -25,6 +25,22 @@
         { "fieldPath": "contactId", "order": "ASCENDING" },
         { "fieldPath": "updatedAt", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "contextItems",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "source.connectionId", "order": "ASCENDING" },
+        { "fieldPath": "source.resourceId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "connections",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "adapterId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

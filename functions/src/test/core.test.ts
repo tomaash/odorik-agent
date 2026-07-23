@@ -12,6 +12,12 @@ import {
   normalizeRequestStatus,
   storedStatusesFor,
 } from "../crm/lifecycle.js";
+import { decryptCredentials, encryptCredentials } from "../connectors/credentials.js";
+import {
+  odorikContextItem,
+  odorikContextItemId,
+  odorikResourceIdentity,
+} from "../connectors/odorik.js";
 
 test("normalizes Czech and international phone numbers", () => {
   assert.equal(normalizePhone("777 123 456"), "+420777123456");
@@ -73,4 +79,38 @@ test("allows only explicit service-request lifecycle transitions", () => {
   assert.equal(canTransitionRequestStatus("new", "completed"), false);
   assert.equal(canTransitionRequestStatus("completed", "in_progress"), true);
   assert.deepEqual(allowedRequestTransitions("waiting_customer"), ["in_progress", "completed", "cancelled"]);
+});
+
+test("encrypts connector credentials with authenticated encryption", () => {
+  const key = Buffer.alloc(32, 7).toString("base64");
+  const encrypted = encryptCredentials({ username: "line-a", password: "secret-value" }, key);
+  assert.notEqual(encrypted.includes("secret-value"), true);
+  assert.deepEqual(decryptCredentials(encrypted, key), {
+    username: "line-a",
+    password: "secret-value",
+  });
+  assert.throws(() => decryptCredentials(`${encrypted.slice(0, -2)}xx`, key));
+});
+
+test("normalizes Odorik calls into connection-aware context items", () => {
+  const resource = odorikResourceIdentity({ lineName: "Sales", to: "+420123456789" });
+  assert.equal(resource.externalId, "line:Sales");
+  assert.match(resource.resourceId, /^phone_[a-f0-9]{24}$/);
+  assert.equal(
+    odorikContextItemId("account-a", "call-1"),
+    odorikContextItemId("account-a", "call-1"),
+  );
+  const item = odorikContextItem("call-1", {
+    status: "completed",
+    connectionId: "account-a",
+    resourceId: resource.resourceId,
+    from: "+420111222333",
+    to: "+420123456789",
+    transcript: "Please call me tomorrow.",
+    summary: "Follow-up requested.",
+  });
+  assert.equal((item?.source as Record<string, unknown>).connectionId, "account-a");
+  assert.equal(item?.kind, "call");
+  assert.match(String(item?.text), /Please call me tomorrow/);
+  assert.equal(odorikContextItem("call-2", { status: "uploaded" }), null);
 });

@@ -1,0 +1,50 @@
+import { db } from "./firestore.js";
+import {
+  FirestoreCompanyData,
+  knowledgeKindForCollection,
+} from "./agent/knowledge.js";
+import { qdrantFromEnvironment } from "./agent/search.js";
+
+export type KnowledgeSyncResult =
+  | { skipped: true; reason: "collection_not_indexed" }
+  | {
+      skipped: false;
+      kind: NonNullable<ReturnType<typeof knowledgeKindForCollection>>;
+      recordId: string;
+      action: "upserted" | "deleted";
+      points: number;
+    };
+
+export async function synchronizeKnowledgeRecord(input: {
+  collection: string;
+  recordId: string;
+  companyId?: string;
+  geminiApiKey: string;
+}): Promise<KnowledgeSyncResult> {
+  const kind = knowledgeKindForCollection(input.collection);
+  if (!kind) return { skipped: true, reason: "collection_not_indexed" };
+
+  const repository = new FirestoreCompanyData(db, input.companyId || "default");
+  const { qdrant } = qdrantFromEnvironment({
+    repository,
+    geminiApiKey: input.geminiApiKey,
+  });
+  if (!qdrant) {
+    throw new Error("QDRANT_URL and QDRANT_API_KEY are required for knowledge-index synchronization");
+  }
+
+  // Always re-read Firestore rather than trusting event ordering. Firestore is
+  // authoritative, and background write events can be delivered more than once.
+  const record = await repository.getRecord(kind, input.recordId);
+  const result = await qdrant.synchronizeRecord({
+    kind,
+    recordId: input.recordId,
+    record,
+  });
+  return {
+    skipped: false,
+    kind,
+    recordId: input.recordId,
+    ...result,
+  };
+}

@@ -1,8 +1,8 @@
 import multipart from "@fastify/multipart";
 import { FieldValue, Timestamp } from "@google-cloud/firestore";
 import Fastify from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import { saveAudioObject } from "./audio-store.js";
-import { parseBasicAuth, secureEquals } from "./auth.js";
 import { port, requiredEnv } from "./config.js";
 import { db } from "./firestore.js";
 import {
@@ -11,6 +11,12 @@ import {
   recordingCallId,
   safeFileName,
 } from "./recording.js";
+import {
+  authorizeOdorikUpload,
+  legacyConnectionId,
+  observeOdorikResource,
+  odorikStoredCallId,
+} from "./connectors/odorik.js";
 
 const maxUploadBytes = 31 * 1024 * 1024;
 const server = Fastify({ logger: true, bodyLimit: maxUploadBytes });
@@ -27,13 +33,19 @@ await server.register(multipart, {
 
 server.get("/health", async () => ({ ok: true, service: "odorik-ingest" }));
 
-server.post("/odorik/recordings", async (request, reply) => {
-  const credentials = parseBasicAuth(request.headers.authorization);
-  const validCredentials =
-    credentials &&
-    secureEquals(credentials.username, requiredEnv("ODORIK_UPLOAD_USER")) &&
-    secureEquals(credentials.password, requiredEnv("ODORIK_UPLOAD_PASSWORD"));
-  if (!validCredentials) {
+async function receiveRecording(
+  connectionId: string,
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  try {
+    await authorizeOdorikUpload({
+      connectionId,
+      authorization: request.headers.authorization,
+      legacyUsername: process.env.ODORIK_UPLOAD_USER?.trim(),
+      legacyPassword: process.env.ODORIK_UPLOAD_PASSWORD?.trim(),
+    });
+  } catch {
     reply.header("www-authenticate", 'Basic realm="Odorik uploads"');
     return reply.code(401).send({ code: 401, description: "Unauthorized" });
   }
@@ -61,7 +73,9 @@ server.post("/odorik/recordings", async (request, reply) => {
     return reply.code(400).send({ code: 400, description: "Missing record file" });
   }
 
-  const callId = recordingCallId(fields, originalFileName);
+  const resource = await observeOdorikResource({ connectionId, fields });
+  const externalCallId = recordingCallId(fields, originalFileName);
+  const callId = odorikStoredCallId(connectionId, externalCallId);
   const fileName = safeFileName(originalFileName);
   const objectName = `recordings/${callId}/${fileName}`;
   const mimeType = audioMimeType(fileName, suppliedMimeType);
@@ -71,6 +85,16 @@ server.post("/odorik/recordings", async (request, reply) => {
   await callRef.set(
     {
       status: "uploading",
+      companyId: "default",
+      connectionId,
+      resourceId: resource.resourceId,
+      contextEnabled: resource.contextEnabled,
+      source: {
+        adapterId: "odorik",
+        connectionId,
+        resourceId: resource.resourceId,
+        externalId: externalCallId,
+      },
       originalFileName,
       objectName,
       mimeType,
@@ -94,6 +118,7 @@ server.post("/odorik/recordings", async (request, reply) => {
     contentType: mimeType,
     metadata: {
       callId,
+      externalCallId,
       from: fields.from || "",
       to: fields.to || "",
       duration: fields.duration || "",
@@ -136,7 +161,22 @@ server.post("/odorik/recordings", async (request, reply) => {
     description: duplicate ? "Recording already received" : "Recording accepted",
     callid: callId,
   });
+}
+
+server.post("/odorik/recordings", async (request, reply) => {
+  return receiveRecording(legacyConnectionId, request, reply);
 });
+
+server.post<{ Params: { connectionId: string } }>(
+  "/webhooks/odorik/:connectionId/recordings",
+  async (request, reply) => {
+    const connectionId = request.params.connectionId;
+    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(connectionId)) {
+      return reply.code(404).send({ code: 404, description: "Connection not found" });
+    }
+    return receiveRecording(connectionId, request, reply);
+  },
+);
 
 server.setErrorHandler((error, _request, reply) => {
   server.log.error(error);

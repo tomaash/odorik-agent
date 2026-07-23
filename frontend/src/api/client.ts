@@ -111,7 +111,7 @@ export type ContactDetails = {
 
 export type AssistantCitation = {
   citationId: string
-  kind: 'call' | 'interaction' | 'contact' | 'service_request' | 'task' | 'review' | 'audit_event'
+  kind: 'call' | 'interaction' | 'contact' | 'service_request' | 'task' | 'review' | 'audit_event' | 'context_item'
   recordId: string
   sourcePath: string
   title: string
@@ -142,6 +142,63 @@ export type AssistantMessage = {
   confidence?: 'high' | 'medium' | 'low'
   limitations?: string[]
   createdAt?: string | null
+}
+
+export type AdapterId = 'odorik' | 'google_calendar' | 'google_drive' | 'gmail' | 'github'
+
+export type SourceAdapter = {
+  id: AdapterId
+  name: string
+  description: string
+  resourceNoun: string
+  available: boolean
+  availability: 'available' | 'needs_configuration' | 'planned'
+  readOnly: boolean
+}
+
+export type SourceResource = {
+  id: string
+  connectionId: string
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository'
+  externalId: string
+  displayName: string
+  status: 'enabled' | 'disabled'
+  itemCount: number
+  lastObservedAt?: string | null
+}
+
+export type SourceConnection = {
+  id: string
+  companyId: string
+  adapterId: AdapterId
+  displayName: string
+  status: 'configuring' | 'active' | 'attention' | 'disconnected'
+  authKind: 'basic_upload' | 'oauth2' | 'github_app'
+  credentialMode: 'encrypted' | 'legacy_secret' | 'none'
+  uploadUrl?: string
+  accountLabel?: string
+  lastSyncAt?: string | null
+  lastObservedAt?: string | null
+  lastError?: string | null
+  itemCount: number
+  resourceCount: number
+  resources: SourceResource[]
+}
+
+export type SourcesResponse = {
+  companyId: string
+  adapters: SourceAdapter[]
+  connections: SourceConnection[]
+}
+
+export type SelectableCalendar = {
+  id: string
+  displayName: string
+  description: string | null
+  primary: boolean
+  accessRole: string
+  timeZone: string | null
+  selected: boolean
 }
 
 export async function registerAccess(): Promise<AccessStatus> {
@@ -198,4 +255,49 @@ export async function getAssistantHistory(threadId = 'general'): Promise<Assista
 
 export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {
   return trpc.assistant.ask.mutate({ threadId, question }) as Promise<AssistantAnswer>
+}
+
+export async function listSources(): Promise<SourcesResponse> {
+  return trpc.sources.list.query() as Promise<SourcesResponse>
+}
+
+export async function addOdorikConnection(input: {
+  displayName: string
+  accountLabel?: string
+  username: string
+  password: string
+  numbers: string[]
+}) {
+  return trpc.sources.addOdorik.mutate(input)
+}
+
+export async function setSourceConnectionStatus(
+  connectionId: string,
+  status: 'active' | 'disconnected',
+) {
+  return trpc.sources.setConnectionStatus.mutate({ connectionId, status })
+}
+
+export async function setSourceResourceEnabled(
+  connectionId: string,
+  resourceId: string,
+  enabled: boolean,
+) {
+  return trpc.sources.setResourceEnabled.mutate({ connectionId, resourceId, enabled })
+}
+
+export async function startGoogleCalendarAuthorization() {
+  return trpc.sources.googleCalendar.authorizationUrl.mutate()
+}
+
+export async function getGoogleCalendars(connectionId: string): Promise<SelectableCalendar[]> {
+  return trpc.sources.googleCalendar.calendars.query({ connectionId }) as Promise<SelectableCalendar[]>
+}
+
+export async function selectGoogleCalendars(connectionId: string, calendarIds: string[]) {
+  return trpc.sources.googleCalendar.select.mutate({ connectionId, calendarIds })
+}
+
+export async function syncGoogleCalendars(connectionId: string) {
+  return trpc.sources.googleCalendar.sync.mutate({ connectionId })
 }

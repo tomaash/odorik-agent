@@ -4,6 +4,10 @@ import type { AgentModel, ModelTurn } from "../agent/gemini.js";
 import { parseAgentFinal, runFactAgent } from "../agent/loop.js";
 import {
   bm25Search,
+  embeddingDimensions,
+  embeddingModel,
+  GeminiEmbedder,
+  QdrantHybridSearch,
   qdrantConfigurationFromEnvironment,
   reciprocalRankFusion,
 } from "../agent/search.js";
@@ -68,6 +72,92 @@ test("Qdrant configuration supports deployed and local URL variable names", () =
     apiKey: "local-key",
   });
   assert.equal(qdrantConfigurationFromEnvironment({ QDRANT_URL: "https://missing-key.example" }), null);
+});
+
+test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({
+      embedding: { values: Array.from({ length: embeddingDimensions }, () => 0.01) },
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const embedder = new GeminiEmbedder("test-key");
+    await embedder.embedDocument({
+      id: "contact:eva:0",
+      companyId: "default",
+      kind: "contact",
+      recordId: "eva",
+      sourcePath: "contacts/eva",
+      title: "Eva Nováková",
+      text: "phoneE164: +420777123456",
+      occurredAt: null,
+      metadata: {},
+    });
+    await embedder.embedQuery("Who is Eva?");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  assert.equal(embeddingModel, "gemini-embedding-2");
+  assert.equal(embeddingDimensions, 1536);
+  assert.equal(requests[0]?.outputDimensionality, 1536);
+  assert.match(JSON.stringify(requests[0]), /title: Eva Nováková \\| text:/);
+  assert.match(JSON.stringify(requests[1]), /task: search result \\| query: Who is Eva\\?/);
+  assert.doesNotMatch(JSON.stringify(requests), /taskType/);
+});
+
+test("record synchronization removes stale chunks before upserting the current projection", async () => {
+  const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    requests.push({
+      path,
+      method: init?.method || "GET",
+      ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {}),
+    });
+    return new Response(JSON.stringify({ result: {}, status: "ok" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+    );
+    const result = await search.synchronizeRecord({
+      kind: "contact",
+      recordId: "eva",
+      record: {
+        kind: "contact",
+        recordId: "eva",
+        sourcePath: "contacts/eva",
+        title: "Eva Nováková",
+        occurredAt: null,
+        data: { phoneE164: "+420777123456" },
+      },
+    });
+    assert.deepEqual(result, { action: "upserted", points: 1 });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const deletion = requests.find((request) => request.path.endsWith("/points/delete"));
+  const upsert = requests.find((request) => request.path.endsWith("/points") && request.method === "PUT");
+  assert.ok(deletion);
+  assert.match(JSON.stringify(deletion.body), /recordId/);
+  assert.match(JSON.stringify(deletion.body), /eva/);
+  assert.ok(upsert);
+  assert.match(JSON.stringify(upsert.body), /contact:eva:0/);
 });
 
 test("parses structured final answers and recovers citation IDs from plain text", () => {
