@@ -253,6 +253,16 @@ function extractCitationInfo(record: CompanyRecord): {
   };
 }
 
+function extractUrlFromText(text: string): string | undefined {
+  if (!text) return undefined;
+  const match = text.match(/https?:\/\/[^\s"'\\]+/i);
+  if (match) {
+    let url = match[0].replace(/[)"'\],]+$/, "");
+    if (url.startsWith("http")) return url;
+  }
+  return undefined;
+}
+
 function cleanExcerpt(rawText: string, max = 300): string {
   if (!rawText) return "";
   let cleaned = rawText;
@@ -267,6 +277,8 @@ function cleanExcerpt(rawText: string, max = 300): string {
       .replace(/source:\s*\{[^}]*\}/gi, "")
       .replace(/provenance:\s*\{[^}]*\}/gi, "")
       .replace(/access:\s*\{[^}]*\}/gi, "")
+      .replace(/artifactRefs:\s*\[[^\]]*\]/gi, "")
+      .replace(/participantRefs:\s*\[[^\]]*\]/gi, "")
       .replace(/observedAt:\s*\S+/gi, "")
       .replace(/createdAt:\s*\S+/gi, "")
       .replace(/updatedAt:\s*\S+/gi, "")
@@ -306,8 +318,8 @@ export class CompanyFactTools implements AgentToolExecutor {
       }
 
       const sortedHits = [...hits].sort((a, b) => {
-        const aHasUrl = Boolean(a.metadata?.externalUrl);
-        const bHasUrl = Boolean(b.metadata?.externalUrl);
+        const aHasUrl = Boolean(a.metadata?.externalUrl || extractUrlFromText(a.text));
+        const bHasUrl = Boolean(b.metadata?.externalUrl || extractUrlFromText(b.text));
         if (aHasUrl && !bHasUrl) return -1;
         if (!aHasUrl && bHasUrl) return 1;
         return 0;
@@ -324,6 +336,16 @@ export class CompanyFactTools implements AgentToolExecutor {
       }
 
       const matches = deduplicatedHits.map((hit) => {
+        const externalUrl = (typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined)
+          || extractUrlFromText(hit.text);
+        let adapterId = typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined;
+        if (!adapterId) {
+          if (externalUrl?.includes("drive.google.com") || hit.sourcePath.includes("drive")) adapterId = "google_drive";
+          else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) adapterId = "google_calendar";
+          else if (hit.kind === "call" || hit.kind === "interaction") adapterId = "odorik";
+          else if (hit.kind === "contact" || hit.kind === "service_request") adapterId = "crm";
+        }
+
         const citation = this.citations.add({
           kind: hit.kind,
           recordId: hit.recordId,
@@ -331,8 +353,8 @@ export class CompanyFactTools implements AgentToolExecutor {
           title: hit.title,
           excerpt: cleanExcerpt(hit.text),
           occurredAt: hit.occurredAt,
-          adapterId: typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined,
-          externalUrl: typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined,
+          adapterId,
+          externalUrl,
           internalRoute: typeof hit.metadata?.internalRoute === "string" ? hit.metadata.internalRoute : undefined,
         }, hit.id);
         return {

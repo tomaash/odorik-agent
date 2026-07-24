@@ -62,7 +62,7 @@ const finalResponseSchema = {
 export class GeminiRestAgentModel implements AgentModel {
   constructor(
     private readonly apiKey: string,
-    readonly model = "gemini-3.1-flash-lite",
+    readonly model = "gemini-3.5-flash-lite",
   ) {}
 
   async generate(input: {

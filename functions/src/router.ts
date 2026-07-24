@@ -179,7 +179,7 @@ export const appRouter = router({
         projectId: process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "odorik-tx-260720-c58d",
         databaseId: "odorik",
         databaseEdition: "Firestore Enterprise",
-        model: "gemini-3.1-flash-lite",
+        model: "gemini-3.5-flash-lite",
       };
     }),
   }),
@@ -380,7 +380,7 @@ export const appRouter = router({
 
   assistant: router({
     status: enabledProcedure.query(() => ({
-      model: "gemini-3.1-flash-lite",
+      model: "gemini-3.5-flash-lite",
       promptVersion: factAgentPromptVersion,
       search: qdrantConfigurationFromEnvironment()
         ? "qdrant_hybrid_rrf"
@@ -465,7 +465,7 @@ export const appRouter = router({
           limitations: answer.limitations,
           toolTrace: jsonSafe(answer.toolTrace),
           usage: answer.usage,
-          model: "gemini-3.1-flash-lite",
+          model: "gemini-3.5-flash-lite",
           promptVersion: factAgentPromptVersion,
           actorUid: ctx.uid,
           latencyMs: Date.now() - startedAt,
