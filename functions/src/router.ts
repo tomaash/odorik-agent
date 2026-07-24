@@ -44,6 +44,13 @@ import {
   selectGoogleCalendars,
   syncGoogleCalendarConnection,
 } from "./connectors/google-calendar.js";
+import {
+  createDriveAuthorization,
+  listGoogleDriveFolders,
+  revokeGoogleDriveAuthorization,
+  selectGoogleDriveFolders,
+  syncGoogleDriveConnection,
+} from "./connectors/google-drive.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
@@ -180,12 +187,15 @@ export const appRouter = router({
   sources: router({
     list: enabledProcedure.query(() => listSources()),
     googleCalendar: router({
-      authorizationUrl: adminProcedure.mutation(({ ctx }) => createCalendarAuthorization({
-        uid: ctx.uid,
-        email: ctx.email,
-        displayName: ctx.displayName,
-        clientId: googleConnectorClientId.value(),
-      })),
+      authorizationUrl: adminProcedure
+        .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
+        .mutation(({ ctx, input }) => createCalendarAuthorization({
+          uid: ctx.uid,
+          email: ctx.email,
+          displayName: ctx.displayName,
+          clientId: googleConnectorClientId.value(),
+          returnOrigin: input?.returnOrigin,
+        })),
       calendars: adminProcedure
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
@@ -213,6 +223,48 @@ export const appRouter = router({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
         .mutation(({ input }) => syncGoogleCalendarConnection({
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+    }),
+    googleDrive: router({
+      authorizationUrl: adminProcedure
+        .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
+        .mutation(({ ctx, input }) => createDriveAuthorization({
+          uid: ctx.uid,
+          email: ctx.email,
+          displayName: ctx.displayName,
+          clientId: googleConnectorClientId.value(),
+          returnOrigin: input?.returnOrigin,
+        })),
+      folders: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .query(({ input }) => listGoogleDriveFolders({
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      select: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          folderIds: z.array(z.string().min(1).max(1000)).max(50),
+        }))
+        .mutation(({ input }) => selectGoogleDriveFolders({
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      sync: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ input }) => syncGoogleDriveConnection({
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -273,6 +325,19 @@ export const appRouter = router({
               });
             } catch (error) {
               console.warn("Google OAuth revocation failed; deleting local credentials anyway", {
+                connectionId: input.connectionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              providerAccessRevoked = false;
+            }
+          } else if (prepared.adapterId === "google_drive") {
+            try {
+              providerAccessRevoked = await revokeGoogleDriveAuthorization({
+                connectionId: input.connectionId,
+                credentialKey: connectorCredentialKey.value(),
+              });
+            } catch (error) {
+              console.warn("Google Drive OAuth revocation failed; deleting local credentials anyway", {
                 connectionId: input.connectionId,
                 error: error instanceof Error ? error.message : String(error),
               });

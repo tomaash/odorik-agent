@@ -3,6 +3,7 @@ import { defineStore } from 'pinia'
 import {
   GoogleAuthProvider,
   onAuthStateChanged,
+  signInWithPopup,
   signInWithRedirect,
   signOut as firebaseSignOut,
   type User,
@@ -45,6 +46,12 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     const provider = new GoogleAuthProvider()
     provider.setCustomParameters({ prompt: 'select_account' })
+    if (import.meta.env.DEV) {
+      const credential = await signInWithPopup(auth, provider)
+      user.value = credential.user
+      access.value = await registerAccess()
+      return
+    }
     await signInWithRedirect(auth, provider)
   }
 

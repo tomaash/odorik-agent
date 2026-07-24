@@ -17,6 +17,8 @@ import {
   calendarAuthorizationLifetimeMs,
   revokeGoogleToken,
 } from "../connectors/google-calendar.js";
+import { driveAuthorizationLifetimeMs, driveScopes } from "../connectors/google-drive.js";
+import { googleOAuthReturnUrl } from "../connectors/google-oauth-return.js";
 import {
   odorikContextItem,
   odorikContextItemId,
@@ -144,4 +146,24 @@ test("normalizes Odorik calls into connection-aware context items", () => {
   assert.equal(item?.kind, "call");
   assert.match(String(item?.text), /Please call me tomorrow/);
   assert.equal(odorikContextItem("call-2", { status: "uploaded" }), null);
+});
+
+test("keeps Google Drive authorization state alive and defines drive readonly scope", () => {
+  assert.equal(driveAuthorizationLifetimeMs, 60 * 60 * 1000);
+  assert.deepEqual(driveScopes, ["https://www.googleapis.com/auth/drive.readonly"]);
+});
+
+test("returns Google OAuth to the requesting local app without allowing open redirects", () => {
+  assert.equal(
+    googleOAuthReturnUrl("http://localhost:5173"),
+    "http://localhost:5173/sources",
+  );
+  assert.equal(
+    googleOAuthReturnUrl("http://127.0.0.1:4173/anything"),
+    "http://127.0.0.1:4173/sources",
+  );
+  assert.equal(
+    googleOAuthReturnUrl("https://attacker.example"),
+    "https://odorik-tx-260720-c58d.web.app/sources",
+  );
 });

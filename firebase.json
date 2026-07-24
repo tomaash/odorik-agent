@@ -42,7 +42,7 @@
     "auth": { "port": 9099 },
     "firestore": { "port": 8085 },
     "functions": { "port": 5001 },
-    "hosting": { "port": 5000 },
+    "hosting": { "port": 5005 },
     "ui": { "enabled": true, "port": 4041 }
   }
 }

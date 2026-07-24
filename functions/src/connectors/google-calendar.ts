@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
+import { googleOAuthReturnUrl } from "./google-oauth-return.js";
 import { defaultCompanyId } from "./odorik.js";
 
 export const calendarScopes = [
@@ -161,6 +162,7 @@ export async function createCalendarAuthorization(input: {
   email: string;
   displayName: string;
   clientId: string;
+  returnOrigin?: string;
 }): Promise<{ authorizationUrl: string }> {
   const state = randomBytes(32).toString("base64url");
   const stateHash = hash(state);
@@ -171,6 +173,7 @@ export async function createCalendarAuthorization(input: {
     email: input.email,
     displayName: input.displayName,
     redirectUri: defaultGoogleRedirectUri,
+    returnUrl: googleOAuthReturnUrl(input.returnOrigin),
     createdAt: now,
     expiresAt: Timestamp.fromMillis(now.toMillis() + calendarAuthorizationLifetimeMs),
   });

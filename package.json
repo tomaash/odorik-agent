@@ -15,7 +15,8 @@
     "dev:ingest": "tsx watch src/ingest.ts",
     "dev:processor": "tsx watch src/processor.ts",
     "test": "npm run build && node --test dist/test/*.test.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "seed:local": "npm --prefix functions run seed:local"
   },
   "dependencies": {
     "@fastify/multipart": "10.1.0",

@@ -290,8 +290,18 @@ export async function setSourceResourceEnabled(
   return trpc.sources.setResourceEnabled.mutate({ connectionId, resourceId, enabled })
 }
 
+export type SelectableFolder = {
+  id: string
+  displayName: string
+  description: string | null
+  shared: boolean
+  selected: boolean
+}
+
 export async function startGoogleCalendarAuthorization() {
-  return trpc.sources.googleCalendar.authorizationUrl.mutate()
+  return trpc.sources.googleCalendar.authorizationUrl.mutate({
+    returnOrigin: window.location.origin,
+  })
 }
 
 export async function getGoogleCalendars(connectionId: string): Promise<SelectableCalendar[]> {
@@ -304,4 +314,22 @@ export async function selectGoogleCalendars(connectionId: string, calendarIds: s
 
 export async function syncGoogleCalendars(connectionId: string) {
   return trpc.sources.googleCalendar.sync.mutate({ connectionId })
+}
+
+export async function startGoogleDriveAuthorization() {
+  return trpc.sources.googleDrive.authorizationUrl.mutate({
+    returnOrigin: window.location.origin,
+  })
+}
+
+export async function getGoogleDriveFolders(connectionId: string): Promise<SelectableFolder[]> {
+  return trpc.sources.googleDrive.folders.query({ connectionId }) as Promise<SelectableFolder[]>
+}
+
+export async function selectGoogleDriveFolders(connectionId: string, folderIds: string[]) {
+  return trpc.sources.googleDrive.select.mutate({ connectionId, folderIds })
+}
+
+export async function syncGoogleDrive(connectionId: string) {
+  return trpc.sources.googleDrive.sync.mutate({ connectionId })
 }

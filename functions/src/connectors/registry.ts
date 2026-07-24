@@ -24,8 +24,8 @@ const descriptors: Record<AdapterId, AdapterDescriptor> = {
     name: "Google Drive",
     description: "Documents inside explicitly selected folders.",
     resourceNoun: "folders",
-    available: false,
-    availability: "planned",
+    available: true,
+    availability: "available",
     readOnly: true,
   },
   gmail: {

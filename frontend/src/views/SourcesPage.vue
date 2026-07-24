@@ -13,15 +13,20 @@ import {
   addOdorikConnection,
   deleteSourceConnection,
   getGoogleCalendars,
+  getGoogleDriveFolders,
   listSources,
   selectGoogleCalendars,
+  selectGoogleDriveFolders,
   setSourceConnectionStatus,
   setSourceResourceEnabled,
   startGoogleCalendarAuthorization,
+  startGoogleDriveAuthorization,
   syncGoogleCalendars,
+  syncGoogleDrive,
   type SourceAdapter,
   type SourceConnection,
   type SelectableCalendar,
+  type SelectableFolder,
   type SourcesResponse,
 } from '../api/client'
 
@@ -38,6 +43,10 @@ const calendarConnection = ref<SourceConnection | null>(null)
 const calendars = ref<SelectableCalendar[]>([])
 const selectedCalendarIds = ref<string[]>([])
 const loadingCalendars = ref(false)
+const driveConnection = ref<SourceConnection | null>(null)
+const folders = ref<SelectableFolder[]>([])
+const selectedFolderIds = ref<string[]>([])
+const loadingFolders = ref(false)
 const synchronizingId = ref('')
 const pendingDeleteId = ref('')
 const deletingId = ref('')
@@ -91,6 +100,7 @@ function resourceName(resource: { externalId: string; displayName: string }) {
 
 function emptyResourceMessage(connection: SourceConnection) {
   if (connection.adapterId === 'google_calendar') return t('sources.emptyCalendars')
+  if (connection.adapterId === 'google_drive') return t('sources.emptyFolders')
   if (connection.adapterId === 'odorik') return t('sources.emptyPhoneLines')
   return t('sources.emptyResources')
 }
@@ -136,6 +146,10 @@ async function addConnection(adapter: SourceAdapter) {
     await connectCalendar()
     return
   }
+  if (adapter.id === 'google_drive') {
+    await connectDrive()
+    return
+  }
   if (adapter.id === 'odorik') {
     showForm.value = true
     await nextTick()
@@ -144,7 +158,7 @@ async function addConnection(adapter: SourceAdapter) {
 }
 
 function canAddConnection(adapter: SourceAdapter) {
-  return adapter.available && ['odorik', 'google_calendar'].includes(adapter.id)
+  return adapter.available && ['odorik', 'google_calendar', 'google_drive'].includes(adapter.id)
 }
 
 async function toggleConnection(connection: SourceConnection) {
@@ -167,6 +181,7 @@ async function deleteConnection(connection: SourceConnection) {
   try {
     await deleteSourceConnection(connection.id)
     if (calendarConnection.value?.id === connection.id) calendarConnection.value = null
+    if (driveConnection.value?.id === connection.id) driveConnection.value = null
     pendingDeleteId.value = ''
     notice.value = t('sources.deleted', { name: connection.accountLabel || connection.displayName })
     await load()
@@ -254,11 +269,78 @@ async function synchronizeCalendar(connection: SourceConnection) {
   }
 }
 
+async function connectDrive() {
+  error.value = ''
+  try {
+    const result = await startGoogleDriveAuthorization()
+    window.location.assign(result.authorizationUrl)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function openDrivePicker(connection: SourceConnection) {
+  loadingFolders.value = true
+  error.value = ''
+  driveConnection.value = connection
+  folders.value = []
+  try {
+    folders.value = await getGoogleDriveFolders(connection.id)
+    selectedFolderIds.value = folders.value
+      .filter((folder) => folder.selected)
+      .map((folder) => folder.id)
+  } catch (cause) {
+    driveConnection.value = null
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingFolders.value = false
+  }
+}
+
+function toggleFolder(folderId: string) {
+  selectedFolderIds.value = selectedFolderIds.value.includes(folderId)
+    ? selectedFolderIds.value.filter((id) => id !== folderId)
+    : [...selectedFolderIds.value, folderId]
+}
+
+async function saveFolderSelection() {
+  if (!driveConnection.value) return
+  saving.value = true
+  error.value = ''
+  try {
+    await selectGoogleDriveFolders(driveConnection.value.id, selectedFolderIds.value)
+    driveConnection.value = null
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function synchronizeDrive(connection: SourceConnection) {
+  synchronizingId.value = connection.id
+  error.value = ''
+  try {
+    await syncGoogleDrive(connection.id)
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    synchronizingId.value = ''
+  }
+}
+
 onMounted(async () => {
-  const calendarResult = new URLSearchParams(window.location.search).get('calendar')
+  const params = new URLSearchParams(window.location.search)
+  const calendarResult = params.get('calendar')
+  const driveResult = params.get('drive')
   if (calendarResult === 'connected') notice.value = t('sources.calendarConnected')
   else if (calendarResult === 'denied') error.value = t('sources.calendarDenied')
   else if (calendarResult === 'failed' || calendarResult === 'invalid') error.value = t('sources.calendarFailed')
+  else if (driveResult === 'connected') notice.value = t('sources.driveConnected')
+  else if (driveResult === 'denied') error.value = t('sources.driveDenied')
+  else if (driveResult === 'failed' || driveResult === 'invalid') error.value = t('sources.driveFailed')
   await load()
 })
 </script>
@@ -345,6 +427,42 @@ onMounted(async () => {
           <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-1">
             <Button :label="t('common.cancel')" severity="secondary" text type="button" @click="calendarConnection = null" />
             <Button :label="t('sources.calendarPicker.submit')" icon="pi pi-check" type="submit" :loading="saving" />
+          </div>
+        </form>
+      </template>
+    </Card>
+
+    <Card v-if="driveConnection && isAdmin" class="rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+      <template #title>{{ t('sources.drivePicker.title') }}</template>
+      <template #subtitle>{{ t('sources.drivePicker.description') }}</template>
+      <template #content>
+        <div v-if="loadingFolders" class="flex justify-center py-10"><ProgressSpinner /></div>
+        <form v-else class="grid gap-3" @submit.prevent="saveFolderSelection">
+          <label
+            v-for="folder in folders"
+            :key="folder.id"
+            class="min-w-0 flex items-start gap-3 rounded-2xl border border-surface-200 bg-surface-50 p-3.5 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              class="mt-1 w-4 h-4 accent-emerald-700 shrink-0"
+              :checked="selectedFolderIds.includes(folder.id)"
+              @change="toggleFolder(folder.id)"
+            />
+            <span class="min-w-0 grow">
+              <span class="flex items-center gap-2 flex-wrap font-semibold">
+                {{ folder.displayName }}
+                <Tag v-if="folder.shared" :value="t('sources.drivePicker.shared')" severity="info" rounded />
+              </span>
+              <span v-if="folder.description" class="block text-sm text-surface-500 mt-1 break-words">{{ folder.description }}</span>
+              <span class="block text-xs text-surface-400 mt-1 break-all">{{ folder.id }}</span>
+            </span>
+          </label>
+          <p v-if="folders.length === 0" class="text-sm text-surface-500">{{ t('sources.drivePicker.none') }}</p>
+          <Message severity="warn" :closable="false">{{ t('sources.drivePicker.privacy') }}</Message>
+          <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-1">
+            <Button :label="t('common.cancel')" severity="secondary" text type="button" @click="driveConnection = null" />
+            <Button :label="t('sources.drivePicker.submit')" icon="pi pi-check" type="submit" :loading="saving" />
           </div>
         </form>
       </template>
@@ -496,6 +614,25 @@ onMounted(async () => {
                   size="small"
                   :loading="synchronizingId === connection.id"
                   @click="synchronizeCalendar(connection)"
+                />
+                <Button
+                  v-if="connection.adapterId === 'google_drive' && connection.status !== 'disconnected'"
+                  :label="t('sources.chooseFolders')"
+                  icon="pi pi-list-check"
+                  severity="secondary"
+                  text
+                  size="small"
+                  @click="openDrivePicker(connection)"
+                />
+                <Button
+                  v-if="connection.adapterId === 'google_drive' && connection.status !== 'disconnected'"
+                  :label="synchronizingId === connection.id ? t('sources.syncing') : t('sources.syncNow')"
+                  icon="pi pi-refresh"
+                  severity="secondary"
+                  text
+                  size="small"
+                  :loading="synchronizingId === connection.id"
+                  @click="synchronizeDrive(connection)"
                 />
                 <Button
                   :label="connection.status === 'disconnected' ? t('sources.reconnect') : t('sources.disconnect')"
