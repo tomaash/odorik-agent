@@ -10,6 +10,7 @@ import {
   QdrantHybridSearch,
   QdrantRequiredSearch,
   qdrantCollection,
+  getQdrantCollection,
   qdrantConfigurationFromEnvironment,
   qdrantDenseVectorConfig,
   reciprocalRankFusion,
@@ -165,8 +166,10 @@ test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", as
   assert.doesNotMatch(JSON.stringify(requests), /taskType/);
 });
 
-test("Qdrant uses one float16 dense-vector representation", () => {
-  assert.equal(qdrantCollection, "company_context_v4");
+test("Qdrant uses one float16 dense-vector representation and environment-aware collection naming", () => {
+  assert.equal(getQdrantCollection({}), "company_context_v4");
+  assert.equal(getQdrantCollection({ FUNCTIONS_EMULATOR: "true" }), "company_context_dev_v4");
+  assert.equal(getQdrantCollection({ QDRANT_COLLECTION: "custom_context_v1" }), "custom_context_v1");
   assert.deepEqual(qdrantDenseVectorConfig, {
     size: 1536,
     distance: "Cosine",

@@ -7,7 +7,17 @@ import type { KnowledgeDocument, KnowledgeKind, SearchHit } from "./types.js";
 
 export const embeddingModel = "gemini-embedding-2";
 export const embeddingDimensions = 1536;
-export const qdrantCollection = "company_context_v4";
+
+export function getQdrantCollection(
+  environment: NodeJS.ProcessEnv = process.env,
+): string {
+  const configured = environment.QDRANT_COLLECTION?.trim();
+  if (configured) return configured;
+  const isEmulated = environment.FUNCTIONS_EMULATOR === "true";
+  return isEmulated ? "company_context_dev_v4" : "company_context_v4";
+}
+
+export const qdrantCollection = getQdrantCollection();
 export const qdrantDenseVectorConfig = {
   size: embeddingDimensions,
   distance: "Cosine",
@@ -477,11 +487,13 @@ export function qdrantFromEnvironment(input: {
   geminiApiKey: string;
 }): { search: QdrantRequiredSearch; qdrant?: QdrantHybridSearch } {
   const configuration = qdrantConfigurationFromEnvironment();
+  const collection = getQdrantCollection();
   const qdrant = configuration
     ? new QdrantHybridSearch(
       configuration.url,
       configuration.apiKey,
       new GeminiEmbedder(input.geminiApiKey),
+      collection,
     )
     : undefined;
   return { search: new QdrantRequiredSearch(qdrant), qdrant };

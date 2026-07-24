@@ -11,6 +11,7 @@
     "start:api": "node dist/api.js",
     "start:ingest": "node dist/ingest.js",
     "start:processor": "node dist/processor.js",
+    "dev": "node scripts/kill-ports.js && concurrently -k -n \"emulator,frontend\" -c \"cyan,magenta\" \"npm --prefix functions run serve\" \"npm --prefix frontend run dev\"",
     "dev:api": "tsx watch src/api.ts",
     "dev:ingest": "tsx watch src/ingest.ts",
     "dev:processor": "tsx watch src/processor.ts",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "24.10.1",
+    "concurrently": "^9.1.2",
     "tsx": "4.21.0",
     "typescript": "7.0.2"
   },
