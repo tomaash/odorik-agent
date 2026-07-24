@@ -47,12 +47,17 @@ export const googleOAuthCallback = onRequest(
     const sourcesUrl = googleOAuthReturnUrl(
       typeof stateData?.returnUrl === "string" ? stateData.returnUrl : undefined,
     );
+    const resultKey = stateData?.provider === "google_drive"
+      ? "drive"
+      : stateData?.provider === "google_calendar"
+        ? "calendar"
+        : "auth";
     if (oauthError) {
-      response.redirect(`${sourcesUrl}?auth=denied`);
+      response.redirect(`${sourcesUrl}?${resultKey}=denied`);
       return;
     }
     if (!code || !state) {
-      response.redirect(`${sourcesUrl}?auth=invalid`);
+      response.redirect(`${sourcesUrl}?${resultKey}=invalid`);
       return;
     }
     try {
@@ -79,7 +84,7 @@ export const googleOAuthCallback = onRequest(
       }
     } catch (error) {
       console.error("Google OAuth callback failed", error);
-      response.redirect(`${sourcesUrl}?auth=failed`);
+      response.redirect(`${sourcesUrl}?${resultKey}=failed`);
     }
   },
 );

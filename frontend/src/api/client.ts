@@ -292,6 +292,7 @@ export async function setSourceResourceEnabled(
 
 export type SelectableFolder = {
   id: string
+  parentId: string | null
   displayName: string
   description: string | null
   shared: boolean

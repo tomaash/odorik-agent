@@ -143,6 +143,19 @@ npm --prefix frontend run typecheck
 npm --prefix frontend run build
 ```
 
+Google connector OAuth in the emulator uses the deterministic frontend origin
+`http://127.0.0.1:5173`. The `Company Agent connectors` web OAuth client must
+keep both exact callbacks:
+
+```text
+https://odorik-tx-260720-c58d.web.app/oauth/google/callback
+http://127.0.0.1:5173/oauth/google/callback
+```
+
+Vite proxies the local callback to the Functions emulator; the callback then
+returns the browser to the local `/sources` page. Google requires exact redirect
+URI matches, including scheme, host, port, path, and trailing slash.
+
 ## Deployment
 
 The current application can be deployed manually with:

@@ -2,17 +2,17 @@ import { createHash, randomBytes } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
-import { googleOAuthReturnUrl } from "./google-oauth-return.js";
+import {
+  defaultGoogleRedirectUri,
+  googleOAuthRedirectUri,
+  googleOAuthReturnUrl,
+} from "./google-oauth-return.js";
 import { defaultCompanyId } from "./odorik.js";
 
 export const calendarScopes = [
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   "https://www.googleapis.com/auth/calendar.events.readonly",
 ] as const;
-
-export const defaultGoogleRedirectUri =
-  process.env.GOOGLE_CONNECTOR_REDIRECT_URI?.trim()
-  || "https://odorik-tx-260720-c58d.web.app/oauth/google/callback";
 
 // The consent warning for an unverified test app can require a manual handoff.
 // Keep the state short-lived, but leave enough time for the user to review it.
@@ -167,19 +167,20 @@ export async function createCalendarAuthorization(input: {
   const state = randomBytes(32).toString("base64url");
   const stateHash = hash(state);
   const now = Timestamp.now();
+  const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
   await db.doc(`companies/${defaultCompanyId}/oauthStates/${stateHash}`).set({
     provider: "google_calendar",
     uid: input.uid,
     email: input.email,
     displayName: input.displayName,
-    redirectUri: defaultGoogleRedirectUri,
+    redirectUri,
     returnUrl: googleOAuthReturnUrl(input.returnOrigin),
     createdAt: now,
     expiresAt: Timestamp.fromMillis(now.toMillis() + calendarAuthorizationLifetimeMs),
   });
   const query = new URLSearchParams({
     client_id: input.clientId,
-    redirect_uri: defaultGoogleRedirectUri,
+    redirect_uri: redirectUri,
     response_type: "code",
     access_type: "offline",
     prompt: "consent select_account",

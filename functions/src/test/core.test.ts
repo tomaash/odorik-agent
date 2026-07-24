@@ -18,7 +18,12 @@ import {
   revokeGoogleToken,
 } from "../connectors/google-calendar.js";
 import { driveAuthorizationLifetimeMs, driveScopes } from "../connectors/google-drive.js";
-import { googleOAuthReturnUrl } from "../connectors/google-oauth-return.js";
+import {
+  defaultGoogleRedirectUri,
+  googleOAuthRedirectUri,
+  googleOAuthReturnUrl,
+  localGoogleRedirectUri,
+} from "../connectors/google-oauth-return.js";
 import {
   odorikContextItem,
   odorikContextItemId,
@@ -165,5 +170,17 @@ test("returns Google OAuth to the requesting local app without allowing open red
   assert.equal(
     googleOAuthReturnUrl("https://attacker.example"),
     "https://odorik-tx-260720-c58d.web.app/sources",
+  );
+  assert.equal(
+    googleOAuthRedirectUri("http://localhost:4173"),
+    localGoogleRedirectUri,
+  );
+  assert.equal(
+    googleOAuthRedirectUri("http://127.0.0.1:5173/sources"),
+    "http://127.0.0.1:5173/oauth/google/callback",
+  );
+  assert.equal(
+    googleOAuthRedirectUri("https://attacker.example"),
+    defaultGoogleRedirectUri,
   );
 });

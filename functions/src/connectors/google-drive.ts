@@ -3,8 +3,12 @@ import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
 import { defaultCompanyId } from "./odorik.js";
-import { defaultGoogleRedirectUri, revokeGoogleToken } from "./google-calendar.js";
-import { googleOAuthReturnUrl } from "./google-oauth-return.js";
+import { revokeGoogleToken } from "./google-calendar.js";
+import {
+  defaultGoogleRedirectUri,
+  googleOAuthRedirectUri,
+  googleOAuthReturnUrl,
+} from "./google-oauth-return.js";
 
 export const driveScopes = [
   "https://www.googleapis.com/auth/drive.readonly",
@@ -52,6 +56,7 @@ type DriveCredential = {
 
 export type SelectableFolder = {
   id: string;
+  parentId: string | null;
   displayName: string;
   description: string | null;
   shared: boolean;
@@ -98,19 +103,20 @@ export async function createDriveAuthorization(input: {
   const state = randomBytes(32).toString("base64url");
   const stateHash = hash(state);
   const now = Timestamp.now();
+  const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
   await db.doc(`companies/${defaultCompanyId}/oauthStates/${stateHash}`).set({
     provider: "google_drive",
     uid: input.uid,
     email: input.email,
     displayName: input.displayName,
-    redirectUri: defaultGoogleRedirectUri,
+    redirectUri,
     returnUrl: googleOAuthReturnUrl(input.returnOrigin),
     createdAt: now,
     expiresAt: Timestamp.fromMillis(now.toMillis() + driveAuthorizationLifetimeMs),
   });
   const query = new URLSearchParams({
     client_id: input.clientId,
-    redirect_uri: defaultGoogleRedirectUri,
+    redirect_uri: redirectUri,
     response_type: "code",
     access_type: "offline",
     prompt: "consent select_account",
@@ -318,7 +324,7 @@ export async function fetchDriveFolders(accessToken: string): Promise<DriveFileE
   do {
     const query = new URLSearchParams({
       q: "mimeType = 'application/vnd.google-apps.folder' and trashed = false",
-      fields: "nextPageToken, files(id, name, description, shared, createdTime, modifiedTime)",
+      fields: "nextPageToken, files(id, name, parents, description, shared, createdTime, modifiedTime)",
       pageSize: "100",
       ...(pageToken ? { pageToken } : {}),
     });
@@ -353,10 +359,15 @@ export async function listGoogleDriveFolders(input: {
     }
   }
 
+  const visibleFolderIds = new Set(
+    folders.flatMap((folder) => folder.id ? [folder.id] : []),
+  );
+
   return folders
     .filter((f): f is DriveFileEntry & { id: string; name: string } => Boolean(f.id && f.name))
     .map((folder) => ({
       id: folder.id,
+      parentId: folder.parents?.find((parentId) => visibleFolderIds.has(parentId)) || null,
       displayName: folder.name,
       description: folder.description || null,
       shared: Boolean(folder.shared),

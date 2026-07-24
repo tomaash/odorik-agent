@@ -12,11 +12,27 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [vue()],
     server: {
+      host: '127.0.0.1',
+      port: 5173,
+      strictPort: true,
       proxy: {
         '/api': {
           target,
           changeOrigin: true,
         },
+        '/oauth/google/callback': useEmulators
+          ? {
+              target,
+              changeOrigin: true,
+              rewrite: (path) => path.replace(
+                /^\/oauth\/google\/callback/,
+                '/googleOAuthCallback',
+              ),
+            }
+          : {
+              target: 'https://odorik-tx-260720-c58d.web.app',
+              changeOrigin: true,
+            },
       },
     },
     test: {
@@ -25,4 +41,3 @@ export default defineConfig(({ mode }) => {
     },
   }
 })
-
