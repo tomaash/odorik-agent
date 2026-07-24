@@ -19,6 +19,6 @@ export const firestoreDatabaseId =
   process.env.FIRESTORE_DATABASE_ID?.trim() || "odorik";
 
 export const geminiModel =
-  process.env.GEMINI_MODEL?.trim() || "gemini-3.1-flash-lite";
+  process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
 
 export const port = Number.parseInt(process.env.PORT || "8080", 10);

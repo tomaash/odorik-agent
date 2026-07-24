@@ -2,7 +2,7 @@ import { extractionSchema, type ExtractionResult, type FieldProposal } from "./s
 
 export const intakePromptVersion = "intake-v1";
 export const intakeSchemaVersion = 1;
-export const crmModel = "gemini-3.1-flash-lite";
+export const crmModel = "gemini-3.5-flash-lite";
 
 const responseSchema = {
   type: "OBJECT",

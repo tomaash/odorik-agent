@@ -3,7 +3,8 @@ import Fastify from "fastify";
 import { loadAudioObject } from "./audio-store.js";
 import { geminiModel, port, requiredEnv } from "./config.js";
 import { db } from "./firestore.js";
-import { transcribeAudio } from "./gemini.js";
+import { summarizeTranscriptWithGemini } from "./gemini.js";
+import { transcribeAudioWithDeepgram } from "./deepgram.js";
 import { audioMimeType } from "./recording.js";
 
 type StorageEvent = {
@@ -13,7 +14,7 @@ type StorageEvent = {
   data?: StorageEvent;
 };
 
-const maxGeminiInlineBytes = 18 * 1024 * 1024;
+const maxAudioBytes = 250 * 1024 * 1024;
 const server = Fastify({ logger: true, bodyLimit: 1024 * 1024 });
 
 server.get("/health", async () => ({ ok: true, service: "transcription-processor" }));
@@ -57,30 +58,37 @@ server.post("/events/storage", async (request, reply) => {
       bucketName,
       objectName,
     });
-    if (metadata.size > maxGeminiInlineBytes) {
+    if (metadata.size > maxAudioBytes) {
       throw new Error(
-        `Recording is ${metadata.size} bytes; inline Gemini limit is ${maxGeminiInlineBytes}`,
+        `Recording is ${metadata.size} bytes; limit is ${maxAudioBytes}`,
       );
     }
 
-    const result = await transcribeAudio({
+    const mimeType = event.contentType || metadata.contentType || audioMimeType(objectName);
+
+    const sttResult = await transcribeAudioWithDeepgram({
       audio,
-      mimeType:
-        event.contentType ||
-        metadata.contentType ||
-        audioMimeType(objectName),
+      mimeType,
+      deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+    });
+
+    const summaryResult = await summarizeTranscriptWithGemini({
+      transcript: sttResult.transcript,
+      segments: sttResult.segments,
       apiKey: requiredEnv("GEMINI_API_KEY"),
     });
 
     await callRef.set(
       {
         status: "completed",
+        sttModel: "deepgram-nova-2",
+        summaryModel: geminiModel,
         model: geminiModel,
-        language: result.language,
-        transcript: result.transcript,
-        summary: result.summary,
-        segments: result.segments,
-        actionItems: result.actionItems,
+        language: summaryResult.language || sttResult.language,
+        transcript: sttResult.transcript,
+        summary: summaryResult.summary,
+        segments: sttResult.segments,
+        actionItems: summaryResult.actionItems,
         processedAt: FieldValue.serverTimestamp(),
         updatedAt: FieldValue.serverTimestamp(),
         error: FieldValue.delete(),
