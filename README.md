@@ -65,9 +65,9 @@ The existing vertical slice remains useful as a proving ground:
   aggregate the available company records. Answers retain source citations and
   run/token/tool traces.
 - Qdrant combines 1,536-dimensional `gemini-embedding-2` vectors with BM25.
-  Dense vectors use `int8` scalar quantization (`0.99` quantile): the
-  quantized copy stays in RAM, full-precision originals stay on disk for
-  rescoring, and a Firestore write trigger keeps record chunks synchronized.
+  Dense vectors are stored once as `float16`, halving their raw storage
+  relative to `float32` without maintaining a second quantized copy. A
+  Firestore write trigger keeps record chunks synchronized.
 - The mobile-first **Sources** screen separates provider adapters, configured
   account connections, and independently selectable resources.
 - Odorik is no longer a singleton integration: its legacy account is migrated

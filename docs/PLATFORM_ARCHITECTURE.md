@@ -287,14 +287,13 @@ untrusted evidence rather than instructions.
 
 Qdrant provides the preferred `gemini-embedding-2` dense plus BM25 candidate
 rankings and fuses them with RRF. Its 1,536-dimensional dense vectors use
-scalar `int8` quantization at the `0.99` quantile. Quantized vectors stay in
-RAM, original float vectors stay on disk, and dense candidate search
-oversamples by 2× before rescoring with the originals. Firestore remains
-authoritative; a retry-enabled write trigger incrementally replaces all
-derived chunks for each changed or deleted allowlisted record. If Qdrant is
-not configured or is unavailable, the application falls back to BM25 over
-safe Firestore projections. The fallback preserves functionality but is not
-intended as the long-term large-corpus index.
+one `float16` representation. There is no separate quantized copy or dense
+rescoring path. Firestore remains authoritative; a retry-enabled write trigger
+incrementally replaces all derived chunks for each changed or deleted
+allowlisted record. If Qdrant is not configured or is unavailable, the
+application falls back to BM25 over safe Firestore projections. The fallback
+preserves functionality but is not intended as the long-term large-corpus
+index.
 
 ## Connector contract
 
@@ -328,7 +327,7 @@ provider payload
 → normalized companies/default/contextItems record
 → Firestore write trigger
 → Gemini Embedding 2 and BM25 payload
-→ Qdrant company_context_v3
+→ Qdrant company_context_v4
 → source-agnostic agent tools and citations
 ```
 

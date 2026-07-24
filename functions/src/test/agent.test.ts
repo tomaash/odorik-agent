@@ -8,9 +8,9 @@ import {
   embeddingModel,
   GeminiEmbedder,
   QdrantHybridSearch,
-  qdrantDenseSearchParams,
+  qdrantCollection,
   qdrantConfigurationFromEnvironment,
-  qdrantScalarQuantizationConfig,
+  qdrantDenseVectorConfig,
   reciprocalRankFusion,
 } from "../agent/search.js";
 import { CitationRegistry, type AgentToolExecutor } from "../agent/tools.js";
@@ -111,20 +111,12 @@ test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", as
   assert.doesNotMatch(JSON.stringify(requests), /taskType/);
 });
 
-test("Qdrant uses int8 scalar quantization with quality-preserving search", () => {
-  assert.deepEqual(qdrantScalarQuantizationConfig, {
-    scalar: {
-      type: "int8",
-      quantile: 0.99,
-      always_ram: true,
-    },
-  });
-  assert.deepEqual(qdrantDenseSearchParams, {
-    quantization: {
-      ignore: false,
-      rescore: true,
-      oversampling: 2,
-    },
+test("Qdrant uses one float16 dense-vector representation", () => {
+  assert.equal(qdrantCollection, "company_context_v4");
+  assert.deepEqual(qdrantDenseVectorConfig, {
+    size: 1536,
+    distance: "Cosine",
+    datatype: "float16",
   });
 });
 
@@ -138,7 +130,19 @@ test("record synchronization removes stale chunks before upserting the current p
       method: init?.method || "GET",
       ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {}),
     });
-    return new Response(JSON.stringify({ result: {}, status: "ok" }), {
+    return new Response(JSON.stringify({
+      result: {
+        config: {
+          params: {
+            vectors: {
+              dense: qdrantDenseVectorConfig,
+            },
+          },
+          quantization_config: null,
+        },
+      },
+      status: "ok",
+    }), {
       status: 200,
       headers: { "content-type": "application/json" },
     });
@@ -172,14 +176,9 @@ test("record synchronization removes stale chunks before upserting the current p
 
   const deletion = requests.find((request) => request.path.endsWith("/points/delete"));
   const upsert = requests.find((request) => request.path.endsWith("/points") && request.method === "PUT");
-  const collectionUpdate = requests.find((request) => request.path.endsWith("/company_context_v3")
+  const collectionUpdate = requests.find((request) => request.path.endsWith(`/${qdrantCollection}`)
     && request.method === "PATCH");
-  assert.ok(collectionUpdate);
-  assert.equal(
-    ((collectionUpdate.body?.vectors as Record<string, unknown>)?.dense as Record<string, unknown>)?.on_disk,
-    true,
-  );
-  assert.deepEqual(collectionUpdate.body?.quantization_config, qdrantScalarQuantizationConfig);
+  assert.equal(collectionUpdate, undefined);
   assert.ok(deletion);
   assert.match(JSON.stringify(deletion.body), /recordId/);
   assert.match(JSON.stringify(deletion.body), /eva/);
@@ -187,7 +186,52 @@ test("record synchronization removes stale chunks before upserting the current p
   assert.match(JSON.stringify(upsert.body), /contact:eva:0/);
 });
 
-test("dense prefetch explicitly searches quantized vectors and rescores candidates", async () => {
+test("fresh Qdrant collections use float16 without scalar quantization", async () => {
+  const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    const method = init?.method || "GET";
+    requests.push({
+      path,
+      method,
+      ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {}),
+    });
+    if (method === "GET") {
+      return new Response(JSON.stringify({ status: { error: "Not found" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ result: true, status: "ok" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+    );
+    await search.ensureCollection();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const creation = requests.find((request) => request.path.endsWith(`/${qdrantCollection}`)
+    && request.method === "PUT");
+  assert.ok(creation);
+  const vectors = creation.body?.vectors as Record<string, unknown>;
+  assert.deepEqual(vectors.dense, qdrantDenseVectorConfig);
+  assert.equal(creation.body?.quantization_config, undefined);
+});
+
+test("dense prefetch searches float16 vectors without quantization parameters", async () => {
   const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {
@@ -202,8 +246,8 @@ test("dense prefetch explicitly searches quantized vectors and rescores candidat
         ? { points: [] }
         : {
             config: {
-              params: { vectors: { dense: { on_disk: true } } },
-              quantization_config: qdrantScalarQuantizationConfig,
+              params: { vectors: { dense: qdrantDenseVectorConfig } },
+              quantization_config: null,
             },
           },
       status: "ok",
@@ -230,7 +274,7 @@ test("dense prefetch explicitly searches quantized vectors and rescores candidat
   const query = requests.find((request) => request.path.endsWith("/points/query"));
   assert.ok(query);
   const prefetch = query.body?.prefetch as Array<Record<string, unknown>>;
-  assert.deepEqual(prefetch[0]?.params, qdrantDenseSearchParams);
+  assert.equal(prefetch[0]?.params, undefined);
   assert.equal(prefetch[1]?.params, undefined);
 });
 

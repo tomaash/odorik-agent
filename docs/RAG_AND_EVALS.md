@@ -53,7 +53,7 @@ as `title: … | text: …`, while questions use
 `task: search result | query: …`, following Google's asymmetric retrieval
 guidance. Embedding 2 automatically normalizes the vectors. Its embedding
 space is incompatible with `gemini-embedding-001`, so the migration uses the
-new `company_context_v3` collection and re-embeds the entire corpus. See the
+versioned `company_context_v4` collection and re-embeds the entire corpus. See the
 [Gemini embedding guide](https://ai.google.dev/gemini-api/docs/embeddings) and
 [model page](https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2).
 
@@ -65,17 +65,16 @@ ASCII folding so Czech and English records can share one index. The same
 settings are used at ingestion and query time. See Qdrant's
 [full-text/BM25 documentation](https://qdrant.tech/documentation/search/text-search/full-text-search/).
 
-### Dense-vector quantization
+### Dense-vector storage
 
-The dense vector is still submitted as a 1,536-dimensional `float32`
-`gemini-embedding-2` result. Qdrant builds a scalar-quantized `int8`
-representation at the `0.99` quantile. Full-precision vectors are stored on
-disk while quantized vectors remain in RAM. Dense prefetch uses the quantized
-index, selects 2× the requested candidate budget, and rescores those candidates
-with the original vectors before hybrid RRF. This preserves an accuracy escape
-hatch while reducing the resident dense-vector footprint.
+Gemini returns each 1,536-dimensional embedding as floating-point values.
+Qdrant converts and stores one `float16` representation. This halves raw dense
+vector storage relative to `float32` and avoids retaining both an original
+vector and a scalar-quantized copy. Dense prefetch searches that representation
+directly before hybrid RRF; there is no quantized candidate search or rescoring
+path.
 
-Collection creation and drift reconciliation enforce:
+Collection creation enforces:
 
 ```json
 {
@@ -83,21 +82,16 @@ Collection creation and drift reconciliation enforce:
     "dense": {
       "size": 1536,
       "distance": "Cosine",
-      "on_disk": true
-    }
-  },
-  "quantization_config": {
-    "scalar": {
-      "type": "int8",
-      "quantile": 0.99,
-      "always_ram": true
+      "datatype": "float16"
     }
   }
 }
 ```
 
-Qdrant retains the original vectors alongside the quantized representation;
-the application does not round or cast Gemini embedding values itself.
+The application does not round or cast Gemini embedding values itself. The
+datatype is a collection-schema decision, so this migration builds the fresh
+`company_context_v4` collection and cuts over only after retrieval verification.
+See Qdrant's [vector datatype documentation](https://qdrant.tech/documentation/concepts/vectors/#vector-datatypes).
 
 ### Fusion and “weighting”
 
@@ -144,7 +138,7 @@ values through Secret Manager. The URL is not sensitive, but using the same
 binding mechanism avoids an interactive runtime-parameter prompt in CI.
 
 An application administrator can call `assistant.reindex` to create a fresh
-`company_context_v3` collection and rebuild it from safe Firestore records.
+`company_context_v4` collection and rebuild it from safe Firestore records.
 The rebuild deliberately replaces the collection so stale chunks cannot
 survive.
 
