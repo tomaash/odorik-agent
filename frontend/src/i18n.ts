@@ -29,8 +29,8 @@ const messages = {
       sources: 'Zdroje',
       limitations: 'Omezení',
       readOnly: 'Pouze pro čtení',
-      lexical: 'Lexikální vyhledávání',
       hybrid: 'Hybridní RAG',
+      unavailable: 'Hledání není dostupné',
       suggestions: [
         'Kolik požadavků je v každém stavu?',
         'Které požadavky čekají na zákazníka a proč?',
@@ -203,8 +203,8 @@ const messages = {
       sources: 'Sources',
       limitations: 'Limitations',
       readOnly: 'Read only',
-      lexical: 'Lexical search',
       hybrid: 'Hybrid RAG',
+      unavailable: 'Search unavailable',
       suggestions: [
         'How many requests are in each status?',
         'Which requests are waiting for the customer, and why?',

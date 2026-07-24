@@ -27,7 +27,7 @@ const [{ FirestoreCompanyData }, {
 ]);
 
 const repository = new FirestoreCompanyData(db);
-const { qdrant } = qdrantFromEnvironment({ repository, geminiApiKey });
+const { qdrant } = qdrantFromEnvironment({ geminiApiKey });
 if (!qdrant) {
   throw new Error("QDRANT_URL (or QDRANT_CLUSTER_URL) and QDRANT_API_KEY are required");
 }

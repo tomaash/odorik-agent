@@ -26,7 +26,6 @@ export async function synchronizeKnowledgeRecord(input: {
 
   const repository = new FirestoreCompanyData(db, input.companyId || "default");
   const { qdrant } = qdrantFromEnvironment({
-    repository,
     geminiApiKey: input.geminiApiKey,
   });
   if (!qdrant) {

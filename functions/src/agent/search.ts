@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   chunkRecord,
-  type CompanyDataRepository,
   type CompanyRecord,
 } from "./knowledge.js";
 import type { KnowledgeDocument, KnowledgeKind, SearchHit } from "./types.js";
@@ -23,6 +22,16 @@ export interface EmbeddingProvider {
 
 export interface KnowledgeSearch {
   search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]>;
+}
+
+export const searchUnavailableMessage =
+  "Company search is temporarily unavailable. Please try again shortly.";
+
+export class SearchUnavailableError extends Error {
+  constructor(cause?: unknown) {
+    super(searchUnavailableMessage, cause === undefined ? undefined : { cause });
+    this.name = "SearchUnavailableError";
+  }
 }
 
 export type RankedItem<T> = { item: T; score: number };
@@ -410,6 +419,7 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         limit,
         with_payload: true,
       }),
+      signal: AbortSignal.timeout(10_000),
     });
     const result = payload.result && typeof payload.result === "object"
       ? payload.result as { points?: QdrantPoint[] }
@@ -441,23 +451,17 @@ export class QdrantHybridSearch implements KnowledgeSearch {
   }
 }
 
-export class RepositoryKnowledgeSearch implements KnowledgeSearch {
-  constructor(
-    private readonly repository: CompanyDataRepository,
-    private readonly qdrant?: QdrantHybridSearch,
-  ) {}
+export class QdrantRequiredSearch implements KnowledgeSearch {
+  constructor(private readonly qdrant?: KnowledgeSearch) {}
 
   async search(input: { query: string; kinds?: KnowledgeKind[]; limit?: number }): Promise<SearchHit[]> {
-    if (this.qdrant) {
-      try {
-        const hits = await this.qdrant.search(input);
-        if (hits.length) return hits;
-      } catch (error) {
-        console.warn("Qdrant search unavailable; using Firestore lexical fallback", error);
-      }
+    if (!this.qdrant) throw new SearchUnavailableError();
+    try {
+      return await this.qdrant.search(input);
+    } catch (error) {
+      console.warn("Qdrant company search unavailable", error);
+      throw new SearchUnavailableError(error);
     }
-    const documents = await this.repository.allDocuments(input.kinds);
-    return bm25Search(input.query, documents, input.limit || 8);
   }
 }
 
@@ -470,9 +474,8 @@ export function qdrantConfigurationFromEnvironment(
 }
 
 export function qdrantFromEnvironment(input: {
-  repository: CompanyDataRepository;
   geminiApiKey: string;
-}): { search: RepositoryKnowledgeSearch; qdrant?: QdrantHybridSearch } {
+}): { search: QdrantRequiredSearch; qdrant?: QdrantHybridSearch } {
   const configuration = qdrantConfigurationFromEnvironment();
   const qdrant = configuration
     ? new QdrantHybridSearch(
@@ -481,5 +484,5 @@ export function qdrantFromEnvironment(input: {
       new GeminiEmbedder(input.geminiApiKey),
     )
     : undefined;
-  return { search: new RepositoryKnowledgeSearch(input.repository, qdrant), qdrant };
+  return { search: new QdrantRequiredSearch(qdrant), qdrant };
 }

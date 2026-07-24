@@ -44,7 +44,8 @@ question
 - Forced tool use on the first turn.
 - Structured final answers with source-ID validation.
 - Prompt-injection boundary: retrieved data is evidence, never instructions.
-- Qdrant hybrid RAG when configured; Firestore BM25 fallback otherwise.
+- Qdrant hybrid RAG with a stable temporary-unavailable response when the
+  index cannot be reached.
 - `gemini-embedding-2` dense retrieval at 1,536 dimensions.
 - A single Qdrant `float16` dense representation without a second quantized
   copy or rescoring path.
@@ -75,8 +76,8 @@ question
 - Live evaluation covers an exact fact, a call fact, a multi-hop audit reason,
   an aggregate, and an unanswerable question.
 - The Agent interface works at narrow mobile and desktop widths.
-- Production answers remain functional without Qdrant through the explicit
-  lexical fallback.
+- Production search fails closed without Qdrant and never scans Firestore as
+  a lexical fallback.
 
 ## Slice 2: durable context index and ingestion contract — implemented kernel
 

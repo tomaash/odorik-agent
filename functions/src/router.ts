@@ -319,7 +319,7 @@ export const appRouter = router({
       promptVersion: factAgentPromptVersion,
       search: qdrantConfigurationFromEnvironment()
         ? "qdrant_hybrid_rrf"
-        : "firestore_lexical_fallback",
+        : "unavailable",
       embeddingModel,
       embeddingDimensions,
       collection: qdrantCollection,
@@ -354,7 +354,7 @@ export const appRouter = router({
         });
         const apiKey = geminiApiKey.value();
         const repository = new FirestoreCompanyData(db);
-        const { search } = qdrantFromEnvironment({ repository, geminiApiKey: apiKey });
+        const { search } = qdrantFromEnvironment({ geminiApiKey: apiKey });
         const tools = new CompanyFactTools(repository, search);
         const startedAt = Date.now();
         const answer = await runFactAgent({
@@ -411,11 +411,11 @@ export const appRouter = router({
     reindex: adminProcedure.mutation(async () => {
       const apiKey = geminiApiKey.value();
       const repository = new FirestoreCompanyData(db);
-      const { qdrant } = qdrantFromEnvironment({ repository, geminiApiKey: apiKey });
+      const { qdrant } = qdrantFromEnvironment({ geminiApiKey: apiKey });
       if (!qdrant) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "QDRANT_URL and QDRANT_API_KEY are not configured; lexical fallback remains available.",
+          message: "QDRANT_URL and QDRANT_API_KEY are not configured; company search is unavailable.",
         });
       }
       const documents = await repository.allDocuments();

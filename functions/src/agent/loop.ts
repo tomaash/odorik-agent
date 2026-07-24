@@ -3,7 +3,7 @@ import type { AgentModel, GeminiContent, ModelUsage } from "./gemini.js";
 import { factToolDeclarations, type AgentToolExecutor } from "./tools.js";
 import type { AgentAnswer } from "./types.js";
 
-export const factAgentPromptVersion = "fact-agent-v1";
+export const factAgentPromptVersion = "fact-agent-v2";
 
 export const factAgentSystemInstruction = `You are the read-only factual assistant for one company.
 
@@ -11,6 +11,7 @@ Your job is to answer questions using only facts returned by the provided compan
 
 Rules:
 - Use tools before answering every question about company data. Search is usually the first tool.
+- If search_company_data returns available=false, immediately say company search is temporarily unavailable. Do not retry search or replace it with broad record listing.
 - Use exact record/list tools after search when the question needs a complete record or exact relationship.
 - Use the aggregate tool for counts. Never count a limited search result and call it a company total.
 - For why a record has its current state, identify its record ID and then list audit_event records filtered by aggregateId. Do not claim the reason is unavailable until you check its audit history.

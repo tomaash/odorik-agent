@@ -93,9 +93,9 @@ onMounted(load)
         <Tag :value="t('assistant.readOnly')" icon="pi pi-lock" severity="success" rounded />
         <Tag
           v-if="status"
-          :value="status.search === 'qdrant_hybrid_rrf' ? t('assistant.hybrid') : t('assistant.lexical')"
+          :value="status.search === 'qdrant_hybrid_rrf' ? t('assistant.hybrid') : t('assistant.unavailable')"
           icon="pi pi-database"
-          severity="secondary"
+          :severity="status.search === 'qdrant_hybrid_rrf' ? 'secondary' : 'danger'"
           rounded
         />
       </div>

@@ -282,7 +282,7 @@ every agent run.
 
 The current read-only loop exposes four application-owned tools:
 
-- `search_company_data`: hybrid or lexical retrieval over safe record views;
+- `search_company_data`: Qdrant hybrid retrieval over safe record views;
 - `get_company_record`: complete safe fields for one known record;
 - `list_company_records`: exact filtered relationships and recent records; and
 - `aggregate_company_records`: exact totals and supported groupings.
@@ -298,10 +298,10 @@ rankings and fuses them with RRF. Its 1,536-dimensional dense vectors use
 one `float16` representation. There is no separate quantized copy or dense
 rescoring path. Firestore remains authoritative; a retry-enabled write trigger
 incrementally replaces all derived chunks for each changed or deleted
-allowlisted record. If Qdrant is not configured or is unavailable, the
-application falls back to BM25 over safe Firestore projections. The fallback
-preserves functionality but is not intended as the long-term large-corpus
-index.
+allowlisted record. If Qdrant is not configured or is unavailable, search
+fails closed with a stable temporary-unavailable result instead of scanning
+Firestore. Exact record lookup, filtered lists, and aggregate queries remain
+available because those tools issue bounded, explicit Firestore reads.
 
 ## Connector contract
 

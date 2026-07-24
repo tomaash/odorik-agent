@@ -1,6 +1,10 @@
 import { z } from "zod";
 import type { CompanyDataRepository, CompanyRecord } from "./knowledge.js";
-import type { KnowledgeSearch } from "./search.js";
+import {
+  SearchUnavailableError,
+  searchUnavailableMessage,
+  type KnowledgeSearch,
+} from "./search.js";
 import {
   knowledgeKinds,
   type KnowledgeKind,
@@ -187,7 +191,22 @@ export class CompanyFactTools implements AgentToolExecutor {
   async execute(name: string, args: unknown): Promise<ToolExecution> {
     if (name === "search_company_data") {
       const input = searchSchema.parse(args);
-      const hits = await this.search.search(input);
+      let hits;
+      try {
+        hits = await this.search.search(input);
+      } catch (error) {
+        if (error instanceof SearchUnavailableError) {
+          return {
+            result: {
+              available: false,
+              error: searchUnavailableMessage,
+              matches: [],
+            },
+            citationIds: [],
+          };
+        }
+        throw error;
+      }
       const matches = hits.map((hit) => {
         const citation = this.citations.add({
           kind: hit.kind,
@@ -278,4 +297,3 @@ export function kindsFromStrings(values: string[] | undefined): KnowledgeKind[] 
   const allowed = new Set<string>(knowledgeKinds);
   return values.filter((value): value is KnowledgeKind => allowed.has(value));
 }
-

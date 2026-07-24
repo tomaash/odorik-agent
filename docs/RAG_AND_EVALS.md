@@ -111,13 +111,17 @@ Weights must be selected on a training/validation split and reported on a held
 out test split. They must not be chosen from a generic RAG blog post. See
 Qdrant's [hybrid-query guidance](https://qdrant.tech/documentation/search/hybrid-queries/).
 
-### Fallback
+### Search availability
 
-If Qdrant is not configured or a query fails, the agent uses an in-process BM25
-ranking over allowlisted Firestore projections. This keeps the product usable
-during setup and free-cluster suspension. It does not provide semantic recall
-and rereads a bounded corpus, so it must not be mistaken for the production
-large-corpus design.
+Production search requires Qdrant. A query that finds no matches stays empty;
+it does not trigger a Firestore scan. If Qdrant is not configured, fails, or
+does not answer within ten seconds, `search_company_data` returns a stable
+temporary-unavailable result and the agent stops retrying search.
+
+Exact record lookup, bounded filtered lists, and aggregate tools continue to
+read Firestore because they express explicit, constrained queries. The
+in-process BM25 implementation remains only for deterministic evaluation
+fixtures; it is not a production fallback.
 
 ## Qdrant setup
 

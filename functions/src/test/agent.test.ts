@@ -8,12 +8,16 @@ import {
   embeddingModel,
   GeminiEmbedder,
   QdrantHybridSearch,
+  QdrantRequiredSearch,
   qdrantCollection,
   qdrantConfigurationFromEnvironment,
   qdrantDenseVectorConfig,
   reciprocalRankFusion,
+  SearchUnavailableError,
+  searchUnavailableMessage,
+  type KnowledgeSearch,
 } from "../agent/search.js";
-import { CitationRegistry, type AgentToolExecutor } from "../agent/tools.js";
+import { CitationRegistry, CompanyFactTools, type AgentToolExecutor } from "../agent/tools.js";
 import type { KnowledgeDocument } from "../agent/types.js";
 
 test("BM25 finds exact company names and identifiers", () => {
@@ -74,6 +78,56 @@ test("Qdrant configuration supports deployed and local URL variable names", () =
     apiKey: "local-key",
   });
   assert.equal(qdrantConfigurationFromEnvironment({ QDRANT_URL: "https://missing-key.example" }), null);
+});
+
+test("company search fails closed when Qdrant is not configured", async () => {
+  const search = new QdrantRequiredSearch();
+  await assert.rejects(
+    search.search({ query: "Eva" }),
+    (error) => error instanceof SearchUnavailableError
+      && error.message === searchUnavailableMessage,
+  );
+});
+
+test("an empty Qdrant result remains empty without a Firestore scan", async () => {
+  const qdrant = {
+    search: async () => [],
+  } satisfies KnowledgeSearch;
+  const search = new QdrantRequiredSearch(qdrant);
+  assert.deepEqual(await search.search({ query: "not present" }), []);
+});
+
+test("a Qdrant failure is normalized without leaking provider details", async () => {
+  const qdrant = {
+    search: async () => {
+      throw new Error("internal endpoint detail");
+    },
+  } satisfies KnowledgeSearch;
+  const search = new QdrantRequiredSearch(qdrant);
+  const originalWarn = console.warn;
+  console.warn = () => undefined;
+  try {
+    await assert.rejects(
+      search.search({ query: "Eva" }),
+      (error) => error instanceof SearchUnavailableError
+        && error.message === searchUnavailableMessage
+        && !error.message.includes("endpoint"),
+    );
+  } finally {
+    console.warn = originalWarn;
+  }
+});
+
+test("a missing Qdrant search becomes a stable temporary-unavailable tool result", async () => {
+  const tools = new CompanyFactTools({} as never, new QdrantRequiredSearch());
+  assert.deepEqual(await tools.execute("search_company_data", { query: "Eva" }), {
+    result: {
+      available: false,
+      error: searchUnavailableMessage,
+      matches: [],
+    },
+    citationIds: [],
+  });
 });
 
 test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", async () => {

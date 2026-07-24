@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { GeminiRestAgentModel } from "../agent/gemini.js";
 import { runFactAgent } from "../agent/loop.js";
-import { RepositoryKnowledgeSearch, bm25Search } from "../agent/search.js";
+import { bm25Search, type KnowledgeSearch } from "../agent/search.js";
 import { CompanyFactTools } from "../agent/tools.js";
 import { FixtureCompanyData } from "./fixture-data.js";
 
@@ -44,8 +44,17 @@ async function retrievalEval(cases: EvalCase[], repository: FixtureCompanyData) 
 async function liveAgentEval(cases: EvalCase[], repository: FixtureCompanyData, apiKey: string) {
   let passed = 0;
   const results = [];
+  const documents = await repository.allDocuments();
+  const fixtureSearch: KnowledgeSearch = {
+    async search(input) {
+      const selected = input.kinds?.length
+        ? documents.filter((document) => input.kinds?.includes(document.kind))
+        : documents;
+      return bm25Search(input.query, selected, input.limit || 8);
+    },
+  };
   for (const item of cases) {
-    const tools = new CompanyFactTools(repository, new RepositoryKnowledgeSearch(repository));
+    const tools = new CompanyFactTools(repository, fixtureSearch);
     const answer = await runFactAgent({
       question: item.question,
       model: new GeminiRestAgentModel(apiKey),
@@ -80,4 +89,3 @@ if (process.argv.includes("--live")) {
 }
 
 if (retrieval.hitAt5 < 0.8) process.exitCode = 1;
-
