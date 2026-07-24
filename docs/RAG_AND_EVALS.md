@@ -65,6 +65,40 @@ ASCII folding so Czech and English records can share one index. The same
 settings are used at ingestion and query time. See Qdrant's
 [full-text/BM25 documentation](https://qdrant.tech/documentation/search/text-search/full-text-search/).
 
+### Dense-vector quantization
+
+The dense vector is still submitted as a 1,536-dimensional `float32`
+`gemini-embedding-2` result. Qdrant builds a scalar-quantized `int8`
+representation at the `0.99` quantile. Full-precision vectors are stored on
+disk while quantized vectors remain in RAM. Dense prefetch uses the quantized
+index, selects 2× the requested candidate budget, and rescores those candidates
+with the original vectors before hybrid RRF. This preserves an accuracy escape
+hatch while reducing the resident dense-vector footprint.
+
+Collection creation and drift reconciliation enforce:
+
+```json
+{
+  "vectors": {
+    "dense": {
+      "size": 1536,
+      "distance": "Cosine",
+      "on_disk": true
+    }
+  },
+  "quantization_config": {
+    "scalar": {
+      "type": "int8",
+      "quantile": 0.99,
+      "always_ram": true
+    }
+  }
+}
+```
+
+Qdrant retains the original vectors alongside the quantized representation;
+the application does not round or cast Gemini embedding values itself.
+
 ### Fusion and “weighting”
 
 The initial ranking uses reciprocal-rank fusion with `k=60`. This is preferable

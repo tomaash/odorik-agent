@@ -8,7 +8,9 @@ import {
   embeddingModel,
   GeminiEmbedder,
   QdrantHybridSearch,
+  qdrantDenseSearchParams,
   qdrantConfigurationFromEnvironment,
+  qdrantScalarQuantizationConfig,
   reciprocalRankFusion,
 } from "../agent/search.js";
 import { CitationRegistry, type AgentToolExecutor } from "../agent/tools.js";
@@ -109,6 +111,23 @@ test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", as
   assert.doesNotMatch(JSON.stringify(requests), /taskType/);
 });
 
+test("Qdrant uses int8 scalar quantization with quality-preserving search", () => {
+  assert.deepEqual(qdrantScalarQuantizationConfig, {
+    scalar: {
+      type: "int8",
+      quantile: 0.99,
+      always_ram: true,
+    },
+  });
+  assert.deepEqual(qdrantDenseSearchParams, {
+    quantization: {
+      ignore: false,
+      rescore: true,
+      oversampling: 2,
+    },
+  });
+});
+
 test("record synchronization removes stale chunks before upserting the current projection", async () => {
   const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
   const originalFetch = globalThis.fetch;
@@ -153,11 +172,66 @@ test("record synchronization removes stale chunks before upserting the current p
 
   const deletion = requests.find((request) => request.path.endsWith("/points/delete"));
   const upsert = requests.find((request) => request.path.endsWith("/points") && request.method === "PUT");
+  const collectionUpdate = requests.find((request) => request.path.endsWith("/company_context_v3")
+    && request.method === "PATCH");
+  assert.ok(collectionUpdate);
+  assert.equal(
+    ((collectionUpdate.body?.vectors as Record<string, unknown>)?.dense as Record<string, unknown>)?.on_disk,
+    true,
+  );
+  assert.deepEqual(collectionUpdate.body?.quantization_config, qdrantScalarQuantizationConfig);
   assert.ok(deletion);
   assert.match(JSON.stringify(deletion.body), /recordId/);
   assert.match(JSON.stringify(deletion.body), /eva/);
   assert.ok(upsert);
   assert.match(JSON.stringify(upsert.body), /contact:eva:0/);
+});
+
+test("dense prefetch explicitly searches quantized vectors and rescores candidates", async () => {
+  const requests: Array<{ path: string; method: string; body?: Record<string, unknown> }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const path = new URL(String(input)).pathname;
+    requests.push({
+      path,
+      method: init?.method || "GET",
+      ...(init?.body ? { body: JSON.parse(String(init.body)) as Record<string, unknown> } : {}),
+    });
+    return new Response(JSON.stringify({
+      result: path.endsWith("/points/query")
+        ? { points: [] }
+        : {
+            config: {
+              params: { vectors: { dense: { on_disk: true } } },
+              quantization_config: qdrantScalarQuantizationConfig,
+            },
+          },
+      status: "ok",
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+    );
+    assert.deepEqual(await search.search({ query: "Christmas holiday", limit: 5 }), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+
+  const query = requests.find((request) => request.path.endsWith("/points/query"));
+  assert.ok(query);
+  const prefetch = query.body?.prefetch as Array<Record<string, unknown>>;
+  assert.deepEqual(prefetch[0]?.params, qdrantDenseSearchParams);
+  assert.equal(prefetch[1]?.params, undefined);
 });
 
 test("parses structured final answers and recovers citation IDs from plain text", () => {

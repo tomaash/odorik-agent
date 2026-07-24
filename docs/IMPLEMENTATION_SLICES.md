@@ -46,6 +46,8 @@ question
 - Prompt-injection boundary: retrieved data is evidence, never instructions.
 - Qdrant hybrid RAG when configured; Firestore BM25 fallback otherwise.
 - `gemini-embedding-2` dense retrieval at 1,536 dimensions.
+- Qdrant `int8` scalar quantization with on-disk originals and
+  quality-preserving oversampled rescoring.
 - Retry-enabled per-record Qdrant synchronization after Firestore writes.
 - Qdrant indexing endpoint restricted to application administrators.
 - Deterministic retrieval/unit evaluations plus optional live Gemini cases.

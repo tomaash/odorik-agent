@@ -64,8 +64,10 @@ The existing vertical slice remains useful as a proving ground:
 - A read-only factual agent uses Gemini tool calls to search, fetch, list, and
   aggregate the available company records. Answers retain source citations and
   run/token/tool traces.
-- Qdrant combines 1,536-dimensional `gemini-embedding-2` vectors with BM25,
-  and a Firestore write trigger keeps indexed record chunks synchronized.
+- Qdrant combines 1,536-dimensional `gemini-embedding-2` vectors with BM25.
+  Dense vectors use `int8` scalar quantization (`0.99` quantile): the
+  quantized copy stays in RAM, full-precision originals stay on disk for
+  rescoring, and a Firestore write trigger keeps record chunks synchronized.
 - The mobile-first **Sources** screen separates provider adapters, configured
   account connections, and independently selectable resources.
 - Odorik is no longer a singleton integration: its legacy account is migrated

@@ -56,6 +56,7 @@ console.log(JSON.stringify({
   points: stats.pointsCount,
   indexedVectors: stats.indexedVectorsCount,
   status: stats.status,
+  scalarQuantization: stats.scalarQuantization,
   corpusChecksum: expectedChecksum,
   retrievalProbe: {
     query: probe.title,

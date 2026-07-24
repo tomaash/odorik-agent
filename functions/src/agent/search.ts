@@ -9,6 +9,20 @@ import type { KnowledgeDocument, KnowledgeKind, SearchHit } from "./types.js";
 export const embeddingModel = "gemini-embedding-2";
 export const embeddingDimensions = 1536;
 export const qdrantCollection = "company_context_v3";
+export const qdrantScalarQuantizationConfig = {
+  scalar: {
+    type: "int8",
+    quantile: 0.99,
+    always_ram: true,
+  },
+} as const;
+export const qdrantDenseSearchParams = {
+  quantization: {
+    ignore: false,
+    rescore: true,
+    oversampling: 2,
+  },
+} as const;
 
 export interface EmbeddingProvider {
   readonly dimensions: number;
@@ -163,6 +177,12 @@ export type QdrantCollectionStats = {
   status: string;
   pointsCount: number;
   indexedVectorsCount: number;
+  scalarQuantization: {
+    type: string;
+    quantile: number;
+    alwaysRam: boolean;
+    originalVectorsOnDisk: boolean;
+  };
 };
 
 export class QdrantHybridSearch implements KnowledgeSearch {
@@ -196,6 +216,50 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     return payload;
   }
 
+  private async applyCollectionEfficiencyConfig(): Promise<void> {
+    await this.request(`/collections/${encodeURIComponent(this.collection)}`, {
+      method: "PATCH",
+      body: JSON.stringify({
+        vectors: {
+          dense: {
+            on_disk: true,
+          },
+        },
+        quantization_config: qdrantScalarQuantizationConfig,
+      }),
+      signal: AbortSignal.timeout(120_000),
+    });
+  }
+
+  private collectionUsesEfficiencyConfig(payload: QdrantResponse): boolean {
+    const result = payload.result && typeof payload.result === "object"
+      ? payload.result as Record<string, unknown>
+      : {};
+    const config = result.config && typeof result.config === "object"
+      ? result.config as Record<string, unknown>
+      : {};
+    const params = config.params && typeof config.params === "object"
+      ? config.params as Record<string, unknown>
+      : {};
+    const vectors = params.vectors && typeof params.vectors === "object"
+      ? params.vectors as Record<string, unknown>
+      : {};
+    const dense = vectors.dense && typeof vectors.dense === "object"
+      ? vectors.dense as Record<string, unknown>
+      : {};
+    const quantization = config.quantization_config
+      && typeof config.quantization_config === "object"
+      ? config.quantization_config as Record<string, unknown>
+      : {};
+    const scalar = quantization.scalar && typeof quantization.scalar === "object"
+      ? quantization.scalar as Record<string, unknown>
+      : {};
+    return dense.on_disk === true
+      && scalar.type === qdrantScalarQuantizationConfig.scalar.type
+      && Number(scalar.quantile) === qdrantScalarQuantizationConfig.scalar.quantile
+      && scalar.always_ram === qdrantScalarQuantizationConfig.scalar.always_ram;
+  }
+
   async ensureCollection(reset = false): Promise<void> {
     if (reset) {
       await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "DELETE" })
@@ -207,13 +271,26 @@ export class QdrantHybridSearch implements KnowledgeSearch {
       headers: { "api-key": this.apiKey },
       signal: AbortSignal.timeout(20_000),
     });
-    if (exists.ok) return;
+    if (exists.ok) {
+      const payload = await exists.json().catch(() => ({})) as QdrantResponse;
+      if (!this.collectionUsesEfficiencyConfig(payload)) {
+        await this.applyCollectionEfficiencyConfig();
+      }
+      return;
+    }
     if (exists.status !== 404) throw new Error(`Qdrant collection check failed: ${exists.status}`);
     await this.request(`/collections/${encodeURIComponent(this.collection)}`, {
       method: "PUT",
       body: JSON.stringify({
-        vectors: { dense: { size: this.embedder.dimensions, distance: "Cosine" } },
+        vectors: {
+          dense: {
+            size: this.embedder.dimensions,
+            distance: "Cosine",
+            on_disk: true,
+          },
+        },
         sparse_vectors: { bm25: { modifier: "idf" } },
+        quantization_config: qdrantScalarQuantizationConfig,
       }),
     });
     for (const field of ["companyId", "kind", "recordId", "sourcePath"]) {
@@ -315,10 +392,35 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     const result = payload.result && typeof payload.result === "object"
       ? payload.result as Record<string, unknown>
       : {};
+    const config = result.config && typeof result.config === "object"
+      ? result.config as Record<string, unknown>
+      : {};
+    const params = config.params && typeof config.params === "object"
+      ? config.params as Record<string, unknown>
+      : {};
+    const vectors = params.vectors && typeof params.vectors === "object"
+      ? params.vectors as Record<string, unknown>
+      : {};
+    const dense = vectors.dense && typeof vectors.dense === "object"
+      ? vectors.dense as Record<string, unknown>
+      : {};
+    const quantization = config.quantization_config
+      && typeof config.quantization_config === "object"
+      ? config.quantization_config as Record<string, unknown>
+      : {};
+    const scalar = quantization.scalar && typeof quantization.scalar === "object"
+      ? quantization.scalar as Record<string, unknown>
+      : {};
     return {
       status: String(result.status || "unknown"),
       pointsCount: Number(result.points_count || 0),
       indexedVectorsCount: Number(result.indexed_vectors_count || 0),
+      scalarQuantization: {
+        type: String(scalar.type || "none"),
+        quantile: Number(scalar.quantile || 0),
+        alwaysRam: scalar.always_ram === true,
+        originalVectorsOnDisk: dense.on_disk === true,
+      },
     };
   }
 
@@ -333,7 +435,13 @@ export class QdrantHybridSearch implements KnowledgeSearch {
       method: "POST",
       body: JSON.stringify({
         prefetch: [
-          { query: dense, using: "dense", limit: Math.max(20, limit * 3), filter: { must } },
+          {
+            query: dense,
+            using: "dense",
+            limit: Math.max(20, limit * 3),
+            filter: { must },
+            params: qdrantDenseSearchParams,
+          },
           {
             query: { text: input.query, model: "qdrant/bm25", options: bm25Options },
             using: "bm25",
