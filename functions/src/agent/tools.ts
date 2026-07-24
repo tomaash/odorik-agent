@@ -253,6 +253,30 @@ function extractCitationInfo(record: CompanyRecord): {
   };
 }
 
+function cleanExcerpt(rawText: string, max = 300): string {
+  if (!rawText) return "";
+  let cleaned = rawText;
+
+  const textMatch = rawText.match(/\btext:\s*([\s\S]+)$/i);
+  if (textMatch && textMatch[1]) {
+    cleaned = textMatch[1];
+  } else {
+    cleaned = cleaned
+      .replace(/companyId:\s*\S+/gi, "")
+      .replace(/kind:\s*\S+/gi, "")
+      .replace(/source:\s*\{[^}]*\}/gi, "")
+      .replace(/provenance:\s*\{[^}]*\}/gi, "")
+      .replace(/access:\s*\{[^}]*\}/gi, "")
+      .replace(/observedAt:\s*\S+/gi, "")
+      .replace(/createdAt:\s*\S+/gi, "")
+      .replace(/updatedAt:\s*\S+/gi, "")
+      .replace(/indexingEnabled:\s*\S+/gi, "");
+  }
+
+  const normalized = cleaned.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : `${normalized.slice(0, max - 1)}…`;
+}
+
 export class CompanyFactTools implements AgentToolExecutor {
   readonly citations = new CitationRegistry();
 
@@ -280,13 +304,32 @@ export class CompanyFactTools implements AgentToolExecutor {
         }
         throw error;
       }
-      const matches = hits.map((hit) => {
+
+      const sortedHits = [...hits].sort((a, b) => {
+        const aHasUrl = Boolean(a.metadata?.externalUrl);
+        const bHasUrl = Boolean(b.metadata?.externalUrl);
+        if (aHasUrl && !bHasUrl) return -1;
+        if (!aHasUrl && bHasUrl) return 1;
+        return 0;
+      });
+
+      const seenKeys = new Set<string>();
+      const deduplicatedHits = [];
+      for (const hit of sortedHits) {
+        const externalId = typeof hit.metadata?.externalId === "string" ? hit.metadata.externalId : null;
+        const key = externalId ? `${hit.kind}:${externalId}` : `${hit.kind}:${hit.title}`;
+        if (seenKeys.has(key)) continue;
+        seenKeys.add(key);
+        deduplicatedHits.push(hit);
+      }
+
+      const matches = deduplicatedHits.map((hit) => {
         const citation = this.citations.add({
           kind: hit.kind,
           recordId: hit.recordId,
           sourcePath: hit.sourcePath,
           title: hit.title,
-          excerpt: excerpt(hit.text),
+          excerpt: cleanExcerpt(hit.text),
           occurredAt: hit.occurredAt,
           adapterId: typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined,
           externalUrl: typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined,

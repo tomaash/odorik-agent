@@ -127,9 +127,31 @@ function occurredAtFor(data: Record<string, unknown>): string | null {
   return null;
 }
 
+const excludedSystemFields = new Set([
+  "companyId",
+  "source",
+  "provenance",
+  "access",
+  "observedAt",
+  "createdAt",
+  "updatedAt",
+  "indexingEnabled",
+  "checksum",
+  "version",
+  "ingestionVersion",
+  "externalId",
+  "connectionId",
+  "resourceId",
+  "title",
+]);
+
 function textFor(title: string, data: Record<string, unknown>): string {
+  if (typeof data.text === "string" && data.text.trim()) {
+    return `${title}\n\n${data.text.trim()}`;
+  }
   const lines = [title];
   for (const [field, value] of Object.entries(data)) {
+    if (excludedSystemFields.has(field)) continue;
     if (value === null || value === undefined || value === "") continue;
     if (typeof value === "object") lines.push(`${field}: ${JSON.stringify(value)}`);
     else lines.push(`${field}: ${String(value)}`);

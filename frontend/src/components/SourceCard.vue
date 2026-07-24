@@ -9,6 +9,10 @@ const props = defineProps<{
 
 const adapterId = computed(() => {
   if (props.citation.adapterId) return props.citation.adapterId
+  const url = externalUrl.value || ''
+  const path = props.citation.sourcePath || ''
+  if (url.includes('drive.google.com') || path.includes('drive')) return 'google_drive'
+  if (url.includes('calendar.google.com') || path.includes('calendar')) return 'google_calendar'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return 'odorik'
   if (props.citation.kind === 'contact' || props.citation.kind === 'service_request') return 'crm'
   return 'unknown'
@@ -46,7 +50,7 @@ const icon = computed(() => {
       if (props.citation.kind === 'contact') return 'pi pi-user'
       if (props.citation.kind === 'service_request') return 'pi pi-ticket'
       if (props.citation.kind === 'task') return 'pi pi-check-square'
-      return 'pi pi-database'
+      return 'pi pi-file'
   }
 })
 
@@ -66,6 +70,7 @@ const badgeLabel = computed(() => {
       if (props.citation.kind === 'contact') return 'CRM Contact'
       if (props.citation.kind === 'service_request') return 'CRM Request'
       if (props.citation.kind === 'task') return 'CRM Task'
+      if (props.citation.kind === 'context_item') return 'Dokument'
       return props.citation.kind
   }
 })
@@ -178,10 +183,6 @@ const conferenceLink = computed(() => {
         <i class="pi pi-arrow-right text-xs" />
         {{ internalButtonText }}
       </router-link>
-
-      <span v-if="!externalUrl && !internalRoute" class="text-[11px] font-mono text-surface-400 truncate max-w-full">
-        {{ citation.sourcePath }}
-      </span>
     </div>
   </div>
 </template>
