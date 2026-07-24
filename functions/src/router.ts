@@ -445,10 +445,11 @@ export const appRouter = router({
           actorUid: ctx.uid,
           createdAt: userAt,
         });
+        const safeCitations = jsonSafe(answer.citations);
         batch.set(answerMessageRef, {
           role: "assistant",
           text: answer.answer,
-          citations: answer.citations,
+          citations: safeCitations,
           confidence: answer.confidence,
           limitations: answer.limitations,
           runId: runRef.id,
@@ -459,10 +460,10 @@ export const appRouter = router({
           threadId: input.threadId,
           question: input.question,
           answer: answer.answer,
-          citations: answer.citations,
+          citations: safeCitations,
           confidence: answer.confidence,
           limitations: answer.limitations,
-          toolTrace: answer.toolTrace,
+          toolTrace: jsonSafe(answer.toolTrace),
           usage: answer.usage,
           model: "gemini-3.1-flash-lite",
           promptVersion: factAgentPromptVersion,

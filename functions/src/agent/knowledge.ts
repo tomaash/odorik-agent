@@ -137,8 +137,54 @@ function textFor(title: string, data: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
+export function extractRecordMetadata(record: CompanyRecord): Record<string, string | number | boolean | null> {
+  const data = record.data || {};
+  let adapterId: string | null = null;
+  let externalUrl: string | null = null;
+  let internalRoute: string | null = null;
+
+  const artifactRefs = Array.isArray(data.artifactRefs) ? (data.artifactRefs as string[]) : [];
+  const metaObj = (data.metadata && typeof data.metadata === "object" ? data.metadata : {}) as Record<string, unknown>;
+
+  if (record.kind === "context_item") {
+    const sourceObj = (data.source && typeof data.source === "object" ? data.source : {}) as Record<string, unknown>;
+    adapterId = typeof sourceObj.adapterId === "string" ? sourceObj.adapterId : null;
+    if (adapterId === "google_drive") {
+      externalUrl = artifactRefs[0] || null;
+    } else if (adapterId === "google_calendar") {
+      externalUrl = (typeof metaObj.sourceUrl === "string" ? metaObj.sourceUrl : null) || artifactRefs[0] || null;
+    } else if (adapterId === "gmail" || adapterId === "github") {
+      externalUrl = (typeof metaObj.sourceUrl === "string" ? metaObj.sourceUrl : null) || artifactRefs[0] || null;
+    } else if (adapterId === "odorik") {
+      internalRoute = "/inbox";
+    }
+  } else if (record.kind === "call" || record.kind === "interaction") {
+    adapterId = "odorik";
+    internalRoute = "/inbox";
+  } else if (record.kind === "contact") {
+    adapterId = "crm";
+    internalRoute = `/contacts/${record.recordId}`;
+  } else if (record.kind === "service_request") {
+    adapterId = "crm";
+    internalRoute = `/requests/${record.recordId}`;
+  } else if (record.kind === "task" || record.kind === "review" || record.kind === "audit_event") {
+    adapterId = "crm";
+  }
+
+  if (!externalUrl && artifactRefs[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
+    externalUrl = artifactRefs[0];
+  }
+
+  return {
+    adapterId,
+    externalUrl,
+    internalRoute,
+  };
+}
+
 export function chunkRecord(record: CompanyRecord, companyId = "default"): KnowledgeDocument[] {
   const fullText = textFor(record.title, record.data);
+  const extraMeta = extractRecordMetadata(record);
   const chunkSize = 1800;
   const overlap = 220;
   if (fullText.length <= chunkSize) {
@@ -151,7 +197,7 @@ export function chunkRecord(record: CompanyRecord, companyId = "default"): Knowl
       title: record.title,
       text: fullText,
       occurredAt: record.occurredAt,
-      metadata: {},
+      metadata: { ...extraMeta },
     }];
   }
 
@@ -175,7 +221,7 @@ export function chunkRecord(record: CompanyRecord, companyId = "default"): Knowl
         title: record.title,
         text,
         occurredAt: record.occurredAt,
-        metadata: { chunk: chunkIndex },
+        metadata: { ...extraMeta, chunk: chunkIndex },
       });
     }
     if (end >= fullText.length) break;

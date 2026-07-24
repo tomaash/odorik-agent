@@ -148,7 +148,10 @@ export class CitationRegistry {
   add(input: Omit<ToolCitation, "citationId">, key = input.sourcePath): ToolCitation {
     const existing = this.byKey.get(key);
     if (existing) return existing;
-    const citation = { ...input, citationId: `C${this.byId.size + 1}` };
+    const cleanInput = Object.fromEntries(
+      Object.entries(input).filter(([, v]) => v !== undefined),
+    ) as Omit<ToolCitation, "citationId">;
+    const citation = { ...cleanInput, citationId: `C${this.byId.size + 1}` };
     this.byKey.set(key, citation);
     this.byId.set(citation.citationId, citation);
     return citation;
@@ -178,6 +181,76 @@ export type ToolExecution = {
 export interface AgentToolExecutor {
   execute(name: string, args: unknown): Promise<ToolExecution>;
   citations: CitationRegistry;
+}
+
+function extractCitationInfo(record: CompanyRecord): {
+  excerptText: string;
+  adapterId?: string;
+  externalUrl?: string;
+  internalRoute?: string;
+  metadata?: Record<string, unknown>;
+  artifactRefs?: string[];
+} {
+  const data = record.data || {};
+  let adapterId: string | undefined;
+  let externalUrl: string | undefined;
+  let internalRoute: string | undefined;
+
+  const artifactRefs = Array.isArray(data.artifactRefs) ? (data.artifactRefs as string[]) : undefined;
+  const metadata = (data.metadata && typeof data.metadata === "object" ? data.metadata : {}) as Record<string, unknown>;
+
+  if (record.kind === "context_item") {
+    const sourceObj = (data.source && typeof data.source === "object" ? data.source : {}) as Record<string, unknown>;
+    adapterId = typeof sourceObj.adapterId === "string" ? sourceObj.adapterId : undefined;
+    if (adapterId === "google_drive") {
+      externalUrl = artifactRefs?.[0];
+    } else if (adapterId === "google_calendar") {
+      externalUrl = (typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : undefined) || artifactRefs?.[0];
+    } else if (adapterId === "gmail" || adapterId === "github") {
+      externalUrl = (typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : undefined) || artifactRefs?.[0];
+    } else if (adapterId === "odorik") {
+      internalRoute = "/inbox";
+    }
+  } else if (record.kind === "call" || record.kind === "interaction") {
+    adapterId = "odorik";
+    internalRoute = "/inbox";
+  } else if (record.kind === "contact") {
+    adapterId = "crm";
+    internalRoute = `/contacts/${record.recordId}`;
+  } else if (record.kind === "service_request") {
+    adapterId = "crm";
+    internalRoute = `/requests/${record.recordId}`;
+  } else if (record.kind === "task" || record.kind === "review" || record.kind === "audit_event") {
+    adapterId = "crm";
+  }
+
+  if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
+    externalUrl = artifactRefs[0];
+  }
+
+  let excerptText = "";
+  if (typeof data.text === "string" && data.text.trim()) {
+    excerptText = excerpt(data.text);
+  } else if (typeof data.summary === "string" && data.summary.trim()) {
+    excerptText = excerpt(data.summary);
+  } else if (record.kind === "contact") {
+    excerptText = excerpt([data.displayName, data.phoneE164, data.email].filter(Boolean).join(" · "));
+  } else if (record.kind === "service_request") {
+    excerptText = excerpt([data.title, data.serviceType, data.description, data.address].filter(Boolean).join(" — "));
+  } else if (record.kind === "task") {
+    excerptText = excerpt(`${data.type || "Task"} · Status: ${data.status || "unknown"}`);
+  } else {
+    excerptText = excerpt(record.title || record.recordId);
+  }
+
+  return {
+    excerptText,
+    adapterId,
+    externalUrl,
+    internalRoute,
+    metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+    artifactRefs,
+  };
 }
 
 export class CompanyFactTools implements AgentToolExecutor {
@@ -215,6 +288,9 @@ export class CompanyFactTools implements AgentToolExecutor {
           title: hit.title,
           excerpt: excerpt(hit.text),
           occurredAt: hit.occurredAt,
+          adapterId: typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined,
+          externalUrl: typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined,
+          internalRoute: typeof hit.metadata?.internalRoute === "string" ? hit.metadata.internalRoute : undefined,
         }, hit.id);
         return {
           citationId: citation.citationId,
@@ -234,13 +310,19 @@ export class CompanyFactTools implements AgentToolExecutor {
       const input = getSchema.parse(args);
       const record = await this.repository.getRecord(input.kind, input.record_id);
       if (!record) return { result: { found: false }, citationIds: [] };
+      const info = extractCitationInfo(record);
       const citation = this.citations.add({
         kind: record.kind,
         recordId: record.recordId,
         sourcePath: record.sourcePath,
         title: record.title,
-        excerpt: excerpt(JSON.stringify(record.data)),
+        excerpt: info.excerptText,
         occurredAt: record.occurredAt,
+        adapterId: info.adapterId,
+        externalUrl: info.externalUrl,
+        internalRoute: info.internalRoute,
+        metadata: info.metadata,
+        artifactRefs: info.artifactRefs,
       });
       return {
         result: { found: true, citationId: citation.citationId, record: compactRecord(record) },
@@ -252,13 +334,19 @@ export class CompanyFactTools implements AgentToolExecutor {
       const input = listSchema.parse(args);
       const records = await this.repository.listRecords(input.kind, input.filters, input.limit);
       const items = records.map((record) => {
+        const info = extractCitationInfo(record);
         const citation = this.citations.add({
           kind: record.kind,
           recordId: record.recordId,
           sourcePath: record.sourcePath,
           title: record.title,
-          excerpt: excerpt(JSON.stringify(record.data)),
+          excerpt: info.excerptText,
           occurredAt: record.occurredAt,
+          adapterId: info.adapterId,
+          externalUrl: info.externalUrl,
+          internalRoute: info.internalRoute,
+          metadata: info.metadata,
+          artifactRefs: info.artifactRefs,
         });
         return { citationId: citation.citationId, ...compactRecord(record) };
       });

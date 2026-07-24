@@ -7,6 +7,7 @@ import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
+import SourceCard from '../components/SourceCard.vue'
 import {
   askAssistant,
   getAssistantHistory,
@@ -144,14 +145,11 @@ onMounted(load)
               <details v-if="message.citations?.length" class="mt-5 border-t border-surface-100 pt-4">
                 <summary class="cursor-pointer font-semibold text-sm text-emerald-800">{{ t('assistant.sources') }} · {{ message.citations.length }}</summary>
                 <div class="grid gap-3 mt-3">
-                  <div v-for="citation in message.citations" :key="citation.citationId" class="min-w-0 rounded-xl bg-surface-50 border border-surface-200 p-3">
-                    <div class="flex items-center gap-2 flex-wrap mb-1.5">
-                      <Tag :value="citation.citationId" severity="secondary" rounded />
-                      <strong class="text-sm break-words">{{ citation.title }}</strong>
-                    </div>
-                    <p class="text-sm text-surface-500 leading-relaxed break-words m-0">{{ citation.excerpt }}</p>
-                    <code class="block text-xs text-surface-400 break-all mt-2">{{ citation.sourcePath }}</code>
-                  </div>
+                  <SourceCard
+                    v-for="citation in message.citations"
+                    :key="citation.citationId"
+                    :citation="citation"
+                  />
                 </div>
               </details>
 

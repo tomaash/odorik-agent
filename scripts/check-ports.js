@@ -16,10 +16,11 @@ try {
       .filter(Boolean)
 
     if (pids.length > 0) {
-      console.log(`[kill-ports] Freeing ports (${PORTS.join(', ')})... killing PIDs: ${pids.join(', ')}`)
-      execSync(`kill -9 ${pids.join(' ')}`, { stdio: 'ignore' })
+      console.log(`[dev] Dev server/emulators are already running (PIDs: ${pids.join(', ')}).`)
+      console.log(`[dev] Skipping duplicate startup. Run 'npm run stop' if you wish to stop them gracefully.`)
+      process.exit(1)
     }
   }
 } catch {
-  // If lsof exits with non-zero (no processes found), do nothing
+  // Ports are free, proceed with dev startup
 }

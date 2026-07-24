@@ -41,6 +41,11 @@ export type ToolCitation = {
   title: string;
   excerpt: string;
   occurredAt: string | null;
+  adapterId?: string;
+  externalUrl?: string;
+  internalRoute?: string;
+  metadata?: Record<string, unknown>;
+  artifactRefs?: string[];
 };
 
 export type AgentAnswer = {
