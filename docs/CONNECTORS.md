@@ -13,7 +13,9 @@ adapter code
 An adapter understands one provider API. A connection represents one account
 and stores non-sensitive public state plus an AES-GCM credential envelope. The
 envelope key is a 32-byte value in Secret Manager. A resource is the smallest
-independently selectable source inside that account.
+independently selectable source inside that account. A company can create any
+number of connections for the same adapter; each account appears as its own
+card and retains its own credentials, resources, health, and sync cursor.
 
 Firestore remains authoritative. Qdrant contains derived search chunks and can
 be rebuilt.
@@ -66,7 +68,10 @@ calendar.events.readonly
 ```
 
 After OAuth, the administrator sees accessible calendars and explicitly checks
-the ones to ingest. Nothing is selected implicitly.
+the ones to ingest. Nothing is selected implicitly. Starting another Calendar
+connection always opens Google's account chooser. The primary calendar
+identity labels the resulting account card; authorizing the same Google account
+again refreshes that connection instead of creating a duplicate card.
 
 For each selection:
 
@@ -85,8 +90,14 @@ restricted member ACL filtering is implemented.
 ## Operations
 
 - `sources.list` is available to enabled members.
-- Adding, disconnecting, selecting, excluding, and manual sync require an
+- Adding, disconnecting, deleting, selecting, excluding, and manual sync require an
   application administrator.
+- Disconnecting pauses synchronization but retains the account setup and
+  imported context. Deleting is permanent inside this application: it revokes
+  provider access when supported, removes encrypted credentials and resources,
+  deletes normalized context, lets the Firestore trigger remove derived Qdrant
+  chunks, and records an audit event. It never deletes originals at the
+  provider.
 - Refresh tokens and Basic-auth passwords never enter model prompts or browser
   API responses.
 - Firestore write triggers keep Qdrant synchronized after every normalized

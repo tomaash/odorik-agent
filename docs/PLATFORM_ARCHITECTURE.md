@@ -92,10 +92,18 @@ These are separate concepts:
 - a **resource** is an explicitly selectable unit within a connection, such as
   a phone line or calendar.
 
-One company may therefore have several Odorik accounts, each containing
-several lines. Provider credentials belong to a connection, never to a call or
-phone number. The browser receives only public status and credential mode; the
+One company may therefore have several accounts for every adapter—multiple
+Odorik accounts, multiple Google identities, and later multiple Drive, Gmail,
+or GitHub accounts. Each account contains its own selectable resources.
+Provider credentials belong to a connection, never to a call, event, or phone
+number. The browser receives only public status and credential mode; the
 encrypted credential envelope stays server-side.
+
+Disconnecting a connection is reversible and pauses new ingestion. Permanent
+deletion first stops synchronization, then invokes the adapter's revocation
+hook where available, deletes the credential envelope and resource documents,
+removes normalized context so Qdrant deletion triggers run, and retains only a
+non-secret audit event. Provider-owned originals are outside this lifecycle.
 
 ### ContextItem
 

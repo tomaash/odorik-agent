@@ -278,6 +278,10 @@ export async function setSourceConnectionStatus(
   return trpc.sources.setConnectionStatus.mutate({ connectionId, status })
 }
 
+export async function deleteSourceConnection(connectionId: string) {
+  return trpc.sources.deleteConnection.mutate({ connectionId })
+}
+
 export async function setSourceResourceEnabled(
   connectionId: string,
   resourceId: string,

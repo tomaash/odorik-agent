@@ -13,7 +13,10 @@ import {
   storedStatusesFor,
 } from "../crm/lifecycle.js";
 import { decryptCredentials, encryptCredentials } from "../connectors/credentials.js";
-import { calendarAuthorizationLifetimeMs } from "../connectors/google-calendar.js";
+import {
+  calendarAuthorizationLifetimeMs,
+  revokeGoogleToken,
+} from "../connectors/google-calendar.js";
 import {
   odorikContextItem,
   odorikContextItemId,
@@ -95,6 +98,29 @@ test("encrypts connector credentials with authenticated encryption", () => {
 
 test("keeps Google authorization state alive for a manual consent handoff", () => {
   assert.equal(calendarAuthorizationLifetimeMs, 60 * 60 * 1000);
+});
+
+test("revokes Google OAuth access with the provider revocation endpoint", async () => {
+  const requests: Array<{ url: string; method: string; body: string }> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    requests.push({
+      url: String(input),
+      method: init?.method || "GET",
+      body: String(init?.body || ""),
+    });
+    return new Response(null, { status: 200 });
+  };
+  try {
+    assert.equal(await revokeGoogleToken("refresh-token"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  assert.deepEqual(requests, [{
+    url: "https://oauth2.googleapis.com/revoke",
+    method: "POST",
+    body: "token=refresh-token",
+  }]);
 });
 
 test("normalizes Odorik calls into connection-aware context items", () => {

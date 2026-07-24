@@ -123,6 +123,39 @@ function requireGoogleSuccess<T>(response: Response, body: T & { error?: unknown
   return body;
 }
 
+export async function revokeGoogleToken(token: string): Promise<boolean> {
+  const response = await fetch("https://oauth2.googleapis.com/revoke", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ token }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (response.ok) return true;
+  // Google returns 400 when the token is already invalid or revoked. Either
+  // way, it no longer grants this application access.
+  if (response.status === 400) return false;
+  throw new Error(`Google token revocation failed (${response.status})`);
+}
+
+export async function revokeGoogleCalendarAuthorization(input: {
+  connectionId: string;
+  credentialKey: string;
+}): Promise<boolean> {
+  const connection = await connectionRef(input.connectionId).get();
+  const data = connection.data();
+  if (
+    !connection.exists
+    || data?.adapterId !== "google_calendar"
+    || typeof data.credentialCiphertext !== "string"
+  ) return false;
+  const credentials = decryptCredentials(
+    data.credentialCiphertext,
+    input.credentialKey,
+  ) as CalendarCredential;
+  const token = credentials.refreshToken || credentials.accessToken;
+  return token ? revokeGoogleToken(token) : false;
+}
+
 export async function createCalendarAuthorization(input: {
   uid: string;
   email: string;
@@ -146,7 +179,7 @@ export async function createCalendarAuthorization(input: {
     redirect_uri: defaultGoogleRedirectUri,
     response_type: "code",
     access_type: "offline",
-    prompt: "consent",
+    prompt: "consent select_account",
     include_granted_scopes: "true",
     scope: calendarScopes.join(" "),
     state,
@@ -199,9 +232,20 @@ export async function exchangeGoogleAuthorization(input: {
     throw new Error("Google did not return the required offline refresh token");
   }
 
-  const connection = db.collection(
-    `companies/${defaultCompanyId}/connections`,
-  ).doc();
+  const calendarEntries = await allCalendarEntries(tokenBody.access_token);
+  const providerAccountId = String(
+    calendarEntries.find((entry) => entry.primary)?.id
+    || stateData.email
+    || "unknown Google account",
+  );
+  const connections = db.collection(`companies/${defaultCompanyId}/connections`);
+  const existingConnections = await connections
+    .where("adapterId", "==", "google_calendar")
+    .get();
+  const existingConnection = existingConnections.docs.find(
+    (document) => document.data().providerAccountId === providerAccountId,
+  );
+  const connection = existingConnection?.ref || connections.doc();
   const now = Timestamp.now();
   const credentials: CalendarCredential = {
     accessToken: tokenBody.access_token,
@@ -214,10 +258,9 @@ export async function exchangeGoogleAuthorization(input: {
   batch.set(connection, {
     companyId: defaultCompanyId,
     adapterId: "google_calendar",
-    displayName: stateData.email
-      ? `Google Calendar · ${String(stateData.email)}`
-      : "Google Calendar",
-    accountLabel: stateData.displayName || stateData.email || null,
+    displayName: "Google Calendar",
+    accountLabel: providerAccountId,
+    providerAccountId,
     status: "active",
     auth: {
       kind: "oauth2",
@@ -226,10 +269,14 @@ export async function exchangeGoogleAuthorization(input: {
     },
     credentialCiphertext: encryptCredentials(credentials, input.credentialKey),
     stats: { itemCount: 0, lastError: null },
-    createdBy: stateData.uid,
-    createdAt: now,
+    createdBy: existingConnection?.data().createdBy || stateData.uid,
+    authorizedBy: {
+      email: stateData.email || null,
+      displayName: stateData.displayName || null,
+    },
+    ...(!existingConnection ? { createdAt: now } : { reauthorizedAt: now }),
     updatedAt: now,
-  });
+  }, { merge: true });
   await batch.commit();
   return { connectionId: connection.id };
 }
@@ -532,25 +579,41 @@ export async function syncGoogleCalendarConnection(input: {
     const itemCount = (await db.collection(
       `companies/${defaultCompanyId}/contextItems`,
     ).where("source.connectionId", "==", input.connectionId).count().get()).data().count;
-    await connection.ref.set({
-      status: "active",
-      stats: {
-        itemCount,
-        lastSyncAt: FieldValue.serverTimestamp(),
-        lastObservedAt: FieldValue.serverTimestamp(),
-        lastError: null,
-      },
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    const updated = await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(connection.ref);
+      if (
+        !current.exists
+        || !["active", "attention"].includes(String(current.data()?.status))
+      ) return false;
+      transaction.set(connection.ref, {
+        status: "active",
+        stats: {
+          itemCount,
+          lastSyncAt: FieldValue.serverTimestamp(),
+          lastObservedAt: FieldValue.serverTimestamp(),
+          lastError: null,
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+      return true;
+    });
+    if (!updated) throw new Error("Google Calendar connection was disconnected during synchronization");
     return { calendars: resources.size, changes };
   } catch (error) {
-    await connection.ref.set({
-      status: "attention",
-      stats: {
-        lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1500),
-      },
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
+    await db.runTransaction(async (transaction) => {
+      const current = await transaction.get(connection.ref);
+      if (
+        !current.exists
+        || !["active", "attention"].includes(String(current.data()?.status))
+      ) return;
+      transaction.set(connection.ref, {
+        status: "attention",
+        stats: {
+          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1500),
+        },
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    });
     throw error;
   }
 }

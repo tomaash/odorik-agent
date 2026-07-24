@@ -30,14 +30,17 @@ import { CompanyFactTools } from "./agent/tools.js";
 import { encryptCredentials } from "./connectors/credentials.js";
 import {
   createOdorikConnection,
+  deleteSourceConnection,
   listSources,
   migrateLegacyOdorik,
+  prepareConnectionDeletion,
   setConnectionStatus,
   setResourceStatus,
 } from "./connectors/repository.js";
 import {
   createCalendarAuthorization,
   listGoogleCalendars,
+  revokeGoogleCalendarAuthorization,
   selectGoogleCalendars,
   syncGoogleCalendarConnection,
 } from "./connectors/google-calendar.js";
@@ -251,6 +254,42 @@ export const appRouter = router({
           throw new TRPCError({
             code: "NOT_FOUND",
             message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    deleteConnection: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          const prepared = await prepareConnectionDeletion(input.connectionId, ctx.uid);
+          let providerAccessRevoked: boolean | null = null;
+          if (prepared.adapterId === "google_calendar") {
+            try {
+              providerAccessRevoked = await revokeGoogleCalendarAuthorization({
+                connectionId: input.connectionId,
+                credentialKey: connectorCredentialKey.value(),
+              });
+            } catch (error) {
+              console.warn("Google OAuth revocation failed; deleting local credentials anyway", {
+                connectionId: input.connectionId,
+                error: error instanceof Error ? error.message : String(error),
+              });
+              providerAccessRevoked = false;
+            }
+          }
+          return await deleteSourceConnection({
+            ...input,
+            ...prepared,
+            actorUid: ctx.uid,
+            providerAccessRevoked,
+          });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new TRPCError({
+            code: message === "Connection not found" ? "NOT_FOUND" : "INTERNAL_SERVER_ERROR",
+            message,
           });
         }
       }),

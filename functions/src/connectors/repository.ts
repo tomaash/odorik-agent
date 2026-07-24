@@ -158,6 +158,100 @@ export async function setConnectionStatus(
   }, { merge: true });
 }
 
+export async function prepareConnectionDeletion(
+  connectionId: string,
+  actorUid: string,
+): Promise<{ adapterId: AdapterId; displayName: string }> {
+  const ref = connectionCollection().doc(connectionId);
+  const snapshot = await ref.get();
+  if (!snapshot.exists) throw new Error("Connection not found");
+  const data = snapshot.data() || {};
+  await ref.set({
+    status: "disconnected",
+    deletionStartedBy: actorUid,
+    deletionStartedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  return {
+    adapterId: String(data.adapterId || "odorik") as AdapterId,
+    displayName: String(data.displayName || connectionId),
+  };
+}
+
+async function commitInChunks(
+  writes: Array<(batch: FirebaseFirestore.WriteBatch) => void>,
+): Promise<void> {
+  for (let offset = 0; offset < writes.length; offset += 400) {
+    const batch = db.batch();
+    for (const write of writes.slice(offset, offset + 400)) write(batch);
+    await batch.commit();
+  }
+}
+
+export async function deleteSourceConnection(input: {
+  connectionId: string;
+  actorUid: string;
+  adapterId: AdapterId;
+  displayName: string;
+  providerAccessRevoked: boolean | null;
+}): Promise<{
+  ok: true;
+  connectionId: string;
+  resourcesDeleted: number;
+  contextItemsDeleted: number;
+  sourceRecordsDisabled: number;
+  providerAccessRevoked: boolean | null;
+}> {
+  const connectionRef = connectionCollection().doc(input.connectionId);
+  const [connection, resources, contextItems, calls] = await Promise.all([
+    connectionRef.get(),
+    connectionRef.collection("resources").get(),
+    db.collection(`companies/${defaultCompanyId}/contextItems`)
+      .where("source.connectionId", "==", input.connectionId)
+      .get(),
+    input.adapterId === "odorik"
+      ? db.collection("calls").where("connectionId", "==", input.connectionId).get()
+      : Promise.resolve(null),
+  ]);
+  if (!connection.exists) throw new Error("Connection not found");
+
+  await commitInChunks((calls?.docs || []).map((call) => (batch) => batch.set(call.ref, {
+    contextEnabled: false,
+    sourceConnectionDeletedAt: FieldValue.serverTimestamp(),
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true })));
+  await commitInChunks([
+    ...contextItems.docs.map((item) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(item.ref)),
+    ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
+  ]);
+
+  const auditRef = db.collection("auditEvents").doc();
+  const batch = db.batch();
+  batch.set(auditRef, {
+    eventType: "source.connection_deleted",
+    actorUid: input.actorUid,
+    connectionId: input.connectionId,
+    adapterId: input.adapterId,
+    displayName: input.displayName,
+    resourcesDeleted: resources.size,
+    contextItemsDeleted: contextItems.size,
+    sourceRecordsDisabled: calls?.size || 0,
+    providerAccessRevoked: input.providerAccessRevoked,
+    occurredAt: FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  batch.delete(connectionRef);
+  await batch.commit();
+  return {
+    ok: true,
+    connectionId: input.connectionId,
+    resourcesDeleted: resources.size,
+    contextItemsDeleted: contextItems.size,
+    sourceRecordsDisabled: calls?.size || 0,
+    providerAccessRevoked: input.providerAccessRevoked,
+  };
+}
+
 export async function setResourceStatus(input: {
   connectionId: string;
   resourceId: string;

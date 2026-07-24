@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, reactive, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -11,6 +11,7 @@ import Tag from 'primevue/tag'
 import { useAuthStore } from '../stores/auth'
 import {
   addOdorikConnection,
+  deleteSourceConnection,
   getGoogleCalendars,
   listSources,
   selectGoogleCalendars,
@@ -38,6 +39,8 @@ const calendars = ref<SelectableCalendar[]>([])
 const selectedCalendarIds = ref<string[]>([])
 const loadingCalendars = ref(false)
 const synchronizingId = ref('')
+const pendingDeleteId = ref('')
+const deletingId = ref('')
 const form = reactive({
   displayName: '',
   accountLabel: '',
@@ -86,6 +89,12 @@ function resourceName(resource: { externalId: string; displayName: string }) {
     : resource.displayName
 }
 
+function emptyResourceMessage(connection: SourceConnection) {
+  if (connection.adapterId === 'google_calendar') return t('sources.emptyCalendars')
+  if (connection.adapterId === 'odorik') return t('sources.emptyPhoneLines')
+  return t('sources.emptyResources')
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -122,6 +131,22 @@ async function createOdorik() {
   }
 }
 
+async function addConnection(adapter: SourceAdapter) {
+  if (adapter.id === 'google_calendar') {
+    await connectCalendar()
+    return
+  }
+  if (adapter.id === 'odorik') {
+    showForm.value = true
+    await nextTick()
+    document.getElementById('odorik-connection-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+}
+
+function canAddConnection(adapter: SourceAdapter) {
+  return adapter.available && ['odorik', 'google_calendar'].includes(adapter.id)
+}
+
 async function toggleConnection(connection: SourceConnection) {
   error.value = ''
   try {
@@ -132,6 +157,23 @@ async function toggleConnection(connection: SourceConnection) {
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function deleteConnection(connection: SourceConnection) {
+  deletingId.value = connection.id
+  error.value = ''
+  notice.value = ''
+  try {
+    await deleteSourceConnection(connection.id)
+    if (calendarConnection.value?.id === connection.id) calendarConnection.value = null
+    pendingDeleteId.value = ''
+    notice.value = t('sources.deleted', { name: connection.accountLabel || connection.displayName })
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    deletingId.value = ''
   }
 }
 
@@ -223,26 +265,23 @@ onMounted(async () => {
 
 <template>
   <section class="min-w-0">
-    <header class="min-w-0 grid gap-4 sm:flex sm:items-start sm:justify-between mb-6 sm:mb-8">
+    <header class="min-w-0 mb-6 sm:mb-8">
       <div class="min-w-0">
         <div class="text-sm font-semibold uppercase tracking-[.14em] text-emerald-700 mb-2">{{ t('sources.eyebrow') }}</div>
         <h1 class="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-2">{{ t('sources.title') }}</h1>
         <p class="text-surface-500 text-base sm:text-lg leading-relaxed max-w-3xl m-0">{{ t('sources.subtitle') }}</p>
       </div>
-      <Button
-        v-if="isAdmin"
-        :label="t('sources.addOdorik')"
-        icon="pi pi-plus"
-        class="w-full sm:w-auto shrink-0"
-        @click="showForm = !showForm"
-      />
     </header>
 
     <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
 
-    <Card v-if="showForm && isAdmin" class="rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+    <Card
+      id="odorik-connection-form"
+      v-if="showForm && isAdmin"
+      class="rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden scroll-mt-4 [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
+    >
       <template #title>{{ t('sources.form.title') }}</template>
       <template #subtitle>{{ t('sources.form.description') }}</template>
       <template #content>
@@ -350,6 +389,22 @@ onMounted(async () => {
         </template>
         <template #subtitle><span class="leading-relaxed">{{ t(`sources.adapters.${adapter.id}`) }}</span></template>
         <template #content>
+          <div
+            v-if="isAdmin && canAddConnection(adapter)"
+            class="min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3.5 sm:p-4 mb-4"
+          >
+            <div class="min-w-0">
+              <div class="font-semibold text-sm text-emerald-950">{{ t('sources.multipleAccounts') }}</div>
+              <div class="text-xs text-emerald-800/80 mt-1 leading-relaxed">{{ t('sources.multipleAccountsHint') }}</div>
+            </div>
+            <Button
+              :label="t('sources.addAccount')"
+              icon="pi pi-plus"
+              class="w-full sm:w-auto shrink-0"
+              @click="addConnection(adapter)"
+            />
+          </div>
+
           <div v-if="connectionsByAdapter.get(adapter.id)?.length" class="grid gap-4">
             <article
               v-for="connection in connectionsByAdapter.get(adapter.id)"
@@ -390,6 +445,9 @@ onMounted(async () => {
                 </div>
               </div>
 
+              <div class="text-xs font-semibold uppercase tracking-[.12em] text-surface-400 mb-2">
+                {{ t('sources.accountSetup') }}
+              </div>
               <div class="grid gap-2">
                 <div
                   v-for="resource in connection.resources"
@@ -414,12 +472,14 @@ onMounted(async () => {
                   />
                   <Tag v-else :value="resource.status === 'enabled' ? t('sources.enabled') : t('sources.disabled')" severity="secondary" />
                 </div>
-                <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">{{ t('sources.emptyResources') }}</p>
+                <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">
+                  {{ emptyResourceMessage(connection) }}
+                </p>
               </div>
 
               <div v-if="isAdmin" class="flex flex-wrap justify-end mt-3">
                 <Button
-                  v-if="connection.adapterId === 'google_calendar'"
+                  v-if="connection.adapterId === 'google_calendar' && connection.status !== 'disconnected'"
                   :label="t('sources.chooseCalendars')"
                   icon="pi pi-list-check"
                   severity="secondary"
@@ -428,7 +488,7 @@ onMounted(async () => {
                   @click="openCalendarPicker(connection)"
                 />
                 <Button
-                  v-if="connection.adapterId === 'google_calendar'"
+                  v-if="connection.adapterId === 'google_calendar' && connection.status !== 'disconnected'"
                   :label="synchronizingId === connection.id ? t('sources.syncing') : t('sources.syncNow')"
                   icon="pi pi-refresh"
                   severity="secondary"
@@ -445,11 +505,43 @@ onMounted(async () => {
                   size="small"
                   @click="toggleConnection(connection)"
                 />
+                <Button
+                  :label="t('sources.deleteConnection')"
+                  icon="pi pi-trash"
+                  severity="danger"
+                  text
+                  size="small"
+                  @click="pendingDeleteId = connection.id"
+                />
+              </div>
+
+              <div
+                v-if="pendingDeleteId === connection.id"
+                role="alert"
+                class="mt-3 rounded-2xl border border-red-200 bg-red-50 p-3.5 sm:p-4"
+              >
+                <div class="font-semibold text-red-950">
+                  {{ t('sources.deleteConfirmTitle', { name: connection.accountLabel || connection.displayName }) }}
+                </div>
+                <p class="text-sm text-red-900/80 leading-relaxed my-2">{{ t('sources.deleteConfirmDescription') }}</p>
+                <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+                  <Button
+                    :label="t('common.cancel')"
+                    severity="secondary"
+                    text
+                    :disabled="deletingId === connection.id"
+                    @click="pendingDeleteId = ''"
+                  />
+                  <Button
+                    :label="t('sources.deletePermanently')"
+                    icon="pi pi-trash"
+                    severity="danger"
+                    :loading="deletingId === connection.id"
+                    @click="deleteConnection(connection)"
+                  />
+                </div>
               </div>
             </article>
-          </div>
-          <div v-else-if="adapter.id === 'google_calendar' && isAdmin" class="rounded-2xl bg-surface-50 border border-dashed border-surface-300 p-4">
-            <Button :label="t('sources.connect')" icon="pi pi-google" class="w-full sm:w-auto" @click="connectCalendar" />
           </div>
           <div v-else-if="adapter.availability !== 'available'" class="rounded-2xl bg-surface-50 border border-dashed border-surface-300 p-4 text-sm text-surface-500">
             {{ adapter.availability === 'needs_configuration' ? t('sources.needsConfiguration') : t('sources.planned') }}

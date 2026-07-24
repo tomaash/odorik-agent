@@ -104,6 +104,9 @@ selectable resources. Odorik was migrated onto the contract and read-only
 Google Calendar is the second adapter.
 
 - encrypted per-connection credentials and provider-specific grants;
+- multiple independently configured accounts for each adapter;
+- reversible disconnect plus permanent connection deletion, provider
+  revocation, context cleanup, and audit;
 - explicit phone-line and calendar selection;
 - Calendar OAuth callback and offline refresh token;
 - idempotent incremental sync plus scheduled reconciliation;
