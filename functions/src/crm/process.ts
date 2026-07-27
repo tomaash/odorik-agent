@@ -7,6 +7,7 @@ import {
   intakePromptVersion,
   intakeSchemaVersion,
 } from "./extract.js";
+import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 
 type CallDocument = {
   status?: string;
@@ -74,10 +75,11 @@ export function normalizePhone(value: string | null | undefined): string | null 
 }
 
 export async function processCompletedCall(input: {
+  companyId: string;
   callId: string;
   apiKey: string;
 }): Promise<{ interactionId: string; requestId: string; runId: string; duplicate: boolean }> {
-  const callRef = db.doc(`calls/${input.callId}`);
+  const callRef = db.doc(companyDocumentPath(input.companyId, "calls", input.callId));
   const callSnapshot = await callRef.get();
   if (!callSnapshot.exists) throw new Error(`Call ${input.callId} does not exist`);
   const call = callSnapshot.data() as CallDocument;
@@ -95,13 +97,14 @@ export async function processCompletedCall(input: {
     to: call.to || null,
   }));
   const runId = `${hash(`${interactionId}:${intakePromptVersion}:${inputDigest}`).slice(0, 32)}`;
-  const runRef = db.doc(`processingRuns/${runId}`);
+  const runRef = db.doc(companyDocumentPath(input.companyId, "processingRuns", runId));
 
   const shouldProcess = await db.runTransaction(async (transaction) => {
     const existing = await transaction.get(runRef);
     if (!canStartProcessingRun(existing.exists ? existing.data() : undefined)) return false;
     transaction.set(runRef, {
       kind: "intake_extraction",
+      companyId: input.companyId,
       interactionId,
       sourceCallId: input.callId,
       requestId,
@@ -138,11 +141,17 @@ export async function processCompletedCall(input: {
       : `interaction_${hash(interactionId).slice(0, 24)}`;
     const now = Timestamp.now();
     const evidenceExpiresAt = Timestamp.fromMillis(now.toMillis() + 90 * 24 * 60 * 60 * 1000);
-    const interactionRef = db.doc(`interactions/${interactionId}`);
-    const contactRef = db.doc(`contacts/${contactId}`);
-    const requestRef = db.doc(`serviceRequests/${requestId}`);
-    const taskRef = db.doc(`tasks/${taskId}`);
-    const eventRef = db.collection("auditEvents").doc();
+    const interactionRef = db.doc(
+      companyDocumentPath(input.companyId, "interactions", interactionId),
+    );
+    const contactRef = db.doc(companyDocumentPath(input.companyId, "contacts", contactId));
+    const requestRef = db.doc(
+      companyDocumentPath(input.companyId, "serviceRequests", requestId),
+    );
+    const taskRef = db.doc(companyDocumentPath(input.companyId, "tasks", taskId));
+    const eventRef = db.collection(
+      companyCollectionPath(input.companyId, "auditEvents"),
+    ).doc();
 
     await db.runTransaction(async (transaction) => {
       const [requestSnapshot, contactSnapshot] = await Promise.all([
@@ -150,6 +159,7 @@ export async function processCompletedCall(input: {
         transaction.get(contactRef),
       ]);
       transaction.set(contactRef, {
+        companyId: input.companyId,
         phoneE164: normalizedPhone,
         phoneRaw: call.from || null,
         ...(contactSnapshot.exists ? {} : {
@@ -159,6 +169,7 @@ export async function processCompletedCall(input: {
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       transaction.set(interactionRef, {
+        companyId: input.companyId,
         kind: "phone_call",
         source: "odorik",
         sourceCallId: input.callId,
@@ -181,6 +192,7 @@ export async function processCompletedCall(input: {
         expiresAt: evidenceExpiresAt,
       }, { merge: false });
       transaction.set(requestRef, {
+        companyId: input.companyId,
         contactId,
         status: "needs_review",
         interactionIds: FieldValue.arrayUnion(interactionId),
@@ -192,6 +204,7 @@ export async function processCompletedCall(input: {
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       transaction.set(taskRef, {
+        companyId: input.companyId,
         type: "review_intake",
         status: "open",
         interactionId,
@@ -216,6 +229,7 @@ export async function processCompletedCall(input: {
         updatedAt: FieldValue.serverTimestamp(),
       }, { merge: true });
       transaction.set(eventRef, {
+        companyId: input.companyId,
         aggregateType: "service_request",
         aggregateId: requestId,
         type: "intake_created",

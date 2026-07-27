@@ -5,6 +5,8 @@ import { secureEquals } from "./auth.js";
 import { firestoreDatabaseId, geminiModel, projectId } from "./config.js";
 import { db, toJsonSafe } from "./firestore.js";
 
+const legacyCompanyId = "explorers";
+
 type Context = {
   dashboardToken: string | undefined;
 };
@@ -27,7 +29,7 @@ const protectedProcedure = t.procedure.use(async ({ ctx, next }) => {
 export const appRouter = t.router({
   system: t.router({
     health: protectedProcedure.query(async () => {
-      await db().collection("calls").limit(1).get();
+      await db().collection(`companies/${legacyCompanyId}/calls`).limit(1).get();
       return {
         ok: true,
         projectId: projectId(),
@@ -47,8 +49,8 @@ export const appRouter = t.router({
           .optional(),
       )
       .query(async ({ input }) => {
-        const snapshot = await db()
-          .collection("calls")
+          const snapshot = await db()
+          .collection(`companies/${legacyCompanyId}/calls`)
           .limit(input?.limit ?? 20)
           .get();
         const calls: Array<Record<string, unknown> & { id: string }> = snapshot.docs

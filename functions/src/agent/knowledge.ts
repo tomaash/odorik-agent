@@ -204,14 +204,14 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
   };
 }
 
-export function chunkRecord(record: CompanyRecord, companyId = "default"): KnowledgeDocument[] {
+export function chunkRecord(record: CompanyRecord, companyId: string): KnowledgeDocument[] {
   const fullText = textFor(record.title, record.data);
   const extraMeta = extractRecordMetadata(record);
   const chunkSize = 1800;
   const overlap = 220;
   if (fullText.length <= chunkSize) {
     return [{
-      id: `${record.kind}:${record.recordId}:0`,
+      id: `${companyId}:${record.kind}:${record.recordId}:0`,
       companyId,
       kind: record.kind,
       recordId: record.recordId,
@@ -235,7 +235,7 @@ export function chunkRecord(record: CompanyRecord, companyId = "default"): Knowl
     const text = fullText.slice(offset, end).trim();
     if (text) {
       chunks.push({
-        id: `${record.kind}:${record.recordId}:${chunkIndex}`,
+        id: `${companyId}:${record.kind}:${record.recordId}:${chunkIndex}`,
         companyId,
         kind: record.kind,
         recordId: record.recordId,
@@ -275,13 +275,13 @@ function sortTime(record: CompanyRecord): number {
 }
 
 export class FirestoreCompanyData implements CompanyDataRepository {
-  constructor(private readonly firestore: Firestore, private readonly companyId = "default") {}
+  constructor(private readonly firestore: Firestore, private readonly companyId: string) {}
 
   private async records(kind: KnowledgeKind, max = 500): Promise<CompanyRecord[]> {
     const collection = collectionByKnowledgeKind[kind];
-    const source = kind === "context_item"
-      ? this.firestore.collection(`companies/${this.companyId}/contextItems`)
-      : this.firestore.collection(collection);
+    const source = this.firestore.collection(
+      `companies/${this.companyId}/${collection}`,
+    );
     const snapshot = await source.limit(max).get();
     return snapshot.docs.filter((document) => (
       kind !== "context_item" || document.data().indexingEnabled !== false
@@ -290,9 +290,7 @@ export class FirestoreCompanyData implements CompanyDataRepository {
       return {
         kind,
         recordId: document.id,
-        sourcePath: kind === "context_item"
-          ? `companies/${this.companyId}/contextItems/${document.id}`
-          : `${collection}/${document.id}`,
+        sourcePath: `companies/${this.companyId}/${collection}/${document.id}`,
         title: titleFor(kind, document.id, data),
         occurredAt: occurredAtFor(data),
         data,
@@ -307,9 +305,7 @@ export class FirestoreCompanyData implements CompanyDataRepository {
 
   async getRecord(kind: KnowledgeKind, recordId: string): Promise<CompanyRecord | null> {
     const collection = collectionByKnowledgeKind[kind];
-    const path = kind === "context_item"
-      ? `companies/${this.companyId}/contextItems/${recordId}`
-      : `${collection}/${recordId}`;
+    const path = `companies/${this.companyId}/${collection}/${recordId}`;
     const snapshot = await this.firestore.doc(path).get();
     if (!snapshot.exists) return null;
     if (kind === "context_item" && snapshot.data()?.indexingEnabled === false) return null;

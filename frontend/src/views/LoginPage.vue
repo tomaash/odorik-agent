@@ -16,7 +16,13 @@ async function signIn() {
   error.value = ''
   try {
     await authStore.signIn()
-    await router.push(authStore.isEnabled ? '/' : '/pending')
+    await router.push(
+      sessionStorage.getItem('pendingInvitationToken')
+        ? '/join'
+        : authStore.isEnabled
+          ? '/'
+          : '/pending',
+    )
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {

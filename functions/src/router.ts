@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
@@ -31,12 +32,14 @@ import { encryptCredentials } from "./connectors/credentials.js";
 import {
   createOdorikConnection,
   deleteSourceConnection,
+  getOdorikSetupDestination,
   listSources,
   migrateLegacyOdorik,
   prepareConnectionDeletion,
   setConnectionStatus,
   setResourceStatus,
 } from "./connectors/repository.js";
+import { odorikDestinationUrl } from "./connectors/odorik.js";
 import {
   createCalendarAuthorization,
   listGoogleCalendars,
@@ -51,6 +54,21 @@ import {
   selectGoogleDriveFolders,
   syncGoogleDriveConnection,
 } from "./connectors/google-drive.js";
+import {
+  acceptTeamInvitation,
+  createTeamInvitation,
+  inspectTeamInvitation,
+  removeTeamMember,
+  resendTeamInvitation,
+  revokeTeamInvitation,
+  teamOverview,
+} from "./teams.js";
+import {
+  companyCollectionPath,
+  companyDocumentPath,
+  registerUser,
+  registrationStatus,
+} from "./tenancy.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
@@ -60,29 +78,22 @@ export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID"
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 
 async function getAccess(uid: string) {
-  const snapshot = await db.doc(`access/${uid}`).get();
-  const data = snapshot.data();
-  return {
-    exists: snapshot.exists,
-    enabled: data?.enabled === true,
-    admin: data?.admin === true,
-    email: String(data?.email || ""),
-    displayName: String(data?.displayName || ""),
-    photoURL: String(data?.photoURL || ""),
-  };
+  return registrationStatus(uid);
 }
 
-async function intakeDetails(requestId: string) {
-  const requestSnapshot = await db.doc(`serviceRequests/${requestId}`).get();
+async function intakeDetails(companyId: string, requestId: string) {
+  const requestSnapshot = await db.doc(
+    companyDocumentPath(companyId, "serviceRequests", requestId),
+  ).get();
   if (!requestSnapshot.exists) {
     throw new TRPCError({ code: "NOT_FOUND", message: "Service request not found" });
   }
   const request = requestSnapshot.data()!;
   const refs = [
-    db.doc(`contacts/${String(request.contactId)}`),
-    db.doc(`interactions/${String((request.interactionIds as string[] | undefined)?.[0] || "missing")}`),
-    db.doc(`processingRuns/${String(request.activeProcessingRunId)}`),
-    db.doc(`tasks/${String(request.reviewTaskId)}`),
+    db.doc(companyDocumentPath(companyId, "contacts", String(request.contactId))),
+    db.doc(companyDocumentPath(companyId, "interactions", String((request.interactionIds as string[] | undefined)?.[0] || "missing"))),
+    db.doc(companyDocumentPath(companyId, "processingRuns", String(request.activeProcessingRunId))),
+    db.doc(companyDocumentPath(companyId, "tasks", String(request.reviewTaskId))),
   ];
   const documents = await db.getAll(...refs);
   const contact = documents[0]!;
@@ -98,10 +109,12 @@ async function intakeDetails(requestId: string) {
   });
 }
 
-async function requestCounts(): Promise<Record<RequestStatus, number>> {
+async function requestCounts(companyId: string): Promise<Record<RequestStatus, number>> {
   const results = await Promise.all(requestStatusValues.map(async (status) => {
     const stored = storedStatusesFor([status]);
-    const snapshots = await Promise.all(stored.map((value) => db.collection("serviceRequests")
+    const snapshots = await Promise.all(stored.map((value) => db.collection(
+      companyCollectionPath(companyId, "serviceRequests"),
+    )
       .where("status", "==", value)
       .count()
       .get()));
@@ -111,18 +124,23 @@ async function requestCounts(): Promise<Record<RequestStatus, number>> {
 }
 
 async function listServiceRequests(input: {
+  companyId: string;
   statuses?: RequestStatus[];
   contactId?: string;
   limit?: number;
 }) {
   const selectedStatuses = input.statuses?.length ? input.statuses : openRequestStatuses;
   const storedStatuses = storedStatusesFor(selectedStatuses);
-  let query = db.collection("serviceRequests").where("status", "in", storedStatuses);
+  let query = db.collection(
+    companyCollectionPath(input.companyId, "serviceRequests"),
+  ).where("status", "in", storedStatuses);
   if (input.contactId) query = query.where("contactId", "==", input.contactId);
   const snapshot = await query.orderBy("updatedAt", "desc").limit(input.limit || 50).get();
   const contactIds = [...new Set(snapshot.docs.map((doc) => String(doc.data().contactId || "")).filter(Boolean))];
   const contacts = contactIds.length
-    ? await db.getAll(...contactIds.map((id) => db.doc(`contacts/${id}`)))
+    ? await db.getAll(...contactIds.map((id) => db.doc(
+      companyDocumentPath(input.companyId, "contacts", id),
+    )))
     : [];
   const contactById = new Map(contacts.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()!]));
   return jsonSafe(snapshot.docs.map((doc) => {
@@ -144,36 +162,75 @@ async function listServiceRequests(input: {
 
 export const appRouter = router({
   auth: router({
-    register: signedInProcedure.mutation(async ({ ctx }) => {
-      const accessRef = db.doc(`access/${ctx.uid}`);
-      try {
-        await accessRef.create({
-          email: ctx.email,
-          displayName: ctx.displayName,
-          photoURL: ctx.photoURL,
-          enabled: false,
-          admin: false,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-      } catch (error) {
-        const code = (error as { code?: number | string }).code;
-        if (code !== 6 && code !== "6" && code !== "already-exists") throw error;
-        await accessRef.set({
-          email: ctx.email,
-          displayName: ctx.displayName,
-          photoURL: ctx.photoURL,
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
-      }
-      return getAccess(ctx.uid);
-    }),
+    register: signedInProcedure.mutation(({ ctx }) => registerUser(ctx)),
     status: signedInProcedure.query(({ ctx }) => getAccess(ctx.uid)),
   }),
 
+  invitations: router({
+    inspect: signedInProcedure
+      .input(z.object({ token: z.string().min(60).max(300) }))
+      .query(({ ctx, input }) => inspectTeamInvitation({
+        token: input.token,
+        email: ctx.email,
+        emailVerified: ctx.emailVerified,
+      })),
+    accept: signedInProcedure
+      .input(z.object({ token: z.string().min(60).max(300) }))
+      .mutation(({ ctx, input }) => acceptTeamInvitation({
+        token: input.token,
+        uid: ctx.uid,
+        email: ctx.email,
+        emailVerified: ctx.emailVerified,
+        displayName: ctx.displayName,
+        photoURL: ctx.photoURL,
+      })),
+  }),
+
+  team: router({
+    overview: enabledProcedure.query(({ ctx }) => teamOverview(ctx.companyId)),
+    invite: enabledProcedure
+      .input(z.object({ email: z.string().trim().email().max(320) }))
+      .mutation(({ ctx, input }) => createTeamInvitation({
+        companyId: ctx.companyId,
+        teamName: ctx.teamName,
+        email: input.email,
+        inviterUid: ctx.uid,
+        inviterName: ctx.displayName || ctx.email,
+      })),
+    resendInvitation: enabledProcedure
+      .input(z.object({
+        invitationId: z.string().regex(/^[a-zA-Z0-9]{10,40}$/),
+      }))
+      .mutation(({ ctx, input }) => resendTeamInvitation({
+        companyId: ctx.companyId,
+        teamName: ctx.teamName,
+        invitationId: input.invitationId,
+        inviterUid: ctx.uid,
+        inviterName: ctx.displayName || ctx.email,
+      })),
+    revokeInvitation: enabledProcedure
+      .input(z.object({
+        invitationId: z.string().regex(/^[a-zA-Z0-9]{10,40}$/),
+      }))
+      .mutation(({ ctx, input }) => revokeTeamInvitation({
+        companyId: ctx.companyId,
+        invitationId: input.invitationId,
+        actorUid: ctx.uid,
+      })),
+    removeMember: adminProcedure
+      .input(z.object({ uid: z.string().min(1).max(128) }))
+      .mutation(({ ctx, input }) => removeTeamMember({
+        companyId: ctx.companyId,
+        targetUid: input.uid,
+        actorUid: ctx.uid,
+      })),
+  }),
+
   system: router({
-    health: enabledProcedure.query(async () => {
-      await db.collection("serviceRequests").limit(1).get();
+    health: enabledProcedure.query(async ({ ctx }) => {
+      await db.collection(
+        companyCollectionPath(ctx.companyId, "serviceRequests"),
+      ).limit(1).get();
       return {
         ok: true,
         projectId: process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "odorik-tx-260720-c58d",
@@ -185,11 +242,12 @@ export const appRouter = router({
   }),
 
   sources: router({
-    list: enabledProcedure.query(() => listSources()),
+    list: enabledProcedure.query(({ ctx }) => listSources(ctx.companyId)),
     googleCalendar: router({
       authorizationUrl: adminProcedure
         .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
         .mutation(({ ctx, input }) => createCalendarAuthorization({
+          companyId: ctx.companyId,
           uid: ctx.uid,
           email: ctx.email,
           displayName: ctx.displayName,
@@ -200,7 +258,8 @@ export const appRouter = router({
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
-        .query(({ input }) => listGoogleCalendars({
+        .query(({ ctx, input }) => listGoogleCalendars({
+          companyId: ctx.companyId,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -212,6 +271,7 @@ export const appRouter = router({
           calendarIds: z.array(z.string().min(1).max(1000)).max(50),
         }))
         .mutation(({ ctx, input }) => selectGoogleCalendars({
+          companyId: ctx.companyId,
           ...input,
           actorUid: ctx.uid,
           clientId: googleConnectorClientId.value(),
@@ -222,7 +282,8 @@ export const appRouter = router({
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
-        .mutation(({ input }) => syncGoogleCalendarConnection({
+        .mutation(({ ctx, input }) => syncGoogleCalendarConnection({
+          companyId: ctx.companyId,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -233,6 +294,7 @@ export const appRouter = router({
       authorizationUrl: adminProcedure
         .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
         .mutation(({ ctx, input }) => createDriveAuthorization({
+          companyId: ctx.companyId,
           uid: ctx.uid,
           email: ctx.email,
           displayName: ctx.displayName,
@@ -243,7 +305,8 @@ export const appRouter = router({
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
-        .query(({ input }) => listGoogleDriveFolders({
+        .query(({ ctx, input }) => listGoogleDriveFolders({
+          companyId: ctx.companyId,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -254,7 +317,8 @@ export const appRouter = router({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
           folderIds: z.array(z.string().min(1).max(1000)).max(50),
         }))
-        .mutation(({ input }) => selectGoogleDriveFolders({
+        .mutation(({ ctx, input }) => selectGoogleDriveFolders({
+          companyId: ctx.companyId,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -264,7 +328,8 @@ export const appRouter = router({
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
-        .mutation(({ input }) => syncGoogleDriveConnection({
+        .mutation(({ ctx, input }) => syncGoogleDriveConnection({
+          companyId: ctx.companyId,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
@@ -272,27 +337,35 @@ export const appRouter = router({
         })),
     }),
     addOdorik: adminProcedure
-      .input(z.object({
-        displayName: z.string().trim().min(1).max(100),
-        accountLabel: z.string().trim().max(100).optional(),
-        username: z.string().trim().min(1).max(200),
-        password: z.string().min(8).max(500),
-        numbers: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
-      }))
-      .mutation(async ({ ctx, input }) => {
+      .mutation(async ({ ctx }) => {
+        const username = `odorik-${randomBytes(5).toString("hex")}`;
+        const password = randomBytes(24).toString("base64url");
         const credentialCiphertext = encryptCredentials({
-          username: input.username,
-          password: input.password,
+          username,
+          password,
         }, connectorCredentialKey.value());
-        return createOdorikConnection({
-          displayName: input.displayName,
-          accountLabel: input.accountLabel,
+        const connection = await createOdorikConnection({
+          companyId: ctx.companyId,
+          displayName: "Odorik",
           credentialCiphertext,
-          usernameHint: input.username.slice(0, 3),
+          usernameHint: username.slice(0, 10),
           createdBy: ctx.uid,
-          numbers: input.numbers,
+          numbers: [],
         });
+        return {
+          ...connection,
+          setupUrl: odorikDestinationUrl(connection.uploadUrl, username, password),
+        };
       }),
+    getOdorikSetup: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+      }))
+      .mutation(({ ctx, input }) => getOdorikSetupDestination({
+        companyId: ctx.companyId,
+        connectionId: input.connectionId,
+        credentialKey: connectorCredentialKey.value(),
+      })),
     setConnectionStatus: adminProcedure
       .input(z.object({
         connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
@@ -300,7 +373,7 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         try {
-          await setConnectionStatus(input.connectionId, input.status, ctx.uid);
+          await setConnectionStatus(ctx.companyId, input.connectionId, input.status, ctx.uid);
           return { ok: true };
         } catch (error) {
           throw new TRPCError({
@@ -315,11 +388,16 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         try {
-          const prepared = await prepareConnectionDeletion(input.connectionId, ctx.uid);
+          const prepared = await prepareConnectionDeletion(
+            ctx.companyId,
+            input.connectionId,
+            ctx.uid,
+          );
           let providerAccessRevoked: boolean | null = null;
           if (prepared.adapterId === "google_calendar") {
             try {
               providerAccessRevoked = await revokeGoogleCalendarAuthorization({
+                companyId: ctx.companyId,
                 connectionId: input.connectionId,
                 credentialKey: connectorCredentialKey.value(),
               });
@@ -333,6 +411,7 @@ export const appRouter = router({
           } else if (prepared.adapterId === "google_drive") {
             try {
               providerAccessRevoked = await revokeGoogleDriveAuthorization({
+                companyId: ctx.companyId,
                 connectionId: input.connectionId,
                 credentialKey: connectorCredentialKey.value(),
               });
@@ -345,6 +424,7 @@ export const appRouter = router({
             }
           }
           return await deleteSourceConnection({
+            companyId: ctx.companyId,
             ...input,
             ...prepared,
             actorUid: ctx.uid,
@@ -366,7 +446,11 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         try {
-          await setResourceStatus({ ...input, actorUid: ctx.uid });
+          await setResourceStatus({
+            companyId: ctx.companyId,
+            ...input,
+            actorUid: ctx.uid,
+          });
           return { ok: true };
         } catch (error) {
           throw new TRPCError({
@@ -375,7 +459,10 @@ export const appRouter = router({
           });
         }
       }),
-    migrateLegacyOdorik: adminProcedure.mutation(({ ctx }) => migrateLegacyOdorik(ctx.uid)),
+    migrateLegacyOdorik: adminProcedure.mutation(({ ctx }) => migrateLegacyOdorik(
+      ctx.companyId,
+      ctx.uid,
+    )),
   }),
 
   assistant: router({
@@ -393,8 +480,10 @@ export const appRouter = router({
     })),
     history: enabledProcedure
       .input(z.object({ threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general") }).optional())
-      .query(async ({ input }) => {
-        const snapshot = await db.collection(`agentThreads/${input?.threadId || "general"}/messages`)
+      .query(async ({ ctx, input }) => {
+        const snapshot = await db.collection(
+          `${companyDocumentPath(ctx.companyId, "agentThreads", input?.threadId || "general")}/messages`,
+        )
           .orderBy("createdAt", "desc")
           .limit(40)
           .get();
@@ -406,7 +495,9 @@ export const appRouter = router({
         question: z.string().trim().min(1).max(3000),
       }))
       .mutation(async ({ ctx, input }) => {
-        const threadRef = db.doc(`agentThreads/${input.threadId}`);
+        const threadRef = db.doc(
+          companyDocumentPath(ctx.companyId, "agentThreads", input.threadId),
+        );
         const messagesRef = threadRef.collection("messages");
         const historySnapshot = await messagesRef.orderBy("createdAt", "desc").limit(8).get();
         const priorMessages = historySnapshot.docs.reverse().flatMap((document) => {
@@ -418,8 +509,11 @@ export const appRouter = router({
           return role && text ? [{ role, text }] : [];
         });
         const apiKey = geminiApiKey.value();
-        const repository = new FirestoreCompanyData(db);
-        const { search } = qdrantFromEnvironment({ geminiApiKey: apiKey });
+        const repository = new FirestoreCompanyData(db, ctx.companyId);
+        const { search } = qdrantFromEnvironment({
+          geminiApiKey: apiKey,
+          companyId: ctx.companyId,
+        });
         const tools = new CompanyFactTools(repository, search);
         const startedAt = Date.now();
         const answer = await runFactAgent({
@@ -432,7 +526,9 @@ export const appRouter = router({
         const answerAt = Timestamp.fromMillis(userAt.toMillis() + 1);
         const userMessageRef = messagesRef.doc();
         const answerMessageRef = messagesRef.doc();
-        const runRef = db.collection("agentRuns").doc();
+        const runRef = db.collection(
+          companyCollectionPath(ctx.companyId, "agentRuns"),
+        ).doc();
         const batch = db.batch();
         batch.set(threadRef, {
           title: "Company facts",
@@ -457,6 +553,7 @@ export const appRouter = router({
         });
         batch.set(runRef, {
           kind: "fact_agent",
+          companyId: ctx.companyId,
           threadId: input.threadId,
           question: input.question,
           answer: answer.answer,
@@ -474,10 +571,13 @@ export const appRouter = router({
         await batch.commit();
         return { ...answer, runId: runRef.id, messageId: answerMessageRef.id };
       }),
-    reindex: adminProcedure.mutation(async () => {
+    reindex: adminProcedure.mutation(async ({ ctx }) => {
       const apiKey = geminiApiKey.value();
-      const repository = new FirestoreCompanyData(db);
-      const { qdrant } = qdrantFromEnvironment({ geminiApiKey: apiKey });
+      const repository = new FirestoreCompanyData(db, ctx.companyId);
+      const { qdrant } = qdrantFromEnvironment({
+        geminiApiKey: apiKey,
+        companyId: ctx.companyId,
+      });
       if (!qdrant) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
@@ -485,7 +585,7 @@ export const appRouter = router({
         });
       }
       const documents = await repository.allDocuments();
-      const indexed = await qdrant.replaceDocuments(documents);
+      const indexed = await qdrant.replaceTenantDocuments(documents);
       return {
         indexed,
         collection: qdrantCollection,
@@ -500,8 +600,10 @@ export const appRouter = router({
   intake: router({
     list: enabledProcedure
       .input(z.object({ limit: z.number().int().min(1).max(50).default(30) }).optional())
-      .query(async ({ input }) => {
-        const taskSnapshot = await db.collection("tasks")
+      .query(async ({ ctx, input }) => {
+        const taskSnapshot = await db.collection(
+          companyCollectionPath(ctx.companyId, "tasks"),
+        )
           .where("type", "==", "review_intake")
           .where("status", "==", "open")
           .orderBy("createdAt", "desc")
@@ -509,14 +611,20 @@ export const appRouter = router({
           .get();
         const tasks = taskSnapshot.docs;
         if (tasks.length === 0) return [];
-        const requestRefs = tasks.map((task) => db.doc(`serviceRequests/${task.data().serviceRequestId}`));
+        const requestRefs = tasks.map((task) => db.doc(
+          companyDocumentPath(ctx.companyId, "serviceRequests", task.data().serviceRequestId),
+        ));
         const requestSnapshots = await db.getAll(...requestRefs);
         const requestById = new Map(requestSnapshots.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()!]));
         const contactIds = [...new Set(requestSnapshots.filter((doc) => doc.exists).map((doc) => String(doc.data()?.contactId || "")).filter(Boolean))];
         const interactionIds = [...new Set(tasks.map((task) => String(task.data().interactionId || "")).filter(Boolean))];
         const [contacts, interactions] = await Promise.all([
-          contactIds.length ? db.getAll(...contactIds.map((id) => db.doc(`contacts/${id}`))) : Promise.resolve([]),
-          interactionIds.length ? db.getAll(...interactionIds.map((id) => db.doc(`interactions/${id}`))) : Promise.resolve([]),
+          contactIds.length ? db.getAll(...contactIds.map((id) => db.doc(
+            companyDocumentPath(ctx.companyId, "contacts", id),
+          ))) : Promise.resolve([]),
+          interactionIds.length ? db.getAll(...interactionIds.map((id) => db.doc(
+            companyDocumentPath(ctx.companyId, "interactions", id),
+          ))) : Promise.resolve([]),
         ]);
         const contactById = new Map(contacts.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()!]));
         const interactionById = new Map(interactions.filter((doc) => doc.exists).map((doc) => [doc.id, doc.data()!]));
@@ -544,22 +652,28 @@ export const appRouter = router({
       }),
     get: enabledProcedure
       .input(z.object({ requestId: z.string().min(1) }))
-      .query(({ input }) => intakeDetails(input.requestId)),
+      .query(({ ctx, input }) => intakeDetails(ctx.companyId, input.requestId)),
     review: enabledProcedure
       .input(reviewInputSchema)
-      .mutation(({ ctx, input }) => reviewIntake(input, ctx.uid)),
+      .mutation(({ ctx, input }) => reviewIntake(input, ctx.uid, ctx.companyId)),
     reprocess: enabledProcedure
       .input(z.object({ callId: z.string().min(1) }))
-      .mutation(async ({ input }) => {
-        return processCompletedCall({ callId: input.callId, apiKey: geminiApiKey.value() });
+      .mutation(async ({ ctx, input }) => {
+        return processCompletedCall({
+          companyId: ctx.companyId,
+          callId: input.callId,
+          apiKey: geminiApiKey.value(),
+        });
       }),
   }),
 
   contacts: router({
     list: enabledProcedure
       .input(z.object({ limit: z.number().int().min(1).max(50).default(30) }).optional())
-      .query(async ({ input }) => {
-        const snapshot = await db.collection("contacts")
+      .query(async ({ ctx, input }) => {
+        const snapshot = await db.collection(
+          companyCollectionPath(ctx.companyId, "contacts"),
+        )
           .orderBy("updatedAt", "desc")
           .limit(input?.limit || 30)
           .get();
@@ -567,15 +681,17 @@ export const appRouter = router({
       }),
     get: enabledProcedure
       .input(z.object({ contactId: z.string().min(1) }))
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const [snapshot, requests, interactions] = await Promise.all([
-          db.doc(`contacts/${input.contactId}`).get(),
+          db.doc(companyDocumentPath(ctx.companyId, "contacts", input.contactId)).get(),
           listServiceRequests({
+            companyId: ctx.companyId,
             statuses: [...requestStatusValues],
             contactId: input.contactId,
             limit: 50,
           }),
-          db.collection("interactions").where("contactId", "==", input.contactId).limit(50).get(),
+          db.collection(companyCollectionPath(ctx.companyId, "interactions"))
+            .where("contactId", "==", input.contactId).limit(50).get(),
         ]);
         if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
         return jsonSafe({
@@ -593,16 +709,16 @@ export const appRouter = router({
         contactId: z.string().min(1).optional(),
         limit: z.number().int().min(1).max(100).default(50),
       }).optional())
-      .query(async ({ input }) => {
+      .query(async ({ ctx, input }) => {
         const [items, counts] = await Promise.all([
-          listServiceRequests(input || {}),
-          requestCounts(),
+          listServiceRequests({ companyId: ctx.companyId, ...(input || {}) }),
+          requestCounts(ctx.companyId),
         ]);
         return { items, counts };
       }),
     get: enabledProcedure
       .input(z.object({ requestId: z.string().min(1) }))
-      .query(({ input }) => intakeDetails(input.requestId)),
+      .query(({ ctx, input }) => intakeDetails(ctx.companyId, input.requestId)),
     transition: enabledProcedure
       .input(z.object({
         requestId: z.string().min(1),
@@ -611,8 +727,12 @@ export const appRouter = router({
         note: z.string().trim().max(2000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
-        const requestRef = db.doc(`serviceRequests/${input.requestId}`);
-        const eventRef = db.collection("auditEvents").doc();
+        const requestRef = db.doc(
+          companyDocumentPath(ctx.companyId, "serviceRequests", input.requestId),
+        );
+        const eventRef = db.collection(
+          companyCollectionPath(ctx.companyId, "auditEvents"),
+        ).doc();
         return db.runTransaction(async (transaction) => {
           const snapshot = await transaction.get(requestRef);
           if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Service request not found" });

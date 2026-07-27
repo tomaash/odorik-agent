@@ -27,8 +27,61 @@ import {
 import {
   odorikContextItem,
   odorikContextItemId,
+  odorikDestinationUrl,
   odorikResourceIdentity,
 } from "../connectors/odorik.js";
+import {
+  companyCollectionPath,
+  companyDocumentPath,
+} from "../tenancy.js";
+import {
+  digestInvitationSecret,
+  formatInvitationToken,
+  invitationSecretMatches,
+  normalizeInvitationEmail,
+  parseInvitationToken,
+} from "../invitation-token.js";
+
+test("tenant paths always include a validated company boundary", () => {
+  assert.equal(
+    companyCollectionPath("explorers", "contacts"),
+    "companies/explorers/contacts",
+  );
+  assert.equal(
+    companyDocumentPath("explorers", "contacts", "contact-1"),
+    "companies/explorers/contacts/contact-1",
+  );
+  assert.throws(() => companyCollectionPath("../other", "contacts"));
+  assert.throws(() => companyDocumentPath("explorers", "contacts", "../contact"));
+});
+
+test("invitation tokens are opaque, company-bound, and reject malformed input", () => {
+  const secret = "a".repeat(43);
+  const token = formatInvitationToken({
+    companyId: "explorers",
+    invitationId: "AbCdEf1234567890GhIj",
+    secret,
+  });
+  assert.deepEqual(parseInvitationToken(token), {
+    companyId: "explorers",
+    invitationId: "AbCdEf1234567890GhIj",
+    secret,
+  });
+  assert.equal(parseInvitationToken(`../other.AbCdEf1234567890GhIj.${secret}`), null);
+  assert.equal(parseInvitationToken(`explorers.short.${secret}`), null);
+  assert.equal(parseInvitationToken(`${token}.extra`), null);
+});
+
+test("invitation email matching and secret checks are exact and case-normalized", () => {
+  assert.equal(
+    normalizeInvitationEmail("  Person@Example.COM "),
+    "person@example.com",
+  );
+  const digest = digestInvitationSecret("correct-secret");
+  assert.equal(invitationSecretMatches(digest, "correct-secret"), true);
+  assert.equal(invitationSecretMatches(digest, "incorrect-secret"), false);
+  assert.equal(invitationSecretMatches("not-a-hex-digest", "correct-secret"), false);
+});
 
 test("normalizes Czech and international phone numbers", () => {
   assert.equal(normalizePhone("777 123 456"), "+420777123456");
@@ -146,11 +199,22 @@ test("normalizes Odorik calls into connection-aware context items", () => {
     to: "+420123456789",
     transcript: "Please call me tomorrow.",
     summary: "Follow-up requested.",
-  });
+  }, "explorers");
   assert.equal((item?.source as Record<string, unknown>).connectionId, "account-a");
   assert.equal(item?.kind, "call");
   assert.match(String(item?.text), /Please call me tomorrow/);
-  assert.equal(odorikContextItem("call-2", { status: "uploaded" }), null);
+  assert.equal(odorikContextItem("call-2", { status: "uploaded" }, "explorers"), null);
+});
+
+test("builds the exact paste-ready Odorik recording destination", () => {
+  assert.equal(
+    odorikDestinationUrl(
+      "https://ingest.example/webhooks/odorik/company/connection/recordings",
+      "odorik-abcd",
+      "secret_123",
+    ),
+    "https://odorik-abcd:secret_123@ingest.example/webhooks/odorik/company/connection/recordings!mp3",
+  );
 });
 
 test("keeps Google Drive authorization state alive and defines drive readonly scope", () => {

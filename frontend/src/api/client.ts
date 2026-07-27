@@ -1,10 +1,24 @@
-import { createTRPCClient, httpBatchLink } from '@trpc/client'
+import { createTRPCClient, httpBatchLink, httpLink } from '@trpc/client'
 import type { AppRouter } from '@odorik/functions/router'
 import { auth } from '../firebase'
 
 export const trpc = createTRPCClient<AppRouter>({
   links: [
     httpBatchLink({
+      url: import.meta.env.VITE_API_URL || '/api',
+      async headers() {
+        const token = await auth.currentUser?.getIdToken()
+        return token ? { Authorization: `Bearer ${token}` } : {}
+      },
+    }),
+  ],
+})
+
+// Keep team management on a single-request link. Its response is small and
+// this avoids an empty-input batching edge case seen on direct route loads.
+const teamTrpc = createTRPCClient<AppRouter>({
+  links: [
+    httpLink({
       url: import.meta.env.VITE_API_URL || '/api',
       async headers() {
         const token = await auth.currentUser?.getIdToken()
@@ -21,6 +35,47 @@ export type AccessStatus = {
   email: string
   displayName: string
   photoURL: string
+  companyId: string | null
+  teamName: string | null
+  role: 'admin' | 'member' | null
+}
+
+export type TeamMember = {
+  uid: string
+  email: string
+  displayName: string
+  photoURL: string
+  role: 'admin' | 'member'
+  joinedAt: string | null
+}
+
+export type TeamInvitation = {
+  id: string
+  email: string
+  status: 'pending'
+  invitedByName: string
+  createdAt: string | null
+  expiresAt: string | null
+  deliveryStatus: 'pending' | 'sent' | 'failed'
+  deliveryError: string | null
+}
+
+export type TeamOverview = {
+  team: {
+    id: string
+    displayName: string
+    createdAt: string | null
+  }
+  members: TeamMember[]
+  invitations: TeamInvitation[]
+}
+
+export type InvitationPreview = {
+  teamId: string
+  teamName: string
+  invitedByName: string
+  expiresAt: string | null
+  email: string
 }
 
 export type IntakeListItem = {
@@ -214,6 +269,51 @@ export async function getAccessStatus(): Promise<AccessStatus> {
   return trpc.auth.status.query() as Promise<AccessStatus>
 }
 
+export async function inspectInvitation(token: string): Promise<InvitationPreview> {
+  return trpc.invitations.inspect.query({ token }) as Promise<InvitationPreview>
+}
+
+export async function acceptInvitation(token: string): Promise<AccessStatus> {
+  return trpc.invitations.accept.mutate({ token }) as Promise<AccessStatus>
+}
+
+export async function getTeamOverview(): Promise<TeamOverview> {
+  const token = await auth.currentUser?.getIdToken()
+  const baseUrl = (import.meta.env.VITE_API_URL || '/api').replace(/\/$/, '')
+  const response = await fetch(`${baseUrl}/team.overview`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  const payload = await response.json() as {
+    result?: { data?: unknown }
+    error?: { json?: { message?: string }; message?: string }
+  }
+  const rawData = payload.result?.data
+  if (!response.ok || !rawData) {
+    throw new Error(
+      payload.error?.json?.message
+      || payload.error?.message
+      || `Team request failed (${response.status})`,
+    )
+  }
+  return rawData as TeamOverview
+}
+
+export async function inviteTeamMember(email: string): Promise<TeamInvitation> {
+  return teamTrpc.team.invite.mutate({ email }) as Promise<TeamInvitation>
+}
+
+export async function resendTeamMemberInvitation(invitationId: string): Promise<TeamInvitation> {
+  return teamTrpc.team.resendInvitation.mutate({ invitationId }) as Promise<TeamInvitation>
+}
+
+export async function revokeTeamMemberInvitation(invitationId: string) {
+  return teamTrpc.team.revokeInvitation.mutate({ invitationId })
+}
+
+export async function removeTeamMember(uid: string) {
+  return teamTrpc.team.removeMember.mutate({ uid })
+}
+
 export async function listIntakes(): Promise<IntakeListItem[]> {
   return trpc.intake.list.query({ limit: 30 }) as Promise<IntakeListItem[]>
 }
@@ -266,14 +366,12 @@ export async function listSources(): Promise<SourcesResponse> {
   return trpc.sources.list.query() as Promise<SourcesResponse>
 }
 
-export async function addOdorikConnection(input: {
-  displayName: string
-  accountLabel?: string
-  username: string
-  password: string
-  numbers: string[]
-}) {
-  return trpc.sources.addOdorik.mutate(input)
+export async function addOdorikConnection() {
+  return trpc.sources.addOdorik.mutate()
+}
+
+export async function getOdorikSetup(connectionId: string): Promise<{ setupUrl: string }> {
+  return trpc.sources.getOdorikSetup.mutate({ connectionId }) as Promise<{ setupUrl: string }>
 }
 
 export async function setSourceConnectionStatus(

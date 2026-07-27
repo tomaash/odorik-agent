@@ -7,7 +7,6 @@ import {
   googleOAuthRedirectUri,
   googleOAuthReturnUrl,
 } from "./google-oauth-return.js";
-import { defaultCompanyId } from "./odorik.js";
 
 export const calendarScopes = [
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
@@ -98,8 +97,8 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function connectionRef(connectionId: string) {
-  return db.doc(`companies/${defaultCompanyId}/connections/${connectionId}`);
+function connectionRef(companyId: string, connectionId: string) {
+  return db.doc(`companies/${companyId}/connections/${connectionId}`);
 }
 
 function calendarResourceId(calendarId: string): string {
@@ -139,10 +138,11 @@ export async function revokeGoogleToken(token: string): Promise<boolean> {
 }
 
 export async function revokeGoogleCalendarAuthorization(input: {
+  companyId: string;
   connectionId: string;
   credentialKey: string;
 }): Promise<boolean> {
-  const connection = await connectionRef(input.connectionId).get();
+  const connection = await connectionRef(input.companyId, input.connectionId).get();
   const data = connection.data();
   if (
     !connection.exists
@@ -158,6 +158,7 @@ export async function revokeGoogleCalendarAuthorization(input: {
 }
 
 export async function createCalendarAuthorization(input: {
+  companyId: string;
   uid: string;
   email: string;
   displayName: string;
@@ -168,7 +169,8 @@ export async function createCalendarAuthorization(input: {
   const stateHash = hash(state);
   const now = Timestamp.now();
   const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
-  await db.doc(`companies/${defaultCompanyId}/oauthStates/${stateHash}`).set({
+  await db.doc(`oauthStates/${stateHash}`).set({
+    companyId: input.companyId,
     provider: "google_calendar",
     uid: input.uid,
     email: input.email,
@@ -200,9 +202,7 @@ export async function exchangeGoogleAuthorization(input: {
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ connectionId: string }> {
-  const stateRef = db.doc(
-    `companies/${defaultCompanyId}/oauthStates/${hash(input.state)}`,
-  );
+  const stateRef = db.doc(`oauthStates/${hash(input.state)}`);
   const stateSnapshot = await stateRef.get();
   const stateData = stateSnapshot.data();
   const expiresAt = stateData?.expiresAt instanceof Timestamp
@@ -211,6 +211,7 @@ export async function exchangeGoogleAuthorization(input: {
   if (
     !stateSnapshot.exists
     || stateData?.provider !== "google_calendar"
+    || typeof stateData?.companyId !== "string"
     || expiresAt < Date.now()
   ) {
     throw new Error("The Google authorization request is invalid or expired");
@@ -242,7 +243,8 @@ export async function exchangeGoogleAuthorization(input: {
     || stateData.email
     || "unknown Google account",
   );
-  const connections = db.collection(`companies/${defaultCompanyId}/connections`);
+  const companyId = String(stateData.companyId);
+  const connections = db.collection(`companies/${companyId}/connections`);
   const existingConnections = await connections
     .where("adapterId", "==", "google_calendar")
     .get();
@@ -260,7 +262,7 @@ export async function exchangeGoogleAuthorization(input: {
   const batch = db.batch();
   batch.delete(stateRef);
   batch.set(connection, {
-    companyId: defaultCompanyId,
+    companyId,
     adapterId: "google_calendar",
     displayName: "Google Calendar",
     accountLabel: providerAccountId,
@@ -286,12 +288,13 @@ export async function exchangeGoogleAuthorization(input: {
 }
 
 async function authorizedConnection(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ accessToken: string; connection: FirebaseFirestore.DocumentSnapshot }> {
-  const connection = await connectionRef(input.connectionId).get();
+  const connection = await connectionRef(input.companyId, input.connectionId).get();
   const data = connection.data();
   if (
     !connection.exists
@@ -365,6 +368,7 @@ async function allCalendarEntries(accessToken: string): Promise<CalendarListEntr
 }
 
 export async function listGoogleCalendars(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
@@ -393,6 +397,7 @@ export async function listGoogleCalendars(input: {
 }
 
 function eventContextItem(input: {
+  companyId: string;
   connectionId: string;
   resourceId: string;
   calendarId: string;
@@ -427,7 +432,7 @@ function eventContextItem(input: {
   ].filter(Boolean).join("\n");
   const checksum = hash(JSON.stringify(input.event));
   return {
-    companyId: defaultCompanyId,
+    companyId: input.companyId,
     kind: "calendar.event",
     source: {
       adapterId: "google_calendar",
@@ -470,6 +475,7 @@ function eventContextItem(input: {
 }
 
 async function syncCalendarResource(input: {
+  companyId: string;
   connectionId: string;
   resource: FirebaseFirestore.QueryDocumentSnapshot;
   accessToken: string;
@@ -519,13 +525,14 @@ async function syncCalendarResource(input: {
     for (const event of page.items || []) {
       if (!event.id) continue;
       const itemRef = db.doc(
-        `companies/${defaultCompanyId}/contextItems/${calendarContextItemId(
+        `companies/${input.companyId}/contextItems/${calendarContextItemId(
           input.connectionId,
           calendarId,
           event.id,
         )}`,
       );
       const contextItem = eventContextItem({
+        companyId: input.companyId,
         connectionId: input.connectionId,
         resourceId: input.resource.id,
         calendarId,
@@ -546,7 +553,7 @@ async function syncCalendarResource(input: {
   } while (pageToken);
 
   const itemCount = (await db.collection(
-    `companies/${defaultCompanyId}/contextItems`,
+    `companies/${input.companyId}/contextItems`,
   ).where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resource.id)
     .count()
@@ -562,6 +569,7 @@ async function syncCalendarResource(input: {
 }
 
 export async function syncGoogleCalendarConnection(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
@@ -575,13 +583,14 @@ export async function syncGoogleCalendarConnection(input: {
   try {
     for (const resource of resources.docs) {
       changes += await syncCalendarResource({
+        companyId: input.companyId,
         connectionId: input.connectionId,
         resource,
         accessToken,
       });
     }
     const itemCount = (await db.collection(
-      `companies/${defaultCompanyId}/contextItems`,
+      `companies/${input.companyId}/contextItems`,
     ).where("source.connectionId", "==", input.connectionId).count().get()).data().count;
     const updated = await db.runTransaction(async (transaction) => {
       const current = await transaction.get(connection.ref);
@@ -623,6 +632,7 @@ export async function syncGoogleCalendarConnection(input: {
 }
 
 export async function selectGoogleCalendars(input: {
+  companyId: string;
   connectionId: string;
   calendarIds: string[];
   actorUid: string;
@@ -636,7 +646,7 @@ export async function selectGoogleCalendars(input: {
   if (selectedIds.some((id) => !byId.has(id))) {
     throw new Error("One or more selected calendars are no longer accessible");
   }
-  const connection = connectionRef(input.connectionId);
+  const connection = connectionRef(input.companyId, input.connectionId);
   const resources = await connection.collection("resources").get();
   const batch = db.batch();
   const now = Timestamp.now();
@@ -667,7 +677,7 @@ export async function selectGoogleCalendars(input: {
     .filter((calendar) => !selectedIds.includes(calendar.id))
     .map((calendar) => calendarResourceId(calendar.id));
   for (const resourceId of disabledResources) {
-    const items = await db.collection(`companies/${defaultCompanyId}/contextItems`)
+    const items = await db.collection(`companies/${input.companyId}/contextItems`)
       .where("source.connectionId", "==", input.connectionId)
       .where("source.resourceId", "==", resourceId)
       .get();
@@ -685,23 +695,36 @@ export async function syncAllGoogleCalendarConnections(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
-}): Promise<Array<{ connectionId: string; ok: boolean; error?: string }>> {
-  const connections = await db.collection(
-    `companies/${defaultCompanyId}/connections`,
-  ).where("adapterId", "==", "google_calendar")
-    .where("status", "in", ["active", "attention"])
-    .get();
-  const results: Array<{ connectionId: string; ok: boolean; error?: string }> = [];
-  for (const connection of connections.docs) {
-    try {
-      await syncGoogleCalendarConnection({ ...input, connectionId: connection.id });
-      results.push({ connectionId: connection.id, ok: true });
-    } catch (error) {
-      results.push({
-        connectionId: connection.id,
-        ok: false,
-        error: error instanceof Error ? error.message : String(error),
-      });
+}): Promise<Array<{ companyId: string; connectionId: string; ok: boolean; error?: string }>> {
+  const companies = await db.collection("companies").get();
+  const results: Array<{
+    companyId: string;
+    connectionId: string;
+    ok: boolean;
+    error?: string;
+  }> = [];
+  for (const company of companies.docs) {
+    if (company.data().status !== "active") continue;
+    const connections = await company.ref.collection("connections")
+      .where("adapterId", "==", "google_calendar")
+      .where("status", "in", ["active", "attention"])
+      .get();
+    for (const connection of connections.docs) {
+      try {
+        await syncGoogleCalendarConnection({
+          ...input,
+          companyId: company.id,
+          connectionId: connection.id,
+        });
+        results.push({ companyId: company.id, connectionId: connection.id, ok: true });
+      } catch (error) {
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
   return results;

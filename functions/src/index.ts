@@ -1,4 +1,5 @@
 import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { api } from "./api.js";
 import { processCompletedCall, shouldProcessCallUpdate } from "./crm/process.js";
@@ -13,6 +14,8 @@ import {
 } from "./router.js";
 import { projectOdorikCallContext } from "./connectors/odorik.js";
 import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.js";
+import { db } from "./firestore.js";
+import { explorersCompanyId } from "./tenancy.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 
 export { api };
@@ -21,7 +24,7 @@ const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceacco
 
 export const processCallCrm = onDocumentUpdated(
   {
-    document: "calls/{callId}",
+    document: "companies/{companyId}/calls/{callId}",
     database: "odorik",
     region: "europe-west3",
     timeoutSeconds: 300,
@@ -35,6 +38,7 @@ export const processCallCrm = onDocumentUpdated(
     const after = event.data?.after.data();
     if (!shouldProcessCallUpdate(before, after)) return;
     await processCompletedCall({
+      companyId: event.params.companyId,
       callId: event.params.callId,
       apiKey: geminiApiKey.value(),
     });
@@ -43,7 +47,7 @@ export const processCallCrm = onDocumentUpdated(
 
 export const syncKnowledgeIndex = onDocumentWritten(
   {
-    document: "{collectionId}/{documentId}",
+    document: "companies/{companyId}/{collectionId}/{documentId}",
     database: "odorik",
     region: "europe-west3",
     timeoutSeconds: 300,
@@ -57,6 +61,7 @@ export const syncKnowledgeIndex = onDocumentWritten(
     await synchronizeKnowledgeRecord({
       collection: event.params.collectionId,
       recordId: event.params.documentId,
+      companyId: event.params.companyId,
       geminiApiKey: geminiApiKey.value(),
     });
   },
@@ -64,7 +69,7 @@ export const syncKnowledgeIndex = onDocumentWritten(
 
 export const projectCallContext = onDocumentWritten(
   {
-    document: "calls/{callId}",
+    document: "companies/{companyId}/calls/{callId}",
     database: "odorik",
     region: "europe-west3",
     timeoutSeconds: 120,
@@ -74,29 +79,42 @@ export const projectCallContext = onDocumentWritten(
     serviceAccount: runtimeServiceAccount,
   },
   async (event) => {
-    await projectOdorikCallContext(event.params.callId, event.data?.after.data());
+    await projectOdorikCallContext(
+      event.params.companyId,
+      event.params.callId,
+      event.data?.after.data(),
+    );
   },
 );
 
-export const syncContextItemIndex = onDocumentWritten(
+// Temporary cutover bridge: the currently deployed ingest/processor pair
+// writes legacy top-level call documents. Keeping this bridge during the
+// container rollout prevents a recording arriving between deployments from
+// being stranded outside the Explorers tenant.
+export const bridgeLegacyCallToExplorers = onDocumentWritten(
   {
-    document: "companies/{companyId}/contextItems/{contextItemId}",
+    document: "calls/{callId}",
     database: "odorik",
     region: "europe-west3",
-    timeoutSeconds: 300,
-    memory: "512MiB",
-    maxInstances: 5,
+    timeoutSeconds: 60,
+    memory: "256MiB",
+    maxInstances: 3,
     retry: true,
     serviceAccount: runtimeServiceAccount,
-    secrets: [geminiApiKey, qdrantApiKey, qdrantUrl],
   },
   async (event) => {
-    await synchronizeKnowledgeRecord({
-      collection: "contextItems",
-      recordId: event.params.contextItemId,
-      companyId: event.params.companyId,
-      geminiApiKey: geminiApiKey.value(),
-    });
+    const target = db.doc(
+      `companies/${explorersCompanyId}/calls/${event.params.callId}`,
+    );
+    if (!event.data?.after.exists) {
+      await target.delete();
+      return;
+    }
+    await target.set({
+      ...event.data.after.data(),
+      companyId: explorersCompanyId,
+      migratedFromLegacyAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
   },
 );
 

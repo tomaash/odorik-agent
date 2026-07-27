@@ -12,6 +12,12 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/join',
+      name: 'join-team',
+      component: () => import('./views/JoinTeamPage.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
       path: '/',
       component: () => import('./views/AppLayout.vue'),
       meta: { requiresAuth: true, requiresEnabled: true },
@@ -24,6 +30,7 @@ const router = createRouter({
         { path: 'contacts', name: 'contacts', component: () => import('./views/ContactsPage.vue') },
         { path: 'contacts/:id', name: 'contact', component: () => import('./views/ContactDetailPage.vue') },
         { path: 'sources', name: 'sources', component: () => import('./views/SourcesPage.vue') },
+        { path: 'team', name: 'team', component: () => import('./views/TeamPage.vue') },
       ],
     },
   ],
@@ -31,6 +38,11 @@ const router = createRouter({
 
 router.beforeEach(async (to) => {
   const authStore = useAuthStore()
+  const invitationToken = typeof to.query.token === 'string' ? to.query.token : ''
+  if (to.name === 'join-team' && invitationToken) {
+    sessionStorage.setItem('pendingInvitationToken', invitationToken)
+    return { name: 'join-team', replace: true }
+  }
   await authStore.initialize()
   const requiresAuth = to.matched.some((record) => record.meta.requiresAuth)
   const requiresEnabled = to.matched.some((record) => record.meta.requiresEnabled)
@@ -38,8 +50,14 @@ router.beforeEach(async (to) => {
   if (requiresAuth && !authStore.isAuthenticated) return { name: 'login' }
   if (requiresEnabled && !authStore.isEnabled) return { name: 'pending' }
   if (to.name === 'login' && authStore.isAuthenticated) {
+    if (sessionStorage.getItem('pendingInvitationToken')) return { name: 'join-team' }
     return authStore.isEnabled ? { name: 'assistant' } : { name: 'pending' }
   }
+  if (
+    to.name === 'pending'
+    && authStore.isAuthenticated
+    && sessionStorage.getItem('pendingInvitationToken')
+  ) return { name: 'join-team' }
 })
 
 export default router

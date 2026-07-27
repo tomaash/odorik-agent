@@ -2,16 +2,21 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import { db } from "../firestore.js";
 import type { ReviewInput } from "./schemas.js";
+import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 
 function nonEmpty(value: string | undefined): string | null {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
 }
 
-export async function reviewIntake(input: ReviewInput, actorUid: string) {
-  const requestRef = db.doc(`serviceRequests/${input.requestId}`);
-  const reviewRef = db.collection("reviews").doc();
-  const eventRef = db.collection("auditEvents").doc();
+export async function reviewIntake(
+  input: ReviewInput,
+  actorUid: string,
+  companyId: string,
+) {
+  const requestRef = db.doc(companyDocumentPath(companyId, "serviceRequests", input.requestId));
+  const reviewRef = db.collection(companyCollectionPath(companyId, "reviews")).doc();
+  const eventRef = db.collection(companyCollectionPath(companyId, "auditEvents")).doc();
 
   return db.runTransaction(async (transaction) => {
     const requestSnapshot = await transaction.get(requestRef);
@@ -33,9 +38,11 @@ export async function reviewIntake(input: ReviewInput, actorUid: string) {
     if (!contactId || !taskId || !processingRunId) {
       throw new TRPCError({ code: "INTERNAL_SERVER_ERROR", message: "Intake links are incomplete" });
     }
-    const contactRef = db.doc(`contacts/${contactId}`);
-    const taskRef = db.doc(`tasks/${taskId}`);
-    const processingRunRef = db.doc(`processingRuns/${processingRunId}`);
+    const contactRef = db.doc(companyDocumentPath(companyId, "contacts", contactId));
+    const taskRef = db.doc(companyDocumentPath(companyId, "tasks", taskId));
+    const processingRunRef = db.doc(
+      companyDocumentPath(companyId, "processingRuns", processingRunId),
+    );
     const [taskSnapshot, processingRunSnapshot] = await Promise.all([
       transaction.get(taskRef),
       transaction.get(processingRunRef),

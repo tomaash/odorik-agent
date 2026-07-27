@@ -21,6 +21,7 @@ See:
 - [Platform architecture](docs/PLATFORM_ARCHITECTURE.md)
 - [Implementation slices](docs/IMPLEMENTATION_SLICES.md)
 - [Factual agent, hybrid RAG, and evaluations](docs/RAG_AND_EVALS.md)
+- [MVP multi-tenancy](docs/MULTI_TENANCY.md)
 
 ## The product loop
 
@@ -53,7 +54,8 @@ approved.
 The existing vertical slice remains useful as a proving ground:
 
 - Odorik uploads completed call recordings to a private Cloud Run endpoint.
-- Audio is stored privately and processed with `gemini-3.1-flash-lite`.
+- Audio is stored privately, transcribed with Deepgram Nova-3, and summarized
+  with `gemini-3.5-flash-lite`.
 - Transcripts, summaries, speaker segments, and CRM extraction runs are stored
   in a named Firestore Enterprise database.
 - Enabled users sign in with Google and use a Vue 3 mobile-first application.
@@ -77,6 +79,12 @@ The existing vertical slice remains useful as a proving ground:
   incremental sync tokens, deletion propagation, and scheduled reconciliation.
 - Calls and calendar events normalize into company-scoped `ContextItem`
   documents before the same Qdrant indexing pipeline processes them.
+- All CRM, agent, connector, recording, and derived-search data is scoped to
+  the authenticated member's company.
+- Active team members can invite a verified Google email. A cold registration
+  without an invitation remains pending.
+- The MVP supports one team per user, `admin` and `member` roles, and no
+  self-service team creation or team switcher.
 - The new **Agent** screen is the default signed-in destination; the existing
   CRM remains available as Intake, Requests, and Contacts.
 
@@ -98,7 +106,7 @@ later be represented as one workflow package built on the generic kernel.
 - Google Cloud project: `odorik-tx-260720-c58d`
 - Region and Firestore location: `europe-west3`
 - Database: named Firestore Enterprise database `odorik`
-- Current model: `gemini-3.1-flash-lite`
+- Current model: `gemini-3.5-flash-lite`
 
 The former token dashboard remains deployed at
 <https://odorik-api-apf5skngva-ey.a.run.app> while the new platform direction
@@ -107,8 +115,14 @@ is developed.
 ## Access control
 
 Google sign-in authenticates identity but does not grant company access. On
-first sign-in, the API creates an access document with `enabled: false`. An
-administrator manually enables the person in Firestore.
+first sign-in, the API records the user without a company membership, leaving
+them pending. An active team member can email a seven-day invitation. The
+recipient must sign in with the exact verified Google email and accept it.
+
+Every authenticated application procedure derives `companyId` from the
+server-side active membership. The browser cannot select a company identifier.
+The first team is `Explorers`; Tom is its administrator and Josef and Katarina
+are members.
 
 Source configuration is restricted to application administrators. Enabled
 members can read company-visible normalized context through the authenticated
@@ -180,6 +194,11 @@ Connector deployments additionally use:
 - the exact hosted callback
   `https://odorik-tx-260720-c58d.web.app/oauth/google/callback`; and
 - a private `syncCalendarSources` scheduled function invoked every 30 minutes.
+
+Team invitation delivery additionally binds `RESEND_API_KEY` to the API
+function. `onboarding@resend.dev` is temporary and only suitable for
+Resend-account testing; verify a product domain before inviting arbitrary
+recipients.
 
 The Google OAuth application is currently in testing mode. Approved testers
 must be added in Google Auth Platform; test-mode refresh tokens expire after

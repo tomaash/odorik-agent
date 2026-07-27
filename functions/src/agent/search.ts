@@ -14,7 +14,7 @@ export function getQdrantCollection(
   const configured = environment.QDRANT_COLLECTION?.trim();
   if (configured) return configured;
   const isEmulated = environment.FUNCTIONS_EMULATOR === "true";
-  return isEmulated ? "company_context_dev_v4" : "company_context_v4";
+  return isEmulated ? "company_context_dev_v5" : "company_context_v5";
 }
 
 export const qdrantCollection = getQdrantCollection();
@@ -199,8 +199,8 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     url: string,
     private readonly apiKey: string,
     private readonly embedder: EmbeddingProvider,
+    private readonly companyId: string,
     private readonly collection = qdrantCollection,
-    private readonly companyId = "default",
   ) {
     this.baseUrl = url.replace(/\/$/, "");
   }
@@ -294,18 +294,41 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     for (const field of ["companyId", "kind", "recordId", "sourcePath"]) {
       await this.request(`/collections/${encodeURIComponent(this.collection)}/index?wait=true`, {
         method: "PUT",
-        body: JSON.stringify({ field_name: field, field_schema: "keyword" }),
+        body: JSON.stringify({
+          field_name: field,
+          field_schema: field === "companyId"
+            ? { type: "keyword", is_tenant: true }
+            : "keyword",
+        }),
       });
     }
   }
 
-  async replaceDocuments(documents: KnowledgeDocument[]): Promise<number> {
+  async replaceAllDocuments(documents: KnowledgeDocument[]): Promise<number> {
     await this.ensureCollection(true);
     await this.upsertDocuments(documents);
     return documents.length;
   }
 
+  async replaceTenantDocuments(documents: KnowledgeDocument[]): Promise<number> {
+    this.assertTenantDocuments(documents);
+    await this.ensureCollection();
+    await this.request(`/collections/${encodeURIComponent(this.collection)}/points/delete?wait=true`, {
+      method: "POST",
+      body: JSON.stringify({
+        filter: {
+          must: [
+            { key: "companyId", match: { value: this.companyId } },
+          ],
+        },
+      }),
+    });
+    await this.upsertDocuments(documents);
+    return documents.length;
+  }
+
   private async upsertDocuments(documents: KnowledgeDocument[]): Promise<void> {
+    this.assertTenantDocuments(documents);
     const batchSize = 8;
     for (let offset = 0; offset < documents.length; offset += batchSize) {
       const batch = documents.slice(offset, offset + batchSize);
@@ -364,6 +387,7 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     documents: KnowledgeDocument[],
     vectors: number[][],
   ): Promise<void> {
+    this.assertTenantDocuments(documents);
     const batchSize = 8;
     for (let offset = 0; offset < documents.length; offset += batchSize) {
       const batch = documents.slice(offset, offset + batchSize);
@@ -382,6 +406,12 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         }),
         signal: AbortSignal.timeout(120_000),
       });
+    }
+  }
+
+  private assertTenantDocuments(documents: KnowledgeDocument[]): void {
+    if (documents.some((document) => document.companyId !== this.companyId)) {
+      throw new Error("Refusing to index documents outside the active company");
     }
   }
 
@@ -442,7 +472,8 @@ export class QdrantHybridSearch implements KnowledgeSearch {
       if (
         !value || typeof value.id !== "string" || typeof value.kind !== "string" ||
         typeof value.recordId !== "string" || typeof value.sourcePath !== "string" ||
-        typeof value.title !== "string" || typeof value.text !== "string"
+        typeof value.title !== "string" || typeof value.text !== "string" ||
+        value.companyId !== this.companyId
       ) return [];
       return [{
         id: value.id,
@@ -485,6 +516,7 @@ export function qdrantConfigurationFromEnvironment(
 
 export function qdrantFromEnvironment(input: {
   geminiApiKey: string;
+  companyId: string;
 }): { search: QdrantRequiredSearch; qdrant?: QdrantHybridSearch } {
   const configuration = qdrantConfigurationFromEnvironment();
   const collection = getQdrantCollection();
@@ -493,6 +525,7 @@ export function qdrantFromEnvironment(input: {
       configuration.url,
       configuration.apiKey,
       new GeminiEmbedder(input.geminiApiKey),
+      input.companyId,
       collection,
     )
     : undefined;

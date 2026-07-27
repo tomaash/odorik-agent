@@ -15,6 +15,7 @@ type StorageEvent = {
 };
 
 const maxAudioBytes = 250 * 1024 * 1024;
+const legacyCompanyId = "explorers";
 const server = Fastify({ logger: true, bodyLimit: 1024 * 1024 });
 
 server.get("/health", async () => ({ ok: true, service: "transcription-processor" }));
@@ -28,10 +29,18 @@ server.post("/events/storage", async (request, reply) => {
     return reply.send({ ok: true, ignored: true });
   }
 
-  const callId = objectName.split("/")[1];
-  if (!callId) return reply.send({ ok: true, ignored: true });
+  const objectParts = objectName.split("/");
+  const isLegacyPath = objectParts.length === 3;
+  const companyId = isLegacyPath ? legacyCompanyId : objectParts[1];
+  const callId = isLegacyPath ? objectParts[1] : objectParts[2];
+  if (
+    !companyId
+    || !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(companyId)
+    || !callId
+    || callId.includes("/")
+  ) return reply.send({ ok: true, ignored: true });
 
-  const callRef = db().collection("calls").doc(callId);
+  const callRef = db().collection(`companies/${companyId}/calls`).doc(callId);
   let shouldProcess = false;
   await db().runTransaction(async (transaction) => {
     const snapshot = await transaction.get(callRef);
@@ -69,7 +78,9 @@ server.post("/events/storage", async (request, reply) => {
     const sttResult = await transcribeAudioWithDeepgram({
       audio,
       mimeType,
-      deepgramApiKey: process.env.DEEPGRAM_API_KEY,
+      ...(process.env.DEEPGRAM_API_KEY
+        ? { deepgramApiKey: process.env.DEEPGRAM_API_KEY }
+        : {}),
     });
 
     const summaryResult = await summarizeTranscriptWithGemini({
@@ -81,7 +92,7 @@ server.post("/events/storage", async (request, reply) => {
     await callRef.set(
       {
         status: "completed",
-        sttModel: "deepgram-nova-2",
+        sttModel: "deepgram-nova-3",
         summaryModel: geminiModel,
         model: geminiModel,
         language: summaryResult.language || sttResult.language,

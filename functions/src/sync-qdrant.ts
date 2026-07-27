@@ -24,9 +24,11 @@ export async function synchronizeKnowledgeRecord(input: {
   const kind = knowledgeKindForCollection(input.collection);
   if (!kind) return { skipped: true, reason: "collection_not_indexed" };
 
-  const repository = new FirestoreCompanyData(db, input.companyId || "default");
+  if (!input.companyId) throw new Error("companyId is required for knowledge-index synchronization");
+  const repository = new FirestoreCompanyData(db, input.companyId);
   const { qdrant } = qdrantFromEnvironment({
     geminiApiKey: input.geminiApiKey,
+    companyId: input.companyId,
   });
   if (!qdrant) {
     throw new Error("QDRANT_URL and QDRANT_API_KEY are required for knowledge-index synchronization");

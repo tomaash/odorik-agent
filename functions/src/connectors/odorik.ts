@@ -2,11 +2,21 @@ import { createHash } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 
-export const defaultCompanyId = "default";
 export const legacyOdorikConnectionId = "odorik-primary";
 
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
+}
+
+export function odorikDestinationUrl(
+  uploadUrl: string,
+  username: string,
+  password: string,
+): string {
+  const destination = new URL(uploadUrl);
+  destination.username = username;
+  destination.password = password;
+  return `${destination.toString()}!mp3`;
 }
 
 function text(value: unknown): string {
@@ -46,6 +56,7 @@ export function odorikContextItemId(connectionId: string, callId: string): strin
 export function odorikContextItem(
   callId: string,
   call: Record<string, unknown>,
+  companyId: string,
 ): Record<string, unknown> | null {
   if (call.status !== "completed" || !text(call.transcript) || call.contextEnabled === false) {
     return null;
@@ -79,7 +90,7 @@ export function odorikContextItem(
     segments: call.segments || [],
   });
   return {
-    companyId: defaultCompanyId,
+    companyId,
     kind: "call",
     source: {
       adapterId: "odorik",
@@ -105,7 +116,7 @@ export function odorikContextItem(
       sourceCallId: callId,
     },
     provenance: {
-      rawRef: `calls/${callId}`,
+      rawRef: `companies/${companyId}/calls/${callId}`,
       checksum: hash(contentForChecksum),
       ingestionVersion: "odorik-v1",
     },
@@ -114,23 +125,24 @@ export function odorikContextItem(
 }
 
 export async function projectOdorikCallContext(
+  companyId: string,
   callId: string,
   call: Record<string, unknown> | undefined,
 ): Promise<void> {
   const connectionId = text(call?.connectionId) || legacyOdorikConnectionId;
   const contextRef = db.doc(
-    `companies/${defaultCompanyId}/contextItems/${odorikContextItemId(connectionId, callId)}`,
+    `companies/${companyId}/contextItems/${odorikContextItemId(connectionId, callId)}`,
   );
   if (!call) {
     // A call may predate connection metadata. Querying by raw reference handles
     // deletion safely across both the legacy and connection-aware identifiers.
-    const existing = await db.collection(`companies/${defaultCompanyId}/contextItems`)
-      .where("provenance.rawRef", "==", `calls/${callId}`)
+    const existing = await db.collection(`companies/${companyId}/contextItems`)
+      .where("provenance.rawRef", "==", `companies/${companyId}/calls/${callId}`)
       .get();
     await Promise.all(existing.docs.map((document) => document.ref.delete()));
     return;
   }
-  const contextItem = odorikContextItem(callId, call);
+  const contextItem = odorikContextItem(callId, call, companyId);
   if (!contextItem) {
     await contextRef.delete();
     return;
