@@ -1,7 +1,10 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const config = useRuntimeConfig()
-const contact = useContactModal()
+
+// The modal owns the confirmation screen — this component only reports that the
+// submission landed, so the pitch above the form can be swapped out with it.
+const emit = defineEmits<{ success: [] }>()
 
 const form = reactive({
   name: '',
@@ -13,7 +16,7 @@ const form = reactive({
   website: '',
 })
 
-type Status = 'idle' | 'sending' | 'success' | 'error'
+type Status = 'idle' | 'sending' | 'error'
 const status = ref<Status>('idle')
 
 const runsOnOptions = computed(() =>
@@ -35,7 +38,7 @@ async function onSubmit() {
     // a 200 alone is not proof the submission was delivered.
     const body = await res.json().catch(() => null)
     if (!res.ok || body?.ok !== true) throw new Error(String(res.status))
-    status.value = 'success'
+    emit('success')
   } catch {
     status.value = 'error'
   }
@@ -44,7 +47,7 @@ async function onSubmit() {
 
 <template>
   <div>
-    <form v-if="status !== 'success'" class="space-y-4" @submit.prevent="onSubmit">
+    <form class="space-y-4" @submit.prevent="onSubmit">
       <input
         v-model="form.website"
         class="hidden"
@@ -121,12 +124,5 @@ async function onSubmit() {
         </p>
       </div>
     </form>
-
-    <div v-else class="py-2">
-      <p class="text-zinc-200">{{ t('form.success') }}</p>
-      <button type="button" class="btn-primary mt-6" @click="contact.close()">
-        {{ t('form.ok') }}
-      </button>
-    </div>
   </div>
 </template>

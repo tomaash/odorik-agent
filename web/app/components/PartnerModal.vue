@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
-const { isOpen, close } = useContactModal()
+const { isOpen, sent, close, markSent } = useContactModal()
 
 function onKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') close()
@@ -58,15 +58,21 @@ onBeforeUnmount(() => {
             </svg>
           </button>
 
-          <p class="eyebrow">{{ t('cta.eyebrow') }}</p>
-          <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">
-            {{ t('form.modalTitle') }}
-          </h2>
-          <p class="mt-2 text-zinc-400">{{ t('form.modalSubtitle') }}</p>
+          <template v-if="sent">
+            <p class="text-xl font-medium text-white">{{ t('form.success') }}</p>
+          </template>
 
-          <div class="mt-6">
-            <PartnerForm />
-          </div>
+          <template v-else>
+            <p class="eyebrow">{{ t('cta.eyebrow') }}</p>
+            <h2 class="mt-3 text-2xl font-semibold tracking-tight text-white">
+              {{ t('form.modalTitle') }}
+            </h2>
+            <p class="mt-2 text-zinc-400">{{ t('form.modalSubtitle') }}</p>
+
+            <div class="mt-6">
+              <PartnerForm @success="markSent()" />
+            </div>
+          </template>
         </div>
       </div>
     </Transition>
