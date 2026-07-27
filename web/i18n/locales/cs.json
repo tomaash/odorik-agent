@@ -156,13 +156,20 @@
     "email": "Pracovní e-mail",
     "company": "Firma",
     "runsOn": "Na čem váš tým dneska běží?",
-    "runsOnOptions": ["Hovory", "E-mail", "Práce v terénu", "Něco jiného"],
+    "runsOnOptions": [
+      "Hovory",
+      "E-mail",
+      "Práce v terénu",
+      "Něco jiného"
+    ],
     "message": "Cokoli, co bychom měli vědět (nepovinné)",
     "submit": "Odeslat",
     "sending": "Odesílám…",
     "success": "Díky, ozveme se.",
-    "mailFallback": "Otevíráme e-mail s vyplněnými údaji.",
-    "error": "Něco se pokazilo. Napište nám na"
+    "error": "Zprávu se nepodařilo odeslat. Zkuste to prosím za chvíli znovu.",
+    "modalTitle": "Staňte se pilotním partnerem",
+    "modalSubtitle": "Nechte nám pár údajů a ozveme se vám.",
+    "close": "Zavřít"
   },
   "how": {
     "eyebrow": "Jak to funguje",
@@ -196,7 +203,11 @@
       }
     ],
     "boundaryTitle": "Kde končí automat a začíná člověk",
-    "boundaryHead": ["Zápis", "Automaticky?", "Kdo za to ručí"],
+    "boundaryHead": [
+      "Zápis",
+      "Automaticky?",
+      "Kdo za to ručí"
+    ],
     "boundaryRows": [
       {
         "write": "Co přišlo zvenčí (hovor, událost v kalendáři)",
@@ -261,7 +272,7 @@
         "body": "Kdykoli si můžete vyžádat kopii svých údajů nebo jejich smazání. Napište nám a vyřídíme to."
       }
     ],
-    "contact": "Dotazy k soukromí:"
+    "contact": "Máte dotaz k soukromí?"
   },
   "footer": {
     "tagline": "AI odvede práci. Poslední slovo máte vy.",

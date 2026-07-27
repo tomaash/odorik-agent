@@ -88,6 +88,13 @@
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
         {
+          "source": "/api/partner-form",
+          "function": {
+            "functionId": "sendPartnerForm",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "**",
           "destination": "/index.html"
         }

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
+const contact = useContactModal()
 </script>
 
 <template>
@@ -11,9 +12,9 @@ const { t } = useI18n()
         <p class="text-lg font-semibold text-white">{{ t('cta.bandTitle') }}</p>
         <p class="mt-1 text-zinc-400">{{ t('cta.bandBody') }}</p>
       </div>
-      <NuxtLink to="/#design-partner" class="btn-primary shrink-0">
+      <button type="button" class="btn-primary shrink-0" @click="contact.open()">
         {{ t('cta.bandCta') }}
-      </NuxtLink>
+      </button>
     </div>
   </section>
 </template>

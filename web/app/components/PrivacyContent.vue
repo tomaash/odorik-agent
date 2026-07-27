@@ -1,6 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
-const paths = useSitePaths()
+const contact = useContactModal()
 
 useHead({
   title: t('meta.privacyTitle'),
@@ -27,12 +27,13 @@ useHead({
 
       <p class="mt-12 border-t border-white/10 pt-6 text-sm text-zinc-500">
         {{ t('privacy.contact') }}
-        <a
-          :href="`mailto:${paths.contactEmail.value}`"
+        <button
+          type="button"
           class="text-brand-300 underline underline-offset-4"
+          @click="contact.open()"
         >
-          {{ paths.contactEmail.value }}
-        </a>
+          {{ t('footer.contact') }}
+        </button>
       </p>
     </div>
   </section>

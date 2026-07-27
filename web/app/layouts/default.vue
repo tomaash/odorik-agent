@@ -1,5 +1,6 @@
 <script setup lang="ts">
 const { t, locale, locales, setLocale } = useI18n()
+const contact = useContactModal()
 const paths = useSitePaths()
 const route = useRoute()
 const router = useRouter()
@@ -115,12 +116,13 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <NuxtLink
-            to="/#design-partner"
+          <button
+            type="button"
             class="rounded-full bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+            @click="contact.open()"
           >
             {{ t('nav.cta') }}
-          </NuxtLink>
+          </button>
         </nav>
       </div>
     </header>
@@ -130,5 +132,7 @@ onBeforeUnmount(() => {
     </main>
 
     <AppFooter />
+
+    <PartnerModal />
   </div>
 </template>

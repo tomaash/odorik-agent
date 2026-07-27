@@ -17,6 +17,7 @@ import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.j
 import { db } from "./firestore.js";
 import { explorersCompanyId } from "./tenancy.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
+export { sendPartnerForm } from "./partner-form.js";
 
 export { api };
 
