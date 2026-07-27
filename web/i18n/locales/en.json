@@ -1,0 +1,272 @@
+{
+  "meta": {
+    "title": "Agent Erik — AI prepares the work. You make the call.",
+    "description": "Agent Erik turns your calls, email, and calendar into concrete proposed actions, each with its evidence. Approve, refine by voice, or reject in seconds, from anywhere.",
+    "howTitle": "How it works — Agent Erik",
+    "privacyTitle": "Privacy — Agent Erik"
+  },
+  "nav": {
+    "howItWorks": "How it works",
+    "cta": "Become a design partner",
+    "menu": "Menu"
+  },
+  "hero": {
+    "h1a": "AI prepares the work.",
+    "h1b": "You make the call.",
+    "sub": "Agent Erik turns your calls, email, and calendar into concrete proposed actions — each with its evidence attached. Approve, refine by voice, or reject in seconds, from wherever you are. Nothing consequential happens without your decision.",
+    "ctaPrimary": "Become a design partner",
+    "ctaSecondary": "See how it works",
+    "trust": [
+      "Built on Google Cloud",
+      "Data stays in europe-west3",
+      "Every decision is auditable"
+    ]
+  },
+  "card": {
+    "label": "Pending decision",
+    "time": "now",
+    "action": "Schedule follow-up with ACME Corp and draft a preliminary quote.",
+    "triggerLabel": "Trigger",
+    "trigger": "From today's 14:00 call with John Novák.",
+    "evidenceLabel": "Evidence",
+    "evidence": [
+      "John asked for pricing “by end of week” — 04:12 into the call.",
+      "No follow-up logged on the ACME account since 3 June."
+    ],
+    "consequence": "Creates 1 task · drafts 1 email · reversible",
+    "approve": "Approve",
+    "refine": "Refine",
+    "reject": "Reject"
+  },
+  "problem": {
+    "eyebrow": "The problem",
+    "h2": "Most AI pilots die in the gap between a good answer and a real action.",
+    "body": "Your agent can retrieve the right context and draft the right follow-up. Then it stops — because nobody sane lets software change a customer record, send a quote, or book a commitment on its own. So the work queues up behind whoever has time to open a dashboard. The bottleneck was never the model. It was the review.",
+    "items": [
+      {
+        "title": "Nobody wants another desktop chat window.",
+        "body": "Leaders don't work at a desk."
+      },
+      {
+        "title": "Dashboards are where decisions go to wait.",
+        "body": "Reviewing costs more than the task saved."
+      },
+      {
+        "title": "Nobody will accept silent AI writes.",
+        "body": "And they shouldn't."
+      }
+    ]
+  },
+  "shift": {
+    "eyebrow": "The shift",
+    "h2": "Turn oversight from a desk chore into a five-second habit.",
+    "body": "Agent Erik collapses every agent execution decision into one card you can act on with a thumb. The work is already prepared and sourced. Your job is the part only you can do: decide.",
+    "steps": [
+      {
+        "title": "Capture",
+        "body": "Phone calls, recordings, email, calendar, documents."
+      },
+      {
+        "title": "Prepare",
+        "body": "Retrieval across your company context, then a typed proposal with cited evidence."
+      },
+      {
+        "title": "Decide",
+        "body": "Approve and it executes. Refine by voice and it re-runs. Reject and it closes."
+      }
+    ]
+  },
+  "diff": {
+    "eyebrow": "The difference",
+    "h2": "What makes it different",
+    "colA": "Standard enterprise AI",
+    "colB": "Agent Erik",
+    "rows": [
+      {
+        "label": "What you get",
+        "a": "A text answer or a search summary",
+        "b": "A pending action, ready to authorize"
+      },
+      {
+        "label": "What goes in",
+        "a": "PDFs, docs, chat messages",
+        "b": "Phone calls and audio — real operational intent, captured before anyone writes it down"
+      },
+      {
+        "label": "How humans stay in control",
+        "a": "A web dashboard someone opens eventually",
+        "b": "A mobile decision card and a voice reply, in seconds"
+      },
+      {
+        "label": "How you pay",
+        "a": "Per seat, per month",
+        "b": "Usage-based. Approvers cost nothing to add"
+      }
+    ],
+    "note": "Passive search becomes an active execution pipeline — with a person on the authorizing end of it."
+  },
+  "anywhere": {
+    "eyebrow": "Anywhere",
+    "h2": "Stay in the loop without staying at your desk.",
+    "body": "The work doesn't wait for you to get back to a laptop, and you don't have to pretend to be available to keep things moving. Proposals arrive when they're ready. You handle them from a trailhead, a departure lounge, or between two meetings — with your thumb, your voice, and your judgment. That's the part of your job that doesn't delegate. Everything before it does.",
+    "voiceTitle": "The voice loop",
+    "voiceBody": "Reject something and just say why: “Price this at 12k, not 10.” Erik takes the correction, re-runs the work, and comes back with a revised proposal. No form, no typing, no context switch.",
+    "voiceQuote": "Price this at 12k, not 10."
+  },
+  "accountability": {
+    "eyebrow": "Accountability",
+    "h2": "Every decision has a name on it.",
+    "body": "An approval here isn't a flag in a database. It records who decided, exactly which version of the proposal they saw, what effects they authorized, and when. Agents read and prepare freely. Changing your business — or touching an outside system — takes one explicit human decision, every time.",
+    "items": [
+      {
+        "title": "Evidence, not vibes.",
+        "body": "Every proposal cites the source items it used."
+      },
+      {
+        "title": "No dark approvals.",
+        "body": "Consequential actions never hide behind a generic “continue”."
+      },
+      {
+        "title": "Versioned proposals.",
+        "body": "Request a change and you get a new immutable version, not a quietly edited one."
+      },
+      {
+        "title": "Reversibility is disclosed.",
+        "body": "The card tells you whether it can be undone."
+      }
+    ]
+  },
+  "start": {
+    "eyebrow": "Where it starts",
+    "h2": "Built first for teams that live on the phone.",
+    "body": "Agent Erik began inside a working phone system, where every completed call becomes governed company context: summarized, classified, quality-checked, routed, and turned into proposed follow-ups. Call centres and sales teams are where the value shows up fastest — but nothing in the platform assumes a phone call or a fixed CRM schema."
+  },
+  "cta": {
+    "eyebrow": "Design partners",
+    "h2": "We're taking on a small number of design partners.",
+    "body": "We're building this with a handful of companies who run real operational load through it and tell us where it breaks. You get direct influence over the product and pricing that reflects the risk of going early.",
+    "pricing": "Pricing is usage-based, never per seat — every approver you want in the loop costs nothing to add.",
+    "status": "Erik is in active development with our first design partners. Call ingestion, retrieval, and evidence are working today; the decision and execution loop is what we're building next — with you.",
+    "bandTitle": "Running real operational load and want to shape this?",
+    "bandBody": "We're taking design partners.",
+    "bandCta": "Get in touch"
+  },
+  "form": {
+    "name": "Your name",
+    "email": "Work email",
+    "company": "Company",
+    "runsOn": "What does your team run on today?",
+    "runsOnOptions": ["Calls", "Email", "Field ops", "Something else"],
+    "message": "Anything you want us to know (optional)",
+    "submit": "Send",
+    "sending": "Sending…",
+    "success": "Thanks — we'll be in touch shortly.",
+    "mailFallback": "Opening your mail app with the details filled in.",
+    "error": "Something went wrong. Email us at"
+  },
+  "how": {
+    "eyebrow": "How it works",
+    "h1": "How Agent Erik works",
+    "intro": "Three ideas do the work: everything that enters keeps its provenance; agents propose but never execute; and a person authorizes one specific version of one specific proposal.",
+    "loopsTitle": "The six loops",
+    "loops": [
+      {
+        "title": "Ingest",
+        "body": "Connectors pull in calls, calendars, documents, and messages. Every item keeps its source, timestamps, permissions, and original identity. Nothing is flattened into untraceable model memory."
+      },
+      {
+        "title": "Converse",
+        "body": "Ask, explain, delegate in a thread with shared company context. The thread is durable working context, not authoritative state."
+      },
+      {
+        "title": "Propose",
+        "body": "The agent produces a typed proposal: what it recommends, why, the evidence used, what's unknown, exactly what would change, and whether it's reversible."
+      },
+      {
+        "title": "Decide",
+        "body": "Approve · Reject · Request changes · Edit and approve. An approval records the person, the version, and the effects authorized."
+      },
+      {
+        "title": "Execute",
+        "body": "Only application-owned handlers change real state. They recheck membership, permissions, proposal version, preconditions, and idempotency first."
+      },
+      {
+        "title": "Learn",
+        "body": "Approval and rejection patterns improve the system without quietly widening any agent's authority."
+      }
+    ],
+    "boundaryTitle": "The responsibility boundary",
+    "boundaryHead": ["Write", "Automatic?", "Authority"],
+    "boundaryRows": [
+      {
+        "write": "Source observations (a received call, a synced event)",
+        "auto": "Yes",
+        "authority": "The connector and original source"
+      },
+      {
+        "write": "Derived state (transcripts, indexes, summaries, drafts)",
+        "auto": "Yes",
+        "authority": "Non-authoritative, with provenance"
+      },
+      {
+        "write": "Business mutations and external effects",
+        "auto": "No",
+        "authority": "One explicit human decision"
+      }
+    ],
+    "anatomyTitle": "Anatomy of a decision card",
+    "anatomy": [
+      {
+        "title": "Proposed action",
+        "body": "“Schedule follow-up with ACME Corp and draft a preliminary quote.”"
+      },
+      {
+        "title": "Trigger",
+        "body": "“From today's 14:00 call with John Novák.”"
+      },
+      {
+        "title": "Evidence",
+        "body": "Two bullets, each traceable to a source item."
+      },
+      {
+        "title": "Consequence",
+        "body": "Which systems change, and whether it's reversible."
+      },
+      {
+        "title": "Controls",
+        "body": "Approve · Refine (voice) · Reject. A gesture accelerates a decision; buttons and screen readers do the same job. Decisions are never gesture-only."
+      }
+    ],
+    "connectorsTitle": "Connectors",
+    "connectorsBody": "Read and action capabilities are granted separately — letting Erik read your calendar never implies permission to create an event. Live today: phone calls and recordings, Google Calendar, Google Drive. Email and messaging next."
+  },
+  "privacy": {
+    "h1": "Privacy",
+    "intro": "This page describes how the Agent Erik website handles your data. It is not yet reviewed by counsel and will be replaced before launch.",
+    "sections": [
+      {
+        "title": "What this site collects",
+        "body": "The marketing site is statically generated and sets no tracking cookies. The only personal data it handles is what you type into the design-partner form: your name, work email, company, and message."
+      },
+      {
+        "title": "What we do with it",
+        "body": "We use it to contact you about the design partner programme. We do not sell it and do not share it with third parties for their own marketing."
+      },
+      {
+        "title": "Where it lives",
+        "body": "Data is stored in Google Cloud in the europe-west3 region."
+      },
+      {
+        "title": "Your rights",
+        "body": "You can ask us for a copy of your data or ask us to delete it at any time. Write to us and we will action it."
+      }
+    ],
+    "contact": "Questions about privacy:"
+  },
+  "footer": {
+    "tagline": "AI prepares the work. You make the call.",
+    "privacy": "Privacy",
+    "contact": "Contact",
+    "rights": "All rights reserved."
+  }
+}

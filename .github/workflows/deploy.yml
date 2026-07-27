@@ -7,13 +7,20 @@ on:
       - 'frontend/**'
       - 'functions/**'
       - 'firebase.json'
+      - '.firebaserc'
       - 'firestore.rules'
       - 'firestore.indexes.json'
       - '.github/workflows/deploy.yml'
+  workflow_dispatch:
 
 permissions:
   contents: read
   id-token: write
+
+# Two pushes in a row must not race for the same sites.
+concurrency:
+  group: deploy-crm
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -36,5 +43,7 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
 
+      # Hosting targets are named explicitly: a bare `hosting` would also pick up
+      # the marketing site, whose build output this job never produces.
       - name: Deploy Firebase resources
-        run: npx firebase-tools@15.14.0 deploy --only functions:crm,firestore:odorik,hosting --project odorik-tx-260720-c58d --force
+        run: npx firebase-tools@15.14.0 deploy --only functions:crm,firestore:odorik,hosting:frontend,hosting:odorik-tx-260720-c58d --project odorik-tx-260720-c58d --force

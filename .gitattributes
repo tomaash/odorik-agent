@@ -1,0 +1,4 @@
+# Lockfiles are generated and must stay tracked (CI runs `npm ci` against them),
+# but their diffs are noise — 14k+ lines that bury the real changes.
+# `-diff` collapses them to a one-line "binary" notice in git diff / reviews.
+package-lock.json -diff linguist-generated=true
