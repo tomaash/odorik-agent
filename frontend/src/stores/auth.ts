@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import {
   GoogleAuthProvider,
+  getRedirectResult,
   onAuthStateChanged,
   signInWithPopup,
   signInWithRedirect,
@@ -24,6 +25,12 @@ export const useAuthStore = defineStore('auth', () => {
   function initialize() {
     if (initialization) return initialization
     initialization = new Promise<void>((resolve) => {
+      // Completes the signInWithRedirect fallback below. Without it a returning
+      // redirect resolves as signed out and the app bounces back to /login,
+      // and the failure reason stays invisible.
+      getRedirectResult(auth).catch((cause) => {
+        error.value = cause instanceof Error ? cause.message : String(cause)
+      })
       onAuthStateChanged(auth, async (currentUser) => {
         user.value = currentUser
         access.value = null
@@ -46,13 +53,17 @@ export const useAuthStore = defineStore('auth', () => {
     error.value = ''
     const provider = new GoogleAuthProvider()
     provider.setCustomParameters({ prompt: 'select_account' })
-    if (import.meta.env.DEV) {
+    try {
       const credential = await signInWithPopup(auth, provider)
       user.value = credential.user
       access.value = await registerAccess()
-      return
+    } catch (cause) {
+      if (cause instanceof Error && (cause as { code?: string }).code === 'auth/popup-blocked') {
+        await signInWithRedirect(auth, provider)
+        return
+      }
+      error.value = cause instanceof Error ? cause.message : String(cause)
     }
-    await signInWithRedirect(auth, provider)
   }
 
   async function refreshAccess() {
