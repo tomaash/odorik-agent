@@ -9,7 +9,8 @@ import {
 } from "./partner-form-message.js";
 
 const recipient = "tomas.holas@gmail.com";
-const sender = "Agent Erik <onboarding@resend.dev>";
+const sender = "Agent Erik <hello@agenterik.cz>";
+const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
 
 export const sendPartnerForm = onRequest(
   {
@@ -17,6 +18,7 @@ export const sendPartnerForm = onRequest(
     timeoutSeconds: 30,
     memory: "256MiB",
     maxInstances: 3,
+    serviceAccount: runtimeServiceAccount,
     secrets: [resendApiKey],
     cors: true,
   },

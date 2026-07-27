@@ -169,7 +169,8 @@
     "error": "Zprávu se nepodařilo odeslat. Zkuste to prosím za chvíli znovu.",
     "modalTitle": "Staňte se pilotním partnerem",
     "modalSubtitle": "Nechte nám pár údajů a ozveme se vám.",
-    "close": "Zavřít"
+    "close": "Zavřít",
+    "ok": "OK"
   },
   "how": {
     "eyebrow": "Jak to funguje",

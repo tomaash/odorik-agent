@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const config = useRuntimeConfig()
+const contact = useContactModal()
 
 const form = reactive({
   name: '',
@@ -30,7 +31,10 @@ async function onSubmit() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ ...form, locale: config.public.buildLocale }),
     })
-    if (!res.ok) throw new Error(String(res.status))
+    // A missing function makes Hosting answer the rewrite with an HTML page, so
+    // a 200 alone is not proof the submission was delivered.
+    const body = await res.json().catch(() => null)
+    if (!res.ok || body?.ok !== true) throw new Error(String(res.status))
     status.value = 'success'
   } catch {
     status.value = 'error'
@@ -118,12 +122,11 @@ async function onSubmit() {
       </div>
     </form>
 
-    <div v-else class="flex items-start gap-3 py-4">
-      <span
-        class="mt-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-brand-400 text-sm font-bold text-ink-950"
-        >✓</span
-      >
+    <div v-else class="py-2">
       <p class="text-zinc-200">{{ t('form.success') }}</p>
+      <button type="button" class="btn-primary mt-6" @click="contact.close()">
+        {{ t('form.ok') }}
+      </button>
     </div>
   </div>
 </template>
