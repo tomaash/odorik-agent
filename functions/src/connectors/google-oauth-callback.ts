@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import { onRequest } from "firebase-functions/v2/https";
 import { db } from "../firestore.js";
-import { defaultCompanyId } from "./odorik.js";
 import { exchangeGoogleAuthorization } from "./google-calendar.js";
 import { exchangeGoogleDriveAuthorization } from "./google-drive.js";
 import { googleOAuthReturnUrl } from "./google-oauth-return.js";
@@ -37,9 +36,7 @@ export const googleOAuthCallback = onRequest(
     let stateData: FirebaseFirestore.DocumentData | undefined;
     try {
       stateData = state
-        ? (await db.doc(
-          `companies/${defaultCompanyId}/oauthStates/${hash(state)}`,
-        ).get()).data()
+        ? (await db.doc(`oauthStates/${hash(state)}`).get()).data()
         : undefined;
     } catch (error) {
       console.error("Could not read Google OAuth return destination", error);

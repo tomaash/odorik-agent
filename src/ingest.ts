@@ -13,6 +13,7 @@ import {
 } from "./recording.js";
 import {
   authorizeOdorikUpload,
+  legacyCompanyId,
   legacyConnectionId,
   observeOdorikResource,
   odorikStoredCallId,
@@ -34,12 +35,14 @@ await server.register(multipart, {
 server.get("/health", async () => ({ ok: true, service: "odorik-ingest" }));
 
 async function receiveRecording(
+  companyId: string,
   connectionId: string,
   request: FastifyRequest,
   reply: FastifyReply,
 ) {
   try {
     await authorizeOdorikUpload({
+      companyId,
       connectionId,
       authorization: request.headers.authorization,
       legacyUsername: process.env.ODORIK_UPLOAD_USER?.trim(),
@@ -73,19 +76,19 @@ async function receiveRecording(
     return reply.code(400).send({ code: 400, description: "Missing record file" });
   }
 
-  const resource = await observeOdorikResource({ connectionId, fields });
+  const resource = await observeOdorikResource({ companyId, connectionId, fields });
   const externalCallId = recordingCallId(fields, originalFileName);
   const callId = odorikStoredCallId(connectionId, externalCallId);
   const fileName = safeFileName(originalFileName);
-  const objectName = `recordings/${callId}/${fileName}`;
+  const objectName = `recordings/${companyId}/${callId}/${fileName}`;
   const mimeType = audioMimeType(fileName, suppliedMimeType);
-  const callRef = db().collection("calls").doc(callId);
+  const callRef = db().collection(`companies/${companyId}/calls`).doc(callId);
   const now = Timestamp.now();
 
   await callRef.set(
     {
       status: "uploading",
-      companyId: "default",
+      companyId,
       connectionId,
       resourceId: resource.resourceId,
       contextEnabled: resource.contextEnabled,
@@ -117,6 +120,7 @@ async function receiveRecording(
     audio,
     contentType: mimeType,
     metadata: {
+      companyId,
       callId,
       externalCallId,
       from: fields.from || "",
@@ -164,17 +168,21 @@ async function receiveRecording(
 }
 
 server.post("/odorik/recordings", async (request, reply) => {
-  return receiveRecording(legacyConnectionId, request, reply);
+  return receiveRecording(legacyCompanyId, legacyConnectionId, request, reply);
 });
 
-server.post<{ Params: { connectionId: string } }>(
-  "/webhooks/odorik/:connectionId/recordings",
+server.post<{ Params: { companyId: string; connectionId: string } }>(
+  "/webhooks/odorik/:companyId/:connectionId/recordings",
   async (request, reply) => {
+    const companyId = request.params.companyId;
     const connectionId = request.params.connectionId;
-    if (!/^[a-zA-Z0-9_-]{1,100}$/.test(connectionId)) {
+    if (
+      !/^[a-z0-9][a-z0-9_-]{1,63}$/.test(companyId)
+      || !/^[a-zA-Z0-9_-]{1,100}$/.test(connectionId)
+    ) {
       return reply.code(404).send({ code: 404, description: "Connection not found" });
     }
-    return receiveRecording(connectionId, request, reply);
+    return receiveRecording(companyId, connectionId, request, reply);
   },
 );
 

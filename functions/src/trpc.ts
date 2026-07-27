@@ -1,19 +1,12 @@
 import { getAuth } from "firebase-admin/auth";
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { CreateHTTPContextOptions } from "@trpc/server/adapters/standalone";
-import { db } from "./firestore.js";
-
-export type AccessRecord = {
-  email: string;
-  displayName: string;
-  photoURL: string;
-  enabled: boolean;
-  admin: boolean;
-};
+import { requireTeamMembership, type TeamRole } from "./tenancy.js";
 
 export type Context = {
   uid: string;
   email: string;
+  emailVerified: boolean;
   displayName: string;
   photoURL: string;
 };
@@ -32,6 +25,7 @@ export async function createContext({ req }: CreateHTTPContextOptions): Promise<
     return {
       uid: decoded.uid,
       email: decoded.email || "",
+      emailVerified: decoded.email_verified === true,
       displayName: decoded.name || "",
       photoURL: decoded.picture || "",
     };
@@ -46,20 +40,25 @@ export const router = t.router;
 export const signedInProcedure = t.procedure;
 
 export const enabledProcedure = t.procedure.use(async ({ ctx, next }) => {
-  const access = await db.doc(`access/${ctx.uid}`).get();
-  if (!access.exists || access.data()?.enabled !== true) {
-    throw new TRPCError({ code: "FORBIDDEN", message: "PENDING_APPROVAL" });
-  }
+  const team = await requireTeamMembership(ctx.uid);
   return next({
     ctx: {
       ...ctx,
-      access: access.data() as AccessRecord,
+      companyId: team.companyId,
+      teamName: team.teamName,
+      role: team.role as TeamRole,
+      access: {
+        enabled: true,
+        admin: team.role === "admin",
+        companyId: team.companyId,
+        role: team.role,
+      },
     },
   });
 });
 
 export const adminProcedure = enabledProcedure.use(async ({ ctx, next }) => {
-  if (ctx.access.admin !== true) {
+  if (ctx.role !== "admin") {
     throw new TRPCError({ code: "FORBIDDEN", message: "Administrator access required" });
   }
   return next({ ctx });

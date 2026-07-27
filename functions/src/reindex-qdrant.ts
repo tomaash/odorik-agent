@@ -26,8 +26,9 @@ const [{ FirestoreCompanyData }, {
   import("./firestore.js"),
 ]);
 
-const repository = new FirestoreCompanyData(db);
-const { qdrant } = qdrantFromEnvironment({ geminiApiKey });
+const companyId = process.env.COMPANY_ID?.trim() || "explorers";
+const repository = new FirestoreCompanyData(db, companyId);
+const { qdrant } = qdrantFromEnvironment({ geminiApiKey, companyId });
 if (!qdrant) {
   throw new Error("QDRANT_URL (or QDRANT_CLUSTER_URL) and QDRANT_API_KEY are required");
 }
@@ -36,11 +37,8 @@ const documents = await repository.allDocuments();
 if (documents.length === 0) throw new Error("No eligible Firestore documents were found");
 
 const expectedChecksum = corpusChecksum(documents);
-const indexed = await qdrant.replaceDocuments(documents);
+const indexed = await qdrant.replaceTenantDocuments(documents);
 const stats = await qdrant.collectionStats();
-if (stats.pointsCount !== indexed) {
-  throw new Error(`Qdrant reconciliation failed: expected ${indexed} points, found ${stats.pointsCount}`);
-}
 
 const probe = documents.find((document) => document.kind === "contact") || documents[0]!;
 const probeHits = await qdrant.search({ query: probe.title, limit: 5 });
@@ -50,6 +48,7 @@ if (!probeHits.some((hit) => hit.sourcePath === probe.sourcePath)) {
 
 console.log(JSON.stringify({
   collection: qdrantCollection,
+  companyId,
   embeddingModel,
   embeddingDimensions,
   documents: documents.length,

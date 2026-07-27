@@ -76,8 +76,9 @@ All tRPC procedures derive `companyId` from an authorized membership; clients
 do not gain access by merely supplying a company identifier. Direct browser
 Firestore access remains denied.
 
-Existing top-level CRM collections remain a legacy vertical slice during the
-migration. New platform code should not expand them as generic contracts.
+The CRM, agent, connector, recording, and normalized context records now live
+below `companies/{companyId}`. Legacy top-level records remain temporarily as
+rollback data and are not read by the application.
 
 ## Core records
 
@@ -332,16 +333,17 @@ they never enter prompts or browser responses.
 provider payload
 → adapter validates the configured connection
 → raw or typed source record remains authoritative
-→ normalized companies/default/contextItems record
+→ normalized companies/{companyId}/contextItems record
 → Firestore write trigger
 → Gemini Embedding 2 and BM25 payload
-→ Qdrant company_context_v4
+→ tenant-filtered Qdrant company_context_v5
 → source-agnostic agent tools and citations
 ```
 
-The Odorik compatibility endpoint maps to `odorik-primary`; new accounts use
-`/webhooks/odorik/{connectionId}/recordings`. Non-legacy stored call IDs hash
-connection ID plus provider call ID, preventing cross-account collisions.
+The Odorik compatibility endpoint maps to Explorers and `odorik-primary`; new
+accounts use `/webhooks/odorik/{companyId}/{connectionId}/recordings`.
+Non-legacy stored call IDs hash connection ID plus provider call ID, preventing
+cross-account collisions.
 Phone-line resources are discovered from upload metadata and can be excluded
 from active context independently.
 

@@ -1,11 +1,12 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db, jsonSafe } from "../firestore.js";
 import { adapterCatalog } from "./registry.js";
+import { decryptCredentials } from "./credentials.js";
 import {
-  defaultCompanyId,
   legacyOdorikConnectionId,
   odorikContextItem,
   odorikContextItemId,
+  odorikDestinationUrl,
   odorikResourceIdentity,
 } from "./odorik.js";
 import type {
@@ -17,7 +18,11 @@ import type {
 const ingestBaseUrl = process.env.ODORIK_INGEST_BASE_URL?.trim()
   || "https://odorik-ingest-apf5skngva-ey.a.run.app";
 
-function connectionCollection(companyId = defaultCompanyId) {
+function odorikUploadUrl(companyId: string, connectionId: string): string {
+  return `${ingestBaseUrl}/webhooks/odorik/${companyId}/${connectionId}/recordings`;
+}
+
+function connectionCollection(companyId: string) {
   return db.collection(`companies/${companyId}/connections`);
 }
 
@@ -41,7 +46,7 @@ function publicResource(
   };
 }
 
-export async function listSources(companyId = defaultCompanyId) {
+export async function listSources(companyId: string) {
   const connectionsSnapshot = await connectionCollection(companyId)
     .orderBy("createdAt", "asc")
     .get();
@@ -67,7 +72,7 @@ export async function listSources(companyId = defaultCompanyId) {
       credentialMode: (auth.credentialMode || "none") as ConnectionPublicView["credentialMode"],
       accountLabel: typeof data.accountLabel === "string" ? data.accountLabel : undefined,
       uploadUrl: data.adapterId === "odorik"
-        ? `${ingestBaseUrl}/webhooks/odorik/${document.id}/recordings`
+        ? odorikUploadUrl(companyId, document.id)
         : undefined,
       lastSyncAt: typeof stats.lastSyncAt === "string" ? stats.lastSyncAt : null,
       lastObservedAt: typeof stats.lastObservedAt === "string"
@@ -92,6 +97,7 @@ export async function listSources(companyId = defaultCompanyId) {
 }
 
 export async function createOdorikConnection(input: {
+  companyId: string;
   displayName: string;
   accountLabel?: string;
   credentialCiphertext: string;
@@ -99,15 +105,14 @@ export async function createOdorikConnection(input: {
   createdBy: string;
   numbers: string[];
 }): Promise<{ connectionId: string; uploadUrl: string }> {
-  const connectionRef = connectionCollection().doc();
+  const connectionRef = connectionCollection(input.companyId).doc();
   const now = Timestamp.now();
   const batch = db.batch();
-  batch.set(db.doc(`companies/${defaultCompanyId}`), {
-    displayName: "Default company",
+  batch.set(db.doc(`companies/${input.companyId}`), {
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   batch.set(connectionRef, {
-    companyId: defaultCompanyId,
+    companyId: input.companyId,
     adapterId: "odorik",
     displayName: input.displayName,
     accountLabel: input.accountLabel || null,
@@ -139,16 +144,45 @@ export async function createOdorikConnection(input: {
   await batch.commit();
   return {
     connectionId: connectionRef.id,
-    uploadUrl: `${ingestBaseUrl}/webhooks/odorik/${connectionRef.id}/recordings`,
+    uploadUrl: odorikUploadUrl(input.companyId, connectionRef.id),
+  };
+}
+
+export async function getOdorikSetupDestination(input: {
+  companyId: string;
+  connectionId: string;
+  credentialKey: string;
+}): Promise<{ setupUrl: string }> {
+  const connection = await connectionCollection(input.companyId).doc(input.connectionId).get();
+  const data = connection.data();
+  if (
+    !connection.exists
+    || data?.adapterId !== "odorik"
+    || data?.auth?.credentialMode !== "encrypted"
+    || typeof data.credentialCiphertext !== "string"
+  ) {
+    throw new Error("Odorik setup address is not available for this connection");
+  }
+  const credentials = decryptCredentials(data.credentialCiphertext, input.credentialKey);
+  if (!credentials.username || !credentials.password) {
+    throw new Error("Odorik setup credentials are incomplete");
+  }
+  return {
+    setupUrl: odorikDestinationUrl(
+      odorikUploadUrl(input.companyId, input.connectionId),
+      credentials.username,
+      credentials.password,
+    ),
   };
 }
 
 export async function setConnectionStatus(
+  companyId: string,
   connectionId: string,
   status: "active" | "disconnected",
   actorUid: string,
 ): Promise<void> {
-  const ref = connectionCollection().doc(connectionId);
+  const ref = connectionCollection(companyId).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
   await ref.set({
@@ -159,10 +193,11 @@ export async function setConnectionStatus(
 }
 
 export async function prepareConnectionDeletion(
+  companyId: string,
   connectionId: string,
   actorUid: string,
 ): Promise<{ adapterId: AdapterId; displayName: string }> {
-  const ref = connectionCollection().doc(connectionId);
+  const ref = connectionCollection(companyId).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
   const data = snapshot.data() || {};
@@ -189,6 +224,7 @@ async function commitInChunks(
 }
 
 export async function deleteSourceConnection(input: {
+  companyId: string;
   connectionId: string;
   actorUid: string;
   adapterId: AdapterId;
@@ -202,15 +238,16 @@ export async function deleteSourceConnection(input: {
   sourceRecordsDisabled: number;
   providerAccessRevoked: boolean | null;
 }> {
-  const connectionRef = connectionCollection().doc(input.connectionId);
+  const connectionRef = connectionCollection(input.companyId).doc(input.connectionId);
   const [connection, resources, contextItems, calls] = await Promise.all([
     connectionRef.get(),
     connectionRef.collection("resources").get(),
-    db.collection(`companies/${defaultCompanyId}/contextItems`)
+    db.collection(`companies/${input.companyId}/contextItems`)
       .where("source.connectionId", "==", input.connectionId)
       .get(),
     input.adapterId === "odorik"
-      ? db.collection("calls").where("connectionId", "==", input.connectionId).get()
+      ? db.collection(`companies/${input.companyId}/calls`)
+        .where("connectionId", "==", input.connectionId).get()
       : Promise.resolve(null),
   ]);
   if (!connection.exists) throw new Error("Connection not found");
@@ -225,7 +262,7 @@ export async function deleteSourceConnection(input: {
     ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
   ]);
 
-  const auditRef = db.collection("auditEvents").doc();
+  const auditRef = db.collection(`companies/${input.companyId}/auditEvents`).doc();
   const batch = db.batch();
   batch.set(auditRef, {
     eventType: "source.connection_deleted",
@@ -253,12 +290,13 @@ export async function deleteSourceConnection(input: {
 }
 
 export async function setResourceStatus(input: {
+  companyId: string;
   connectionId: string;
   resourceId: string;
   enabled: boolean;
   actorUid: string;
 }): Promise<void> {
-  const connectionRef = connectionCollection().doc(input.connectionId);
+  const connectionRef = connectionCollection(input.companyId).doc(input.connectionId);
   const resourceRef = connectionRef.collection("resources").doc(input.resourceId);
   const [connection, resource] = await Promise.all([connectionRef.get(), resourceRef.get()]);
   if (!connection.exists || !resource.exists) throw new Error("Connection resource not found");
@@ -268,7 +306,7 @@ export async function setResourceStatus(input: {
     updatedBy: input.actorUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  const contextItems = await db.collection(`companies/${defaultCompanyId}/contextItems`)
+  const contextItems = await db.collection(`companies/${input.companyId}/contextItems`)
     .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resourceId)
     .get();
@@ -288,14 +326,14 @@ export async function setResourceStatus(input: {
   await batch.commit();
 }
 
-export async function migrateLegacyOdorik(actorUid: string): Promise<{
+export async function migrateLegacyOdorik(companyId: string, actorUid: string): Promise<{
   connectionId: string;
   calls: number;
   resources: number;
   contextItems: number;
 }> {
-  const connectionRef = connectionCollection().doc(legacyOdorikConnectionId);
-  const calls = await db.collection("calls").limit(1000).get();
+  const connectionRef = connectionCollection(companyId).doc(legacyOdorikConnectionId);
+  const calls = await db.collection(`companies/${companyId}/calls`).limit(1000).get();
   const now = Timestamp.now();
   const resources = new Map<string, ReturnType<typeof odorikResourceIdentity>>();
   let contextItems = 0;
@@ -306,12 +344,11 @@ export async function migrateLegacyOdorik(actorUid: string): Promise<{
 
   const writes: Array<(batch: FirebaseFirestore.WriteBatch) => void> = [];
   writes.push((batch) => {
-    batch.set(db.doc(`companies/${defaultCompanyId}`), {
-      displayName: "Default company",
+    batch.set(db.doc(`companies/${companyId}`), {
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     batch.set(connectionRef, {
-      companyId: defaultCompanyId,
+      companyId,
       adapterId: "odorik",
       displayName: "Primary Odorik account",
       status: "active",
@@ -357,7 +394,7 @@ export async function migrateLegacyOdorik(actorUid: string): Promise<{
   for (const call of calls.docs) {
     const resource = odorikResourceIdentity(call.data());
     writes.push((batch) => batch.set(call.ref, {
-      companyId: defaultCompanyId,
+      companyId,
       connectionId: connectionRef.id,
       resourceId: resource.resourceId,
       contextEnabled: true,
@@ -374,11 +411,11 @@ export async function migrateLegacyOdorik(actorUid: string): Promise<{
       connectionId: connectionRef.id,
       resourceId: resource.resourceId,
       contextEnabled: true,
-    });
+    }, companyId);
     if (contextItem) {
       contextItems += 1;
       writes.push((batch) => batch.set(
-        db.doc(`companies/${defaultCompanyId}/contextItems/${odorikContextItemId(connectionRef.id, call.id)}`),
+        db.doc(`companies/${companyId}/contextItems/${odorikContextItemId(connectionRef.id, call.id)}`),
         contextItem,
         { merge: false },
       ));

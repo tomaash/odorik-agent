@@ -2,7 +2,6 @@ import { createHash, randomBytes } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
-import { defaultCompanyId } from "./odorik.js";
 import { revokeGoogleToken } from "./google-calendar.js";
 import {
   defaultGoogleRedirectUri,
@@ -67,8 +66,8 @@ function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function connectionRef(connectionId: string) {
-  return db.doc(`companies/${defaultCompanyId}/connections/${connectionId}`);
+function connectionRef(companyId: string, connectionId: string) {
+  return db.doc(`companies/${companyId}/connections/${connectionId}`);
 }
 
 function folderResourceId(folderId: string): string {
@@ -94,6 +93,7 @@ function requireGoogleSuccess<T>(response: Response, body: T & { error?: unknown
 }
 
 export async function createDriveAuthorization(input: {
+  companyId: string;
   uid: string;
   email: string;
   displayName: string;
@@ -104,7 +104,8 @@ export async function createDriveAuthorization(input: {
   const stateHash = hash(state);
   const now = Timestamp.now();
   const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
-  await db.doc(`companies/${defaultCompanyId}/oauthStates/${stateHash}`).set({
+  await db.doc(`oauthStates/${stateHash}`).set({
+    companyId: input.companyId,
     provider: "google_drive",
     uid: input.uid,
     email: input.email,
@@ -130,10 +131,11 @@ export async function createDriveAuthorization(input: {
 }
 
 export async function revokeGoogleDriveAuthorization(input: {
+  companyId: string;
   connectionId: string;
   credentialKey: string;
 }): Promise<boolean> {
-  const connection = await connectionRef(input.connectionId).get();
+  const connection = await connectionRef(input.companyId, input.connectionId).get();
   const data = connection.data();
   if (
     !connection.exists
@@ -155,9 +157,7 @@ export async function exchangeGoogleDriveAuthorization(input: {
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ connectionId: string }> {
-  const stateRef = db.doc(
-    `companies/${defaultCompanyId}/oauthStates/${hash(input.state)}`,
-  );
+  const stateRef = db.doc(`oauthStates/${hash(input.state)}`);
   const stateSnapshot = await stateRef.get();
   const stateData = stateSnapshot.data();
   const expiresAt = stateData?.expiresAt instanceof Timestamp
@@ -166,6 +166,7 @@ export async function exchangeGoogleDriveAuthorization(input: {
   if (
     !stateSnapshot.exists
     || stateData?.provider !== "google_drive"
+    || typeof stateData?.companyId !== "string"
     || expiresAt < Date.now()
   ) {
     throw new Error("The Google Drive authorization request is invalid or expired");
@@ -205,7 +206,8 @@ export async function exchangeGoogleDriveAuthorization(input: {
     || "unknown Google Drive account",
   );
 
-  const connections = db.collection(`companies/${defaultCompanyId}/connections`);
+  const companyId = String(stateData.companyId);
+  const connections = db.collection(`companies/${companyId}/connections`);
   const existingConnections = await connections
     .where("adapterId", "==", "google_drive")
     .get();
@@ -223,7 +225,7 @@ export async function exchangeGoogleDriveAuthorization(input: {
   const batch = db.batch();
   batch.delete(stateRef);
   batch.set(connection, {
-    companyId: defaultCompanyId,
+    companyId,
     adapterId: "google_drive",
     displayName: "Google Drive",
     accountLabel: providerAccountId,
@@ -278,12 +280,13 @@ async function refreshDriveToken(input: {
 }
 
 async function authorizedDriveConnection(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ accessToken: string; connection: FirebaseFirestore.DocumentSnapshot }> {
-  const connection = await connectionRef(input.connectionId).get();
+  const connection = await connectionRef(input.companyId, input.connectionId).get();
   const data = connection.data();
   if (
     !connection.exists
@@ -343,6 +346,7 @@ export async function fetchDriveFolders(accessToken: string): Promise<DriveFileE
 }
 
 export async function listGoogleDriveFolders(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
@@ -377,6 +381,7 @@ export async function listGoogleDriveFolders(input: {
 }
 
 export async function selectGoogleDriveFolders(input: {
+  companyId: string;
   connectionId: string;
   folderIds: string[];
   clientId: string;
@@ -429,7 +434,7 @@ export async function selectGoogleDriveFolders(input: {
     if (!selectedSet.has(folderId)) {
       batch.delete(doc.ref);
       // Remove all normalized context items for this folder
-      const contextItems = await db.collection(`companies/${defaultCompanyId}/contextItems`)
+      const contextItems = await db.collection(`companies/${input.companyId}/contextItems`)
         .where("source.connectionId", "==", input.connectionId)
         .where("source.resourceId", "==", folderId)
         .get();
@@ -444,6 +449,7 @@ export async function selectGoogleDriveFolders(input: {
   // Sync newly selected folders
   for (const folderId of foldersToSync) {
     await syncDriveFolder({
+      companyId: input.companyId,
       connectionId: input.connectionId,
       folderId,
       accessToken,
@@ -454,6 +460,7 @@ export async function selectGoogleDriveFolders(input: {
 }
 
 export async function syncDriveFolder(input: {
+  companyId: string;
   connectionId: string;
   folderId: string;
   accessToken: string;
@@ -528,10 +535,10 @@ export async function syncDriveFolder(input: {
       }
 
       const itemId = driveContextItemId(input.connectionId, input.folderId, file.id);
-      const itemRef = db.doc(`companies/${defaultCompanyId}/contextItems/${itemId}`);
+      const itemRef = db.doc(`companies/${input.companyId}/contextItems/${itemId}`);
 
       await itemRef.set({
-        companyId: defaultCompanyId,
+        companyId: input.companyId,
         kind: "document",
         source: {
           adapterId: "google_drive",
@@ -562,7 +569,10 @@ export async function syncDriveFolder(input: {
   } while (pageToken);
 
   // Update resource item count and timestamp
-  const resourceRef = connectionRef(input.connectionId).collection("resources").doc(resourceId);
+  const resourceRef = connectionRef(
+    input.companyId,
+    input.connectionId,
+  ).collection("resources").doc(resourceId);
   await resourceRef.set({
     stats: { itemCount: syncedCount },
     lastObservedAt: now.toDate().toISOString(),
@@ -573,6 +583,7 @@ export async function syncDriveFolder(input: {
 }
 
 export async function syncGoogleDriveConnection(input: {
+  companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
@@ -588,6 +599,7 @@ export async function syncGoogleDriveConnection(input: {
   for (const doc of resources.docs) {
     const externalId = String(doc.data().externalId);
     const result = await syncDriveFolder({
+      companyId: input.companyId,
       connectionId: input.connectionId,
       folderId: externalId,
       accessToken,

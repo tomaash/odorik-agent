@@ -42,7 +42,9 @@ async function signOut() {
           </span>
           <div class="min-w-0">
             <div class="font-bold leading-tight truncate">{{ $t('app.name') }}</div>
-            <div class="text-xs text-surface-400 truncate">{{ $t('app.subtitle') }}</div>
+            <div class="text-xs text-surface-400 truncate">
+              {{ authStore.access?.teamName || $t('app.subtitle') }}
+            </div>
           </div>
         </router-link>
         <nav class="hidden md:flex items-center gap-1 bg-surface-100 rounded-xl p-1" :aria-label="$t('nav.primary')">
@@ -73,6 +75,14 @@ async function signOut() {
             class="hidden min-[360px]:inline-flex"
           />
           <span class="hidden md:block text-sm font-medium">{{ authStore.user?.displayName }}</span>
+          <router-link
+            to="/team"
+            class="w-10 h-10 rounded-full inline-flex items-center justify-center text-surface-500 hover:text-emerald-800 hover:bg-emerald-50 transition"
+            :aria-label="$t('team.manage')"
+            :title="$t('team.manage')"
+          >
+            <i class="pi pi-users" />
+          </router-link>
           <Button icon="pi pi-sign-out" severity="secondary" text rounded v-tooltip="$t('app.signOut')" @click="signOut" />
         </div>
       </div>

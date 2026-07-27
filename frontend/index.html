@@ -5,9 +5,68 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#12372a" />
     <title>Odorik CRM</title>
+    <style>
+      html, body {
+        margin: 0;
+        min-height: 100%;
+      }
+      .app-boot {
+        align-items: center;
+        background:
+          radial-gradient(circle at 50% 18%, rgba(47, 133, 90, .14), transparent 24rem),
+          #f4f7f5;
+        color: #17211c;
+        display: flex;
+        flex-direction: column;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        gap: 1rem;
+        justify-content: center;
+        min-height: 100vh;
+      }
+      .app-boot__mark {
+        align-items: center;
+        background: #12372a;
+        border-radius: 1.25rem;
+        box-shadow: 0 1rem 3rem rgba(18, 55, 42, .18);
+        color: #fff;
+        display: flex;
+        font-size: 1.35rem;
+        font-weight: 750;
+        height: 3.75rem;
+        justify-content: center;
+        letter-spacing: -.04em;
+        width: 3.75rem;
+      }
+      .app-boot__spinner {
+        animation: app-boot-spin .8s linear infinite;
+        border: 3px solid rgba(18, 55, 42, .14);
+        border-radius: 999px;
+        border-top-color: #2f855a;
+        height: 1.5rem;
+        width: 1.5rem;
+      }
+      .app-boot__label {
+        color: #607069;
+        font-size: .875rem;
+        font-weight: 600;
+        margin: 0;
+      }
+      @keyframes app-boot-spin {
+        to { transform: rotate(360deg); }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .app-boot__spinner { animation: none; }
+      }
+    </style>
   </head>
   <body>
-    <div id="app"></div>
+    <div id="app">
+      <main class="app-boot" role="status" aria-live="polite">
+        <div class="app-boot__mark" aria-hidden="true">CA</div>
+        <div class="app-boot__spinner" aria-hidden="true"></div>
+        <p class="app-boot__label">Načítám Company Agent…</p>
+      </main>
+    </div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -40,7 +40,7 @@ question
   - exact record lookup;
   - filtered record listing; and
   - exact count/group aggregation.
-- Bounded Gemini 3.1 Flash-Lite tool loop.
+- Bounded Gemini 3.5 Flash-Lite tool loop.
 - Forced tool use on the first turn.
 - Structured final answers with source-ID validation.
 - Prompt-injection boundary: retrieved data is evidence, never instructions.
@@ -61,7 +61,8 @@ question
   yet expose a dead-letter queue or freshness service-level metric.
 - Full reconciliation still deletes and rebuilds the target collection rather
   than building a shadow collection and switching an alias.
-- Firestore projections are single-company and bounded for the spike.
+- Firestore projections and Qdrant operations are company scoped. Per-member
+  source ACLs remain future work.
 - Conversation history is shared but there is no thread management yet.
 - The evaluation set is intentionally small and synthetic; it establishes the
   harness, not production quality.
@@ -90,7 +91,8 @@ backfill, and per-record synchronization are implemented. Remaining work:
 - measure and alert on source-to-index freshness;
 - build a shadow collection and switch an alias for zero-downtime migrations;
 - separate raw source records from derived chunks and embedding versions;
-- implement company scoping and source permissions before a second company;
+- add restricted per-member source permissions before sharing sensitive
+  sources inside a company;
 - add corpus-size, freshness, and missing-index evaluations; and
 - expand the labeled query set from real usage.
 

@@ -35,7 +35,7 @@ async function signOut() {
       <template #content>
         <div class="p-5 sm:p-9 text-center">
           <div class="w-16 h-16 mx-auto rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mb-6">
-            <i class="pi pi-lock text-2xl" />
+            <i class="pi pi-users text-2xl" />
           </div>
           <h1 class="text-2xl sm:text-3xl font-semibold mb-3 break-words">{{ $t('pending.title') }}</h1>
           <p class="text-surface-500 leading-relaxed mb-6">{{ $t('pending.description') }}</p>

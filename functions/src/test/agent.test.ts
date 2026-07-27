@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentModel, ModelTurn } from "../agent/gemini.js";
 import { parseAgentFinal, runFactAgent } from "../agent/loop.js";
+import { chunkRecord } from "../agent/knowledge.js";
 import {
   bm25Search,
   embeddingDimensions,
@@ -167,8 +168,8 @@ test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", as
 });
 
 test("Qdrant uses one float16 dense-vector representation and environment-aware collection naming", () => {
-  assert.equal(getQdrantCollection({}), "company_context_v4");
-  assert.equal(getQdrantCollection({ FUNCTIONS_EMULATOR: "true" }), "company_context_dev_v4");
+  assert.equal(getQdrantCollection({}), "company_context_v5");
+  assert.equal(getQdrantCollection({ FUNCTIONS_EMULATOR: "true" }), "company_context_dev_v5");
   assert.equal(getQdrantCollection({ QDRANT_COLLECTION: "custom_context_v1" }), "custom_context_v1");
   assert.deepEqual(qdrantDenseVectorConfig, {
     size: 1536,
@@ -213,6 +214,7 @@ test("record synchronization removes stale chunks before upserting the current p
         embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
         embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
       },
+      "default",
     );
     const result = await search.synchronizeRecord({
       kind: "contact",
@@ -241,6 +243,12 @@ test("record synchronization removes stale chunks before upserting the current p
   assert.match(JSON.stringify(deletion.body), /eva/);
   assert.ok(upsert);
   assert.match(JSON.stringify(upsert.body), /contact:eva:0/);
+  assert.match(JSON.stringify(upsert.body), /default:contact:eva:0/);
+  assert.deepEqual(
+    ((deletion.body?.filter as Record<string, unknown>)?.must as Array<Record<string, unknown>>)
+      .map((condition) => condition.key),
+    ["companyId", "kind", "recordId"],
+  );
 });
 
 test("fresh Qdrant collections use float16 without scalar quantization", async () => {
@@ -274,6 +282,7 @@ test("fresh Qdrant collections use float16 without scalar quantization", async (
         embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
         embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
       },
+      "default",
     );
     await search.ensureCollection();
   } finally {
@@ -286,6 +295,14 @@ test("fresh Qdrant collections use float16 without scalar quantization", async (
   const vectors = creation.body?.vectors as Record<string, unknown>;
   assert.deepEqual(vectors.dense, qdrantDenseVectorConfig);
   assert.equal(creation.body?.quantization_config, undefined);
+  const companyIndex = requests.find((request) => (
+    request.path.endsWith("/index")
+    && request.body?.field_name === "companyId"
+  ));
+  assert.deepEqual(companyIndex?.body?.field_schema, {
+    type: "keyword",
+    is_tenant: true,
+  });
 });
 
 test("dense prefetch searches float16 vectors without quantization parameters", async () => {
@@ -322,6 +339,7 @@ test("dense prefetch searches float16 vectors without quantization parameters", 
         embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
         embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
       },
+      "default",
     );
     assert.deepEqual(await search.search({ query: "Christmas holiday", limit: 5 }), []);
   } finally {
@@ -333,6 +351,105 @@ test("dense prefetch searches float16 vectors without quantization parameters", 
   const prefetch = query.body?.prefetch as Array<Record<string, unknown>>;
   assert.equal(prefetch[0]?.params, undefined);
   assert.equal(prefetch[1]?.params, undefined);
+  assert.match(JSON.stringify(prefetch), /"companyId"/);
+  assert.match(JSON.stringify(prefetch), /"default"/);
+});
+
+test("tenant chunk IDs are distinct for the same record and Qdrant rejects mixed-tenant writes", async () => {
+  const record = {
+    kind: "contact" as const,
+    recordId: "same-id",
+    sourcePath: "contacts/same-id",
+    title: "Same contact",
+    occurredAt: null,
+    data: { email: "person@example.com" },
+  };
+  const alpha = chunkRecord(record, "alpha");
+  const beta = chunkRecord(record, "beta");
+  assert.notEqual(alpha[0]?.id, beta[0]?.id);
+  assert.equal(alpha[0]?.companyId, "alpha");
+  assert.equal(beta[0]?.companyId, "beta");
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    result: {
+      config: {
+        params: { vectors: { dense: qdrantDenseVectorConfig } },
+        quantization_config: null,
+      },
+    },
+    status: "ok",
+  }), {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+      "alpha",
+    );
+    await assert.rejects(
+      search.replaceTenantDocuments(beta),
+      /outside the active company/,
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("Qdrant drops payloads from another company even if the provider returns them", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input) => {
+    const path = new URL(String(input)).pathname;
+    return new Response(JSON.stringify({
+      result: path.endsWith("/points/query")
+        ? {
+            points: [{
+              score: 1,
+              payload: {
+                id: "beta:contact:same-id:0",
+                companyId: "beta",
+                kind: "contact",
+                recordId: "same-id",
+                sourcePath: "companies/beta/contacts/same-id",
+                title: "Private beta contact",
+                text: "Must not cross the tenant boundary",
+              },
+            }],
+          }
+        : {
+            config: {
+              params: { vectors: { dense: qdrantDenseVectorConfig } },
+              quantization_config: null,
+            },
+          },
+      status: "ok",
+    }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+      "alpha",
+    );
+    assert.deepEqual(await search.search({ query: "private contact" }), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("parses structured final answers and recovers citation IDs from plain text", () => {

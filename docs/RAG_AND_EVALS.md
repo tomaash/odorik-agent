@@ -2,7 +2,7 @@
 
 ## What is implemented
 
-The factual assistant is a bounded application loop around Gemini 3.1
+The factual assistant is a bounded application loop around Gemini 3.5
 Flash-Lite. It is not an unconstrained autonomous agent and has no write tools.
 
 On each question:
@@ -53,7 +53,7 @@ as `title: … | text: …`, while questions use
 `task: search result | query: …`, following Google's asymmetric retrieval
 guidance. Embedding 2 automatically normalizes the vectors. Its embedding
 space is incompatible with `gemini-embedding-001`, so the migration uses the
-versioned `company_context_v4` collection and re-embeds the entire corpus. See the
+versioned `company_context_v5` collection and re-embeds the entire corpus. See the
 [Gemini embedding guide](https://ai.google.dev/gemini-api/docs/embeddings) and
 [model page](https://ai.google.dev/gemini-api/docs/models/gemini-embedding-2).
 
@@ -90,7 +90,7 @@ Collection creation enforces:
 
 The application does not round or cast Gemini embedding values itself. The
 datatype is a collection-schema decision, so this migration builds the fresh
-`company_context_v4` collection and cuts over only after retrieval verification.
+`company_context_v5` collection and cuts over only after retrieval verification.
 See Qdrant's [vector datatype documentation](https://qdrant.tech/documentation/concepts/vectors/#vector-datatypes).
 
 ### Fusion and “weighting”
@@ -141,14 +141,14 @@ these from `.env`. The Firebase API and synchronization trigger receive both
 values through Secret Manager. The URL is not sensitive, but using the same
 binding mechanism avoids an interactive runtime-parameter prompt in CI.
 
-An application administrator can call `assistant.reindex` to create a fresh
-`company_context_v4` collection and rebuild it from safe Firestore records.
-The rebuild deliberately replaces the collection so stale chunks cannot
-survive.
+An application administrator can call `assistant.reindex` to replace only
+their company's points in `company_context_v5` from safe Firestore records.
+Every Qdrant operation is filtered by the server-resolved company ID; the
+shared collection uses a tenant keyword index on that payload.
 
 Normal index freshness is event-driven. A retry-enabled Firestore
-`onDocumentWritten` trigger observes every top-level write in the named
-`odorik` database and selects the seven allowlisted record collections. It
+`onDocumentWritten` trigger observes every direct company-data write in the
+named `odorik` database and selects the allowlisted record collections. It
 re-reads the current Firestore record, deletes every Qdrant chunk for that
 record identity, and upserts the newly generated chunks. Deleting a Firestore
 record removes its chunks. Re-reading the source makes retries idempotent and

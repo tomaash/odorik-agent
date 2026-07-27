@@ -7,6 +7,7 @@ source infra/project.env
 : "${ODORIK_UPLOAD_USER:?Set ODORIK_UPLOAD_USER}"
 : "${ODORIK_UPLOAD_PASSWORD:?Set ODORIK_UPLOAD_PASSWORD}"
 : "${GEMINI_API_KEY:?Set GEMINI_API_KEY}"
+: "${DEEPGRAM_API_KEY:?Set DEEPGRAM_API_KEY}"
 
 IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REPOSITORY/app:$(date -u +%Y%m%d%H%M%S)"
 
@@ -23,6 +24,7 @@ upsert_secret dashboard-token "$DASHBOARD_TOKEN"
 upsert_secret odorik-upload-user "$ODORIK_UPLOAD_USER"
 upsert_secret odorik-upload-password "$ODORIK_UPLOAD_PASSWORD"
 upsert_secret gemini-api-key "$GEMINI_API_KEY"
+upsert_secret DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY"
 if [[ -n "${CONNECTOR_CREDENTIAL_KEY:-}" ]]; then
   upsert_secret CONNECTOR_CREDENTIAL_KEY "$CONNECTOR_CREDENTIAL_KEY"
 fi
@@ -47,10 +49,14 @@ gcloud secrets add-iam-policy-binding gemini-api-key \
   --member="serviceAccount:odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
   --role=roles/secretmanager.secretAccessor \
   --project="$PROJECT_ID" >/dev/null
+gcloud secrets add-iam-policy-binding DEEPGRAM_API_KEY \
+  --member="serviceAccount:odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role=roles/secretmanager.secretAccessor \
+  --project="$PROJECT_ID" >/dev/null
 
 gcloud builds submit --tag="$IMAGE" --project="$PROJECT_ID"
 
-COMMON_ENV="PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DATABASE_ID,GEMINI_MODEL=gemini-3.1-flash-lite"
+COMMON_ENV="PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DATABASE_ID,GEMINI_MODEL=gemini-3.5-flash-lite"
 
 gcloud run deploy odorik-api \
   --image="$IMAGE" \
@@ -88,7 +94,7 @@ gcloud run deploy odorik-processor \
   --region="$REGION" \
   --service-account="odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
   --set-env-vars="$COMMON_ENV" \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest" \
+  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest" \
   --no-allow-unauthenticated \
   --min=0 \
   --max=3 \

@@ -23,11 +23,12 @@ be rebuilt.
 ## Firestore records
 
 ```text
-companies/default
+companies/{companyId}
   connections/{connectionId}
     resources/{resourceId}
   contextItems/{contextItemId}
-  oauthStates/{stateHash}
+
+oauthStates/{stateHash}
 ```
 
 A context item records company and source kind; adapter, connection, resource,
@@ -46,13 +47,23 @@ It maps to `odorik-primary` and uses the existing Cloud Run Basic-auth secrets.
 A new account uses:
 
 ```text
-POST /webhooks/odorik/{connectionId}/recordings
+POST /webhooks/odorik/{companyId}/{connectionId}/recordings
 ```
 
-The connection username and password are encrypted in Firestore. The ingest
-service decrypts them only while authenticating that request. Calls from
-different accounts cannot collide: non-legacy Firestore IDs derive from
-connection ID plus provider call ID.
+The application generates the connection username and password and presents an
+administrator with one paste-ready Odorik destination:
+
+```text
+https://{user}:{password}@{host}/webhooks/odorik/{companyId}/{connectionId}/recordings!mp3
+```
+
+For every Odorik line to import, paste that complete value into the line
+setting `Email pro zasílání nahraných hovorů [?]` and enable call recording on
+the same line. No Odorik API credentials or advance list of phone numbers is
+required. The destination credentials are encrypted in Firestore and revealed
+only to an administrator on request; the ingest service decrypts them only
+while authenticating an upload. Calls from different accounts cannot collide:
+non-legacy Firestore IDs derive from connection ID plus provider call ID.
 
 Phone-line resources are discovered from `line_name`, falling back to the
 called number and finally an unassigned line. Excluding a line removes its
@@ -83,8 +94,8 @@ For each selection:
 6. Deselecting a calendar deletes its normalized context.
 7. A private scheduled function reconciles every 30 minutes.
 
-Calendar events are company-visible in this single-company deployment. Do not
-connect a calendar that should be visible to only some enabled users until
+Calendar events are visible to all members of their company. Do not connect a
+calendar that should be visible to only some team members until
 restricted member ACL filtering is implemented.
 
 ## Operations

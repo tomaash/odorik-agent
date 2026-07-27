@@ -27,7 +27,7 @@ export async function transcribeAudioWithDeepgram(input: {
       Authorization: `Token ${apiKey}`,
       "Content-Type": input.mimeType || "audio/ogg",
     },
-    body: input.audio,
+    body: new Uint8Array(input.audio),
     signal: AbortSignal.timeout(180_000),
   });
 

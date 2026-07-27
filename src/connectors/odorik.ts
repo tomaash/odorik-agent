@@ -3,7 +3,7 @@ import { FieldValue, Timestamp } from "@google-cloud/firestore";
 import { parseBasicAuth, secureEquals } from "../auth.js";
 import { db } from "../firestore.js";
 
-export const companyId = "default";
+export const legacyCompanyId = "explorers";
 export const legacyConnectionId =
   process.env.ODORIK_CONNECTION_ID?.trim() || "odorik-primary";
 
@@ -36,6 +36,7 @@ export function odorikStoredCallId(connectionId: string, externalCallId: string)
 }
 
 export async function authorizeOdorikUpload(input: {
+  companyId: string;
   connectionId: string;
   authorization: string | undefined;
   legacyUsername: string | undefined;
@@ -49,7 +50,7 @@ export async function authorizeOdorikUpload(input: {
 
   if (input.connectionId === legacyConnectionId && input.legacyUsername && input.legacyPassword) {
     const connection = await db().doc(
-      `companies/${companyId}/connections/${input.connectionId}`,
+      `companies/${input.companyId}/connections/${input.connectionId}`,
     ).get();
     if (connection.exists && connection.data()?.status === "disconnected") {
       throw new Error("Unauthorized");
@@ -63,7 +64,7 @@ export async function authorizeOdorikUpload(input: {
   }
 
   const snapshot = await db().doc(
-    `companies/${companyId}/connections/${input.connectionId}`,
+    `companies/${input.companyId}/connections/${input.connectionId}`,
   ).get();
   const connection = snapshot.data();
   if (
@@ -90,12 +91,13 @@ export async function authorizeOdorikUpload(input: {
 }
 
 export async function observeOdorikResource(input: {
+  companyId: string;
   connectionId: string;
   fields: Record<string, string>;
 }): Promise<{ resourceId: string; contextEnabled: boolean }> {
   const identity = odorikResourceIdentity(input.fields);
   const connectionRef = db().doc(
-    `companies/${companyId}/connections/${input.connectionId}`,
+    `companies/${input.companyId}/connections/${input.connectionId}`,
   );
   const resourceRef = connectionRef.collection("resources").doc(identity.resourceId);
   const [connection, resource] = await Promise.all([
@@ -105,12 +107,11 @@ export async function observeOdorikResource(input: {
   const contextEnabled = !resource.exists || resource.data()?.status !== "disabled";
   const now = Timestamp.now();
   const batch = db().batch();
-  batch.set(db().doc(`companies/${companyId}`), {
-    displayName: "Default company",
+  batch.set(db().doc(`companies/${input.companyId}`), {
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   batch.set(connectionRef, {
-    companyId,
+    companyId: input.companyId,
     adapterId: "odorik",
     ...(!connection.exists ? {
       displayName: input.connectionId === legacyConnectionId

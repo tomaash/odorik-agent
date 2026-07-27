@@ -88,7 +88,7 @@ function matches(record: CompanyRecord, filters: RecordFilter[]): boolean {
 export class FixtureCompanyData implements CompanyDataRepository {
   async allDocuments(kinds?: KnowledgeKind[]): Promise<KnowledgeDocument[]> {
     const selected = kinds?.length ? records.filter((record) => kinds.includes(record.kind)) : records;
-    return selected.flatMap((record) => chunkRecord(record));
+    return selected.flatMap((record) => chunkRecord(record, "fixture"));
   }
 
   async getRecord(kind: KnowledgeKind, recordId: string): Promise<CompanyRecord | null> {
@@ -114,4 +114,3 @@ export class FixtureCompanyData implements CompanyDataRepository {
     return { total: selected.length, groups };
   }
 }
-

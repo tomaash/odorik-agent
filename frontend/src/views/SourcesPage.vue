@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Dialog from 'primevue/dialog'
 import InputText from 'primevue/inputtext'
 import Message from 'primevue/message'
-import Password from 'primevue/password'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import { useAuthStore } from '../stores/auth'
@@ -15,6 +14,7 @@ import {
   deleteSourceConnection,
   getGoogleCalendars,
   getGoogleDriveFolders,
+  getOdorikSetup,
   listSources,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
@@ -38,8 +38,10 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const notice = ref('')
-const showForm = ref(false)
 const createdUrl = ref('')
+const createdConnectionId = ref('')
+const odorikSetupUrls = ref<Record<string, string>>({})
+const loadingOdorikSetupId = ref('')
 const calendarConnection = ref<SourceConnection | null>(null)
 const calendars = ref<SelectableCalendar[]>([])
 const selectedCalendarIds = ref<string[]>([])
@@ -55,14 +57,6 @@ const searchContainerRef = ref<HTMLElement | null>(null)
 const synchronizingId = ref('')
 const pendingDeleteId = ref('')
 const deletingId = ref('')
-const form = reactive({
-  displayName: '',
-  accountLabel: '',
-  username: '',
-  password: '',
-  numbers: '',
-})
-
 const isAdmin = computed(() => auth.access?.admin === true)
 const drivePickerVisible = computed({
   get: () => driveConnection.value !== null,
@@ -146,6 +140,28 @@ function emptyResourceMessage(connection: SourceConnection) {
   return t('sources.emptyResources')
 }
 
+function connectionStatusLabel(connection: SourceConnection) {
+  if (
+    connection.adapterId === 'odorik'
+    && connection.status === 'active'
+    && !connection.lastObservedAt
+  ) return t('sources.waitingForRecording')
+  if (connection.status === 'active') return t('sources.active')
+  if (connection.status === 'attention') return t('sources.attention')
+  return t('sources.disconnected')
+}
+
+function connectionStatusSeverity(connection: SourceConnection) {
+  if (
+    connection.adapterId === 'odorik'
+    && connection.status === 'active'
+    && !connection.lastObservedAt
+  ) return 'warn'
+  if (connection.status === 'active') return 'success'
+  if (connection.status === 'attention') return 'warn'
+  return 'secondary'
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -163,17 +179,11 @@ async function createOdorik() {
   error.value = ''
   notice.value = ''
   try {
-    const result = await addOdorikConnection({
-      displayName: form.displayName,
-      ...(form.accountLabel.trim() ? { accountLabel: form.accountLabel.trim() } : {}),
-      username: form.username,
-      password: form.password,
-      numbers: form.numbers.split(/\n|,/).map((value) => value.trim()).filter(Boolean),
-    })
-    createdUrl.value = result.uploadUrl
+    const result = await addOdorikConnection()
+    createdUrl.value = result.setupUrl
+    createdConnectionId.value = result.connectionId
+    odorikSetupUrls.value[result.connectionId] = result.setupUrl
     notice.value = t('sources.created')
-    Object.assign(form, { displayName: '', accountLabel: '', username: '', password: '', numbers: '' })
-    showForm.value = false
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -192,9 +202,7 @@ async function addConnection(adapter: SourceAdapter) {
     return
   }
   if (adapter.id === 'odorik') {
-    showForm.value = true
-    await nextTick()
-    document.getElementById('odorik-connection-form')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    await createOdorik()
   }
 }
 
@@ -246,6 +254,19 @@ async function toggleResource(connection: SourceConnection, resourceId: string, 
 async function copyUrl(url: string) {
   await navigator.clipboard.writeText(url)
   notice.value = t('sources.copied')
+}
+
+async function revealOdorikSetup(connection: SourceConnection) {
+  loadingOdorikSetupId.value = connection.id
+  error.value = ''
+  try {
+    const result = await getOdorikSetup(connection.id)
+    odorikSetupUrls.value[connection.id] = result.setupUrl
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingOdorikSetupId.value = ''
+  }
 }
 
 async function connectCalendar() {
@@ -462,43 +483,6 @@ onUnmounted(() => {
     <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
-
-    <Card
-      id="odorik-connection-form"
-      v-if="showForm && isAdmin"
-      class="rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden scroll-mt-4 [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
-    >
-      <template #title>{{ t('sources.form.title') }}</template>
-      <template #subtitle>{{ t('sources.form.description') }}</template>
-      <template #content>
-        <form class="grid gap-4 sm:grid-cols-2" @submit.prevent="createOdorik">
-          <label class="min-w-0 grid gap-2 text-sm font-medium">
-            {{ t('sources.form.displayName') }}
-            <InputText v-model="form.displayName" fluid required autocomplete="organization" />
-          </label>
-          <label class="min-w-0 grid gap-2 text-sm font-medium">
-            {{ t('sources.form.accountLabel') }}
-            <InputText v-model="form.accountLabel" fluid />
-          </label>
-          <label class="min-w-0 grid gap-2 text-sm font-medium">
-            {{ t('sources.form.username') }}
-            <InputText v-model="form.username" fluid required autocomplete="off" />
-          </label>
-          <label class="min-w-0 grid gap-2 text-sm font-medium">
-            {{ t('sources.form.password') }}
-            <Password v-model="form.password" fluid required :feedback="false" toggleMask autocomplete="new-password" />
-          </label>
-          <label class="min-w-0 grid gap-2 text-sm font-medium sm:col-span-2">
-            {{ t('sources.form.numbers') }}
-            <textarea v-model="form.numbers" rows="3" class="w-full min-w-0 rounded-xl border border-surface-300 bg-white p-3 text-sm font:inherit resize-y focus:outline-none focus:ring-2 focus:ring-emerald-500" />
-          </label>
-          <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sm:col-span-2">
-            <Button :label="t('common.cancel')" severity="secondary" text type="button" @click="showForm = false" />
-            <Button :label="t('sources.form.submit')" icon="pi pi-check" type="submit" :loading="saving" />
-          </div>
-        </form>
-      </template>
-    </Card>
 
     <Card id="calendar-picker" v-if="calendarConnection && isAdmin" class="scroll-mt-4 rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
       <template #title>{{ t('sources.calendarPicker.title') }}</template>
@@ -743,14 +727,6 @@ onUnmounted(() => {
       </form>
     </Dialog>
 
-    <div v-if="createdUrl" class="rounded-2xl border border-emerald-200 bg-emerald-50 p-4 sm:p-5 mb-6">
-      <div class="text-sm font-semibold text-emerald-900 mb-2">{{ t('sources.uploadUrl') }}</div>
-      <div class="min-w-0 flex flex-col sm:flex-row gap-2">
-        <code class="min-w-0 grow rounded-xl bg-white border border-emerald-200 p-3 text-xs break-all">{{ createdUrl }}</code>
-        <Button :label="t('common.copy')" icon="pi pi-copy" severity="secondary" @click="copyUrl(createdUrl)" />
-      </div>
-    </div>
-
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <div v-else class="grid gap-5 lg:grid-cols-2">
@@ -774,7 +750,7 @@ onUnmounted(() => {
               </div>
             </div>
             <Tag
-              :value="adapter.availability === 'available' ? t('sources.readOnly') : adapter.availability === 'needs_configuration' ? t('sources.needsConfiguration') : t('sources.planned')"
+              :value="adapter.id === 'odorik' ? t('sources.receivesRecordings') : adapter.availability === 'available' ? t('sources.readOnly') : adapter.availability === 'needs_configuration' ? t('sources.needsConfiguration') : t('sources.planned')"
               :severity="adapter.availability === 'available' ? 'success' : 'secondary'"
               rounded
             />
@@ -783,7 +759,43 @@ onUnmounted(() => {
         <template #subtitle><span class="leading-relaxed">{{ t(`sources.adapters.${adapter.id}`) }}</span></template>
         <template #content>
           <div
-            v-if="isAdmin && canAddConnection(adapter)"
+            v-if="isAdmin && adapter.id === 'odorik' && canAddConnection(adapter)"
+            class="min-w-0 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 mb-4"
+          >
+            <div class="flex items-start gap-3">
+              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-800 shadow-xs">
+                <i class="pi pi-arrow-right-arrow-left" />
+              </span>
+              <div class="min-w-0 grow">
+                <div class="font-semibold text-sm text-emerald-950">{{ t('sources.odorikSetup.title') }}</div>
+                <p class="text-xs text-emerald-900/75 mt-1 mb-0 leading-relaxed">{{ t('sources.odorikSetup.description') }}</p>
+              </div>
+            </div>
+            <ol class="grid gap-2 my-4 pl-0 list-none text-sm text-emerald-950">
+              <li class="flex items-start gap-2">
+                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">1</span>
+                <span>{{ t('sources.odorikSetup.createStep') }}</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">2</span>
+                <span>{{ t('sources.odorikSetup.pasteStep') }}</span>
+              </li>
+              <li class="flex items-start gap-2">
+                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">3</span>
+                <span>{{ t('sources.odorikSetup.recordStep') }}</span>
+              </li>
+            </ol>
+            <Button
+              :label="t('sources.odorikSetup.createButton')"
+              icon="pi pi-plus"
+              class="w-full"
+              :loading="saving"
+              @click="addConnection(adapter)"
+            />
+          </div>
+
+          <div
+            v-else-if="isAdmin && canAddConnection(adapter)"
             class="min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3.5 sm:p-4 mb-4"
           >
             <div class="min-w-0">
@@ -798,11 +810,35 @@ onUnmounted(() => {
             />
           </div>
 
+          <div
+            v-if="adapter.id === 'odorik' && createdUrl"
+            class="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 sm:p-5 mb-4"
+          >
+            <div class="flex items-start gap-3 mb-3">
+              <i class="pi pi-check-circle mt-0.5 text-lg text-emerald-700" />
+              <div>
+                <div class="text-sm font-semibold text-emerald-950">{{ t('sources.odorikSetup.readyTitle') }}</div>
+                <p class="m-0 mt-1 text-xs leading-relaxed text-emerald-900/75">{{ t('sources.odorikSetup.readyDescription') }}</p>
+              </div>
+            </div>
+            <div class="min-w-0 flex flex-col sm:flex-row gap-2">
+              <code class="min-w-0 grow rounded-xl bg-white border border-emerald-200 p-3 text-xs break-all">{{ createdUrl }}</code>
+              <Button :label="t('common.copy')" icon="pi pi-copy" severity="secondary" @click="copyUrl(createdUrl)" />
+            </div>
+            <p class="m-0 mt-2 text-xs text-emerald-900/70">
+              <i class="pi pi-lock mr-1" />
+              {{ t('sources.odorikSetup.secretHint') }}
+            </p>
+          </div>
+
           <div v-if="connectionsByAdapter.get(adapter.id)?.length" class="grid gap-4">
             <article
               v-for="connection in connectionsByAdapter.get(adapter.id)"
               :key="connection.id"
-              class="min-w-0 rounded-2xl border border-surface-200 bg-surface-50 p-3.5 sm:p-4"
+              :class="[
+                'min-w-0 rounded-2xl border bg-surface-50 p-3.5 sm:p-4',
+                createdConnectionId === connection.id ? 'border-emerald-300 ring-2 ring-emerald-100' : 'border-surface-200',
+              ]"
             >
               <div class="min-w-0 flex items-start justify-between gap-3 mb-3">
                 <div class="min-w-0">
@@ -810,8 +846,8 @@ onUnmounted(() => {
                   <p v-if="connection.accountLabel" class="text-sm text-surface-500 mt-1 mb-0 break-words">{{ connection.accountLabel }}</p>
                 </div>
                 <Tag
-                  :value="connection.status === 'active' ? t('sources.active') : connection.status === 'attention' ? t('sources.attention') : t('sources.disconnected')"
-                  :severity="connection.status === 'active' ? 'success' : connection.status === 'attention' ? 'warn' : 'secondary'"
+                  :value="connectionStatusLabel(connection)"
+                  :severity="connectionStatusSeverity(connection)"
                   rounded
                 />
               </div>
@@ -827,15 +863,42 @@ onUnmounted(() => {
                 </div>
               </dl>
 
-              <div v-if="connection.uploadUrl" class="mb-4">
-                <div class="text-xs font-semibold text-surface-500 mb-1.5">{{ t('sources.uploadUrl') }}</div>
-                <div class="min-w-0 flex items-stretch gap-2">
-                  <code class="min-w-0 grow rounded-xl bg-white border border-surface-200 p-2.5 text-[.7rem] break-all">{{ connection.uploadUrl }}</code>
-                  <Button icon="pi pi-copy" severity="secondary" outlined :aria-label="t('common.copy')" @click="copyUrl(connection.uploadUrl!)" />
+              <div
+                v-if="connection.adapterId === 'odorik'"
+                class="mb-4 rounded-xl border border-surface-200 bg-white p-3"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm font-semibold text-surface-800">{{ t('sources.odorikSetup.connectionTitle') }}</div>
+                    <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">
+                      {{ t('sources.odorikSetup.connectionDescription') }}
+                    </p>
+                  </div>
+                  <Button
+                    v-if="isAdmin && connection.credentialMode === 'encrypted' && !odorikSetupUrls[connection.id]"
+                    :label="t('sources.odorikSetup.showButton')"
+                    icon="pi pi-eye"
+                    severity="secondary"
+                    outlined
+                    size="small"
+                    class="shrink-0"
+                    :loading="loadingOdorikSetupId === connection.id"
+                    @click="revealOdorikSetup(connection)"
+                  />
                 </div>
-                <div class="text-xs text-surface-400 mt-1.5">
-                  {{ connection.credentialMode === 'legacy_secret' ? t('sources.legacyCredential') : t('sources.encryptedCredential') }}
+                <div v-if="odorikSetupUrls[connection.id]" class="min-w-0 flex items-stretch gap-2 mt-3">
+                  <code class="min-w-0 grow rounded-xl bg-surface-50 border border-surface-200 p-2.5 text-[.7rem] break-all">{{ odorikSetupUrls[connection.id] }}</code>
+                  <Button
+                    icon="pi pi-copy"
+                    severity="secondary"
+                    outlined
+                    :aria-label="t('common.copy')"
+                    @click="copyUrl(odorikSetupUrls[connection.id]!)"
+                  />
                 </div>
+                <p v-if="connection.credentialMode === 'legacy_secret'" class="m-0 mt-2 text-xs text-surface-400">
+                  {{ t('sources.odorikSetup.legacyHint') }}
+                </p>
               </div>
 
               <div class="text-xs font-semibold uppercase tracking-[.12em] text-surface-400 mb-2">
