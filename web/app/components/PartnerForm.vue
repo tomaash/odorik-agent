@@ -9,8 +9,6 @@ const emit = defineEmits<{ success: [] }>()
 const form = reactive({
   name: '',
   email: '',
-  company: '',
-  runsOn: '',
   message: '',
   // Honeypot: hidden from people, so anything here marks the sender as a bot.
   website: '',
@@ -18,10 +16,6 @@ const form = reactive({
 
 type Status = 'idle' | 'sending' | 'error'
 const status = ref<Status>('idle')
-
-const runsOnOptions = computed(() =>
-  [0, 1, 2, 3].map((i) => t(`form.runsOnOptions.${i}`)),
-)
 
 async function onSubmit() {
   status.value = 'sending'
@@ -56,60 +50,31 @@ async function onSubmit() {
         autocomplete="off"
         aria-hidden="true"
       />
-      <div class="grid gap-4 sm:grid-cols-2">
-        <input
-          v-model="form.name"
-          class="field"
-          type="text"
-          required
-          autocomplete="name"
-          :placeholder="t('form.name')"
-          :aria-label="t('form.name')"
-        />
-        <input
-          v-model="form.email"
-          class="field"
-          type="email"
-          required
-          autocomplete="email"
-          :placeholder="t('form.email')"
-          :aria-label="t('form.email')"
-        />
-      </div>
-
       <input
-        v-model="form.company"
+        v-model="form.name"
         class="field"
         type="text"
         required
-        autocomplete="organization"
-        :placeholder="t('form.company')"
-        :aria-label="t('form.company')"
+        autocomplete="name"
+        :placeholder="t('form.name')"
+        :aria-label="t('form.name')"
       />
 
-      <fieldset>
-        <legend class="mb-2 text-sm text-zinc-400">{{ t('form.runsOn') }}</legend>
-        <div class="flex flex-wrap gap-2">
-          <label
-            v-for="option in runsOnOptions"
-            :key="option"
-            class="cursor-pointer rounded-full border px-4 py-2 text-sm transition"
-            :class="
-              form.runsOn === option
-                ? 'border-brand-400 bg-brand-400/10 text-brand-200'
-                : 'border-white/10 text-zinc-400 hover:border-white/25'
-            "
-          >
-            <input v-model="form.runsOn" type="radio" :value="option" class="sr-only" />
-            {{ option }}
-          </label>
-        </div>
-      </fieldset>
+      <input
+        v-model="form.email"
+        class="field"
+        type="email"
+        required
+        autocomplete="email"
+        :placeholder="t('form.email')"
+        :aria-label="t('form.email')"
+      />
 
       <textarea
         v-model="form.message"
-        class="field min-h-[96px] resize-y"
-        rows="3"
+        class="field min-h-[120px] resize-y"
+        rows="4"
+        required
         :placeholder="t('form.message')"
         :aria-label="t('form.message')"
       />

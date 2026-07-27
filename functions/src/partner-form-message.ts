@@ -6,9 +6,7 @@ import { z } from "zod";
 export const partnerFormSchema = z.object({
   name: z.string().trim().min(1).max(120),
   email: z.string().trim().email().max(200),
-  company: z.string().trim().min(1).max(160),
-  runsOn: z.string().trim().max(80).optional().default(""),
-  message: z.string().trim().max(4000).optional().default(""),
+  message: z.string().trim().min(1).max(4000),
   locale: z.enum(["cs", "en"]).optional().default("cs"),
   // Hidden input; humans never see it, so anything here is a bot.
   website: z.string().max(200).optional().default(""),
@@ -26,15 +24,13 @@ export function escapeHtml(value: string): string {
 }
 
 export function partnerFormSubject(input: PartnerFormInput): string {
-  return `Pilotní partner: ${input.company} (${input.name})`;
+  return `Pilotní partner: ${input.name}`;
 }
 
 export function renderPartnerFormEmail(input: PartnerFormInput): string {
   const rows: [string, string][] = [
     ["Jméno", input.name],
     ["E-mail", input.email],
-    ["Firma", input.company],
-    ["Na čem běží", input.runsOn || "—"],
     ["Jazyk webu", input.locale],
   ];
   const table = rows
@@ -43,9 +39,7 @@ export function renderPartnerFormEmail(input: PartnerFormInput): string {
       + `<td style="padding:4px 0;">${escapeHtml(value)}</td></tr>`,
     )
     .join("");
-  const message = input.message
-    ? `<p style="white-space:pre-wrap;margin-top:16px;">${escapeHtml(input.message)}</p>`
-    : "";
+  const message = `<p style="white-space:pre-wrap;margin-top:16px;">${escapeHtml(input.message)}</p>`;
   return `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;line-height:1.6;">`
     + `<table style="border-collapse:collapse;">${table}</table>${message}</div>`;
 }

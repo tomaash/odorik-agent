@@ -154,22 +154,14 @@
   "form": {
     "name": "Jméno",
     "email": "Pracovní e-mail",
-    "company": "Firma",
-    "runsOn": "Na čem váš tým dneska běží?",
-    "runsOnOptions": [
-      "Hovory",
-      "E-mail",
-      "Práce v terénu",
-      "Něco jiného"
-    ],
-    "message": "Cokoli, co bychom měli vědět (nepovinné)",
+    "message": "Co byste nám chtěli napsat?",
     "submit": "Odeslat",
     "sending": "Odesílám…",
     "successTitle": "Zprávu máme. Děkujeme.",
     "success": "Brzy se vám ozveme.",
     "error": "Zprávu se nepodařilo odeslat. Zkuste to prosím za chvíli znovu.",
     "modalTitle": "Staňte se pilotním partnerem",
-    "modalSubtitle": "Nechte nám pár údajů a ozveme se vám.",
+    "modalSubtitle": "Napište nám pár řádků o vaší situaci. Ozveme se co nejdříve.",
     "close": "Zavřít",
     "ok": "OK"
   },
@@ -259,7 +251,7 @@
     "sections": [
       {
         "title": "Co web sbírá",
-        "body": "Web je statický a nepoužívá sledovací cookies. Jediné osobní údaje, se kterými pracuje, jsou ty, které sami vyplníte do formuláře pro pilotní partnery: jméno, pracovní e-mail, firma a zpráva."
+        "body": "Web je statický a nepoužívá sledovací cookies. Jediné osobní údaje, se kterými pracuje, jsou ty, které sami vyplníte do formuláře pro pilotní partnery: jméno, pracovní e-mail a zpráva."
       },
       {
         "title": "K čemu to použijeme",
