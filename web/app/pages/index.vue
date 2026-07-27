@@ -133,7 +133,7 @@ useHead({
           </div>
         </div>
 
-        <p class="mt-8 max-w-2xl text-lg font-medium text-white">{{ t('diff.note') }}</p>
+        <p class="mt-8 text-lg font-medium text-white">{{ t('diff.note') }}</p>
       </div>
     </section>
 

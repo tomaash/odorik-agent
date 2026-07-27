@@ -52,8 +52,8 @@
         "body": "Kontrola zabere víc času než ušetřená práce."
       },
       {
-        "title": "Nikdo nenechá AI zapisovat potichu.",
-        "body": "A má pravdu."
+        "title": "Nikdo nedá AI volnou ruku ve firemních systémech.",
+        "body": "A právem."
       }
     ]
   },
@@ -78,7 +78,7 @@
   },
   "diff": {
     "eyebrow": "Rozdíl",
-    "h2": "V čem je to jinak",
+    "h2": "Rozdíl není v tom, co vám AI řekne, ale co má hotové.",
     "colA": "Běžná firemní AI",
     "colB": "Agent Erik",
     "rows": [
