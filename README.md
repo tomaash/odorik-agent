@@ -196,9 +196,12 @@ Connector deployments additionally use:
 - a private `syncCalendarSources` scheduled function invoked every 30 minutes.
 
 Team invitation delivery additionally binds `RESEND_API_KEY` to the API
-function. `onboarding@resend.dev` is temporary and only suitable for
-Resend-account testing; verify a product domain before inviting arbitrary
-recipients.
+function, as does `sendPartnerForm`, which delivers the website's contact form.
+Both send from `hello@agenterik.cz`, a domain verified in Resend, so they can
+reach arbitrary recipients. Both also run as the `odorik-crm` service account,
+which holds `secretAccessor` on the secret — a function binding the secret
+under any other identity makes the deploy try to patch the secret's IAM policy,
+which CI is not permitted to do.
 
 The Google OAuth application is currently in testing mode. Approved testers
 must be added in Google Auth Platform; test-mode refresh tokens expire after

@@ -169,7 +169,8 @@
     "error": "We couldn't send your message. Please try again in a moment.",
     "modalTitle": "Become a design partner",
     "modalSubtitle": "Leave a few details and we'll get back to you.",
-    "close": "Close"
+    "close": "Close",
+    "ok": "OK"
   },
   "how": {
     "eyebrow": "How it works",

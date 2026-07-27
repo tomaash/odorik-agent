@@ -58,7 +58,7 @@ async function sendInvitationEmail(input: {
   const resend = new Resend(resendApiKey.value());
   try {
     const { data, error } = await resend.emails.send({
-      from: "Explorers <onboarding@resend.dev>",
+      from: "Agent Erik <hello@agenterik.cz>",
       to: input.email,
       subject: `Invitation to join ${input.teamName}`,
       html: [
