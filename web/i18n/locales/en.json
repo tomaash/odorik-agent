@@ -156,13 +156,20 @@
     "email": "Work email",
     "company": "Company",
     "runsOn": "What does your team run on today?",
-    "runsOnOptions": ["Calls", "Email", "Field ops", "Something else"],
+    "runsOnOptions": [
+      "Calls",
+      "Email",
+      "Field ops",
+      "Something else"
+    ],
     "message": "Anything you want us to know (optional)",
     "submit": "Send",
     "sending": "Sending…",
     "success": "Thanks — we'll be in touch shortly.",
-    "mailFallback": "Opening your mail app with the details filled in.",
-    "error": "Something went wrong. Email us at"
+    "error": "We couldn't send your message. Please try again in a moment.",
+    "modalTitle": "Become a design partner",
+    "modalSubtitle": "Leave a few details and we'll get back to you.",
+    "close": "Close"
   },
   "how": {
     "eyebrow": "How it works",
@@ -196,7 +203,11 @@
       }
     ],
     "boundaryTitle": "The responsibility boundary",
-    "boundaryHead": ["Write", "Automatic?", "Authority"],
+    "boundaryHead": [
+      "Write",
+      "Automatic?",
+      "Authority"
+    ],
     "boundaryRows": [
       {
         "write": "Source observations (a received call, a synced event)",
@@ -261,7 +272,7 @@
         "body": "You can ask us for a copy of your data or ask us to delete it at any time. Write to us and we will action it."
       }
     ],
-    "contact": "Questions about privacy:"
+    "contact": "Questions about privacy?"
   },
   "footer": {
     "tagline": "AI prepares the work. You make the call.",

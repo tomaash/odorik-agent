@@ -1,7 +1,6 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const config = useRuntimeConfig()
-const paths = useSitePaths()
 
 const form = reactive({
   name: '',
@@ -9,6 +8,8 @@ const form = reactive({
   company: '',
   runsOn: '',
   message: '',
+  // Honeypot: hidden from people, so anything here marks the sender as a bot.
+  website: '',
 })
 
 type Status = 'idle' | 'sending' | 'success' | 'error'
@@ -18,34 +19,10 @@ const runsOnOptions = computed(() =>
   [0, 1, 2, 3].map((i) => t(`form.runsOnOptions.${i}`)),
 )
 
-function mailtoHref() {
-  const subject = `Design partner: ${form.company || form.name}`
-  const body = [
-    `${t('form.name')}: ${form.name}`,
-    `${t('form.email')}: ${form.email}`,
-    `${t('form.company')}: ${form.company}`,
-    `${t('form.runsOn')} ${form.runsOn}`,
-    '',
-    form.message,
-  ].join('\n')
-
-  return `mailto:${paths.contactEmail.value}?subject=${encodeURIComponent(
-    subject,
-  )}&body=${encodeURIComponent(body)}`
-}
-
 async function onSubmit() {
   status.value = 'sending'
 
   const endpoint = config.public.partnerFormUrl as string
-
-  // No endpoint configured yet — hand off to the visitor's mail client rather
-  // than silently dropping what they typed.
-  if (!endpoint) {
-    window.location.href = mailtoHref()
-    status.value = 'success'
-    return
-  }
 
   try {
     const res = await fetch(endpoint, {
@@ -62,8 +39,16 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="rounded-2xl border border-white/10 bg-ink-900/60 p-6 sm:p-8">
+  <div>
     <form v-if="status !== 'success'" class="space-y-4" @submit.prevent="onSubmit">
+      <input
+        v-model="form.website"
+        class="hidden"
+        type="text"
+        tabindex="-1"
+        autocomplete="off"
+        aria-hidden="true"
+      />
       <div class="grid gap-4 sm:grid-cols-2">
         <input
           v-model="form.name"
@@ -129,12 +114,6 @@ async function onSubmit() {
 
         <p v-if="status === 'error'" class="text-sm text-zinc-400">
           {{ t('form.error') }}
-          <a
-            :href="`mailto:${paths.contactEmail.value}`"
-            class="text-brand-300 underline underline-offset-4"
-          >
-            {{ paths.contactEmail.value }}
-          </a>
         </p>
       </div>
     </form>

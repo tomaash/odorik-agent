@@ -19,6 +19,12 @@ import {
 } from "../connectors/google-calendar.js";
 import { driveAuthorizationLifetimeMs, driveScopes } from "../connectors/google-drive.js";
 import {
+  isThrottled,
+  partnerFormSchema,
+  partnerFormSubject,
+  renderPartnerFormEmail,
+} from "../partner-form-message.js";
+import {
   defaultGoogleRedirectUri,
   googleOAuthRedirectUri,
   googleOAuthReturnUrl,
@@ -259,4 +265,62 @@ test("returns Google OAuth to the requesting local app without allowing open red
     googleOAuthRedirectUri("https://attacker.example"),
     defaultGoogleRedirectUri,
   );
+});
+
+test("validates partner form submissions and renders them without injecting markup", () => {
+  const valid = partnerFormSchema.safeParse({
+    name: "  Tomáš  ",
+    email: "tomas@example.com",
+    company: "Explorers",
+    runsOn: "Hovory",
+  });
+  assert.equal(valid.success, true);
+  assert.equal(valid.success && valid.data.name, "Tomáš");
+  // Optional fields carry defaults so the email renderer never sees undefined.
+  assert.equal(valid.success && valid.data.message, "");
+  assert.equal(valid.success && valid.data.locale, "cs");
+
+  assert.equal(partnerFormSchema.safeParse({ name: "A", email: "nope", company: "B" }).success, false);
+  assert.equal(partnerFormSchema.safeParse({ name: "", email: "a@b.cz", company: "B" }).success, false);
+  assert.equal(
+    partnerFormSchema.safeParse({ name: "A", email: "a@b.cz", company: "B", message: "x".repeat(4001) }).success,
+    false,
+  );
+
+  const html = renderPartnerFormEmail({
+    name: "<script>alert(1)</script>",
+    email: "tomas@example.com",
+    company: "Explorers & Co",
+    runsOn: "",
+    message: "Ahoj",
+    locale: "cs",
+    website: "",
+  });
+  assert.ok(!html.includes("<script>"));
+  assert.ok(html.includes("&lt;script&gt;"));
+  assert.ok(html.includes("Explorers &amp; Co"));
+  // Empty optional fields still render a placeholder row rather than nothing.
+  assert.ok(html.includes("—"));
+
+  assert.equal(
+    partnerFormSubject({
+      name: "Tomáš",
+      email: "tomas@example.com",
+      company: "Explorers",
+      runsOn: "",
+      message: "",
+      locale: "cs",
+      website: "",
+    }),
+    "Pilotní partner: Explorers (Tomáš)",
+  );
+});
+
+test("throttles repeated partner form submissions from one address", () => {
+  const seen = new Map<string, number>();
+  assert.equal(isThrottled("a@b.cz", 0, seen), false);
+  assert.equal(isThrottled("a@b.cz", 30_000, seen), true);
+  assert.equal(isThrottled("other@b.cz", 30_000, seen), false);
+  // The window has passed, so the same address is allowed through again.
+  assert.equal(isThrottled("a@b.cz", 61_000, seen), false);
 });

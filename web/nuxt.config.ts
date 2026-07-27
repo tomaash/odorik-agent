@@ -45,10 +45,9 @@ export default defineNuxtConfig({
   runtimeConfig: {
     public: {
       buildLocale: locale,
-      // Empty until the design-partner endpoint exists; the form falls back to
-      // a prefilled mail draft while this is unset. See web/README.md.
-      partnerFormUrl: '',
-      contactEmail: 'hello@agenterik.com',
+      // Hosting rewrite to the sendPartnerForm function, so the post is
+      // same-origin and needs no CORS preflight. See web/README.md.
+      partnerFormUrl: '/api/partner-form',
       siteHostCs: 'agenterik.cz',
       siteHostEn: 'agenterik.com',
     },

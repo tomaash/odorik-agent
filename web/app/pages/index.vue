@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const paths = useSitePaths()
+const contact = useContactModal()
 
 useHead({
   title: t('meta.title'),
@@ -28,9 +29,9 @@ useHead({
           </p>
 
           <div class="mt-9 flex flex-wrap gap-3">
-            <NuxtLink to="#design-partner" class="btn-primary">
+            <button type="button" class="btn-primary" @click="contact.open()">
               {{ t('hero.ctaPrimary') }}
-            </NuxtLink>
+            </button>
             <NuxtLink :to="paths.howItWorks.value" class="btn-ghost">
               {{ t('hero.ctaSecondary') }} →
             </NuxtLink>
@@ -213,7 +214,13 @@ useHead({
           <p class="mt-8 text-sm leading-relaxed text-zinc-500">{{ t('cta.status') }}</p>
         </div>
 
-        <PartnerForm />
+        <div class="rounded-2xl border border-white/10 bg-ink-900/60 p-6 sm:p-8">
+          <p class="text-lg font-semibold text-white">{{ t('form.modalTitle') }}</p>
+          <p class="mt-2 text-zinc-400">{{ t('form.modalSubtitle') }}</p>
+          <button type="button" class="btn-primary mt-6" @click="contact.open()">
+            {{ t('cta.bandCta') }}
+          </button>
+        </div>
       </div>
     </section>
   </div>

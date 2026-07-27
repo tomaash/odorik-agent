@@ -1,6 +1,7 @@
 <script setup lang="ts">
 const { t } = useI18n()
 const paths = useSitePaths()
+const contact = useContactModal()
 const year = new Date().getFullYear()
 </script>
 
@@ -21,12 +22,9 @@ const year = new Date().getFullYear()
         <NuxtLink :to="paths.privacy.value" class="transition hover:text-white">
           {{ t('footer.privacy') }}
         </NuxtLink>
-        <a
-          :href="`mailto:${paths.contactEmail.value}`"
-          class="transition hover:text-white"
-        >
-          {{ paths.contactEmail.value }}
-        </a>
+        <button type="button" class="transition hover:text-white" @click="contact.open()">
+          {{ t('footer.contact') }}
+        </button>
         <span>&copy; {{ year }}</span>
       </div>
     </div>
