@@ -59,7 +59,13 @@ onBeforeUnmount(() => {
           </button>
 
           <template v-if="sent">
-            <p class="text-xl font-medium text-white">{{ t('form.success') }}</p>
+            <h2 class="text-2xl font-semibold tracking-tight text-white">
+              {{ t('form.successTitle') }}
+            </h2>
+            <p class="mt-3 text-zinc-400">{{ t('form.success') }}</p>
+            <button type="button" class="btn-primary mt-8" @click="close">
+              {{ t('form.ok') }}
+            </button>
           </template>
 
           <template v-else>
