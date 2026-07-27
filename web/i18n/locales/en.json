@@ -154,22 +154,14 @@
   "form": {
     "name": "Your name",
     "email": "Work email",
-    "company": "Company",
-    "runsOn": "What does your team run on today?",
-    "runsOnOptions": [
-      "Calls",
-      "Email",
-      "Field ops",
-      "Something else"
-    ],
-    "message": "Anything you want us to know (optional)",
+    "message": "What would you like to tell us?",
     "submit": "Send",
     "sending": "Sending…",
     "successTitle": "We received your message. Thank you.",
     "success": "We'll be in touch shortly.",
     "error": "We couldn't send your message. Please try again in a moment.",
     "modalTitle": "Become a design partner",
-    "modalSubtitle": "Leave a few details and we'll get back to you.",
+    "modalSubtitle": "Write us a few lines about your situation. We'll get back to you as soon as we can.",
     "close": "Close",
     "ok": "OK"
   },
@@ -259,7 +251,7 @@
     "sections": [
       {
         "title": "What this site collects",
-        "body": "The marketing site is statically generated and sets no tracking cookies. The only personal data it handles is what you type into the design-partner form: your name, work email, company, and message."
+        "body": "The marketing site is statically generated and sets no tracking cookies. The only personal data it handles is what you type into the design-partner form: your name, work email, and message."
       },
       {
         "title": "What we do with it",

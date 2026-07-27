@@ -271,48 +271,43 @@ test("validates partner form submissions and renders them without injecting mark
   const valid = partnerFormSchema.safeParse({
     name: "  Tomáš  ",
     email: "tomas@example.com",
-    company: "Explorers",
-    runsOn: "Hovory",
+    message: "  Ahoj  ",
   });
   assert.equal(valid.success, true);
   assert.equal(valid.success && valid.data.name, "Tomáš");
+  assert.equal(valid.success && valid.data.message, "Ahoj");
   // Optional fields carry defaults so the email renderer never sees undefined.
-  assert.equal(valid.success && valid.data.message, "");
   assert.equal(valid.success && valid.data.locale, "cs");
+  assert.equal(valid.success && valid.data.website, "");
 
-  assert.equal(partnerFormSchema.safeParse({ name: "A", email: "nope", company: "B" }).success, false);
-  assert.equal(partnerFormSchema.safeParse({ name: "", email: "a@b.cz", company: "B" }).success, false);
+  assert.equal(partnerFormSchema.safeParse({ name: "A", email: "nope", message: "B" }).success, false);
+  assert.equal(partnerFormSchema.safeParse({ name: "", email: "a@b.cz", message: "B" }).success, false);
+  assert.equal(partnerFormSchema.safeParse({ name: "A", email: "a@b.cz", message: "" }).success, false);
   assert.equal(
-    partnerFormSchema.safeParse({ name: "A", email: "a@b.cz", company: "B", message: "x".repeat(4001) }).success,
+    partnerFormSchema.safeParse({ name: "A", email: "a@b.cz", message: "x".repeat(4001) }).success,
     false,
   );
 
   const html = renderPartnerFormEmail({
     name: "<script>alert(1)</script>",
     email: "tomas@example.com",
-    company: "Explorers & Co",
-    runsOn: "",
-    message: "Ahoj",
+    message: "Explorers & Co",
     locale: "cs",
     website: "",
   });
   assert.ok(!html.includes("<script>"));
   assert.ok(html.includes("&lt;script&gt;"));
   assert.ok(html.includes("Explorers &amp; Co"));
-  // Empty optional fields still render a placeholder row rather than nothing.
-  assert.ok(html.includes("—"));
 
   assert.equal(
     partnerFormSubject({
       name: "Tomáš",
       email: "tomas@example.com",
-      company: "Explorers",
-      runsOn: "",
-      message: "",
+      message: "Ahoj",
       locale: "cs",
       website: "",
     }),
-    "Pilotní partner: Explorers (Tomáš)",
+    "Pilotní partner: Tomáš",
   );
 });
 
