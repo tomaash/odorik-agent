@@ -116,7 +116,7 @@
   "accountability": {
     "eyebrow": "Odpovědnost",
     "h2": "Za každým rozhodnutím je podepsaný konkrétní člověk.",
-    "body": "Schválení tu není jen políčko v databázi. Ukládá se, kdo rozhodl, kterou verzi návrhu přesně viděl, co tím povolil a kdy. Agenti si můžou číst a připravovat, co potřebují. Ale změnit něco ve firmě — nebo sáhnout do cizího systému — jde vždycky jen přes jedno lidské rozhodnutí.",
+    "body": "Schválení není jen políčko v databázi. Ukládá se, kdo rozhodl, kterou verzi návrhu přesně viděl, co tím povolil a kdy. Agenti si můžou číst a připravovat, co potřebují. Ale změnit něco ve firmě — nebo sáhnout do cizího systému — jde vždycky jen přes jedno lidské rozhodnutí.",
     "items": [
       {
         "title": "Podklady, ne dojmy.",
