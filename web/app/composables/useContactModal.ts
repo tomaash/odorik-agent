@@ -6,14 +6,24 @@
  */
 export function useContactModal() {
   const isOpen = useState('contactModal', () => false)
+  const sent = useState('contactModalSent', () => false)
 
   return {
     isOpen,
+    /** True once a submission landed, so the modal shows the confirmation. */
+    sent,
     open: () => {
+      // Reset here rather than in a watcher on isOpen: closing and reopening
+      // quickly nets no observed change, so a watcher would leave the stale
+      // confirmation in place.
+      sent.value = false
       isOpen.value = true
     },
     close: () => {
       isOpen.value = false
+    },
+    markSent: () => {
+      sent.value = true
     },
   }
 }
