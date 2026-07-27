@@ -1,0 +1,272 @@
+{
+  "meta": {
+    "title": "Agent Erik — AI odvede práci. Poslední slovo máte vy.",
+    "description": "Agent Erik prochází hovory, e-maily a kalendář a chystá konkrétní návrhy i s podklady. Schválíte, zamítnete nebo hlasem řeknete, co změnit — za pár vteřin, ať jste kdekoli.",
+    "howTitle": "Jak to funguje — Agent Erik",
+    "privacyTitle": "Soukromí — Agent Erik"
+  },
+  "nav": {
+    "howItWorks": "Jak to funguje",
+    "cta": "Staňte se pilotním partnerem",
+    "menu": "Menu"
+  },
+  "hero": {
+    "h1a": "AI odvede práci.",
+    "h1b": "Poslední slovo máte vy.",
+    "sub": "Agent Erik prochází hovory, e-maily a kalendář a chystá konkrétní návrhy — ke každému rovnou podklady, ze kterých vychází. Schválíte, zamítnete, nebo hlasem řeknete, co změnit. Za pár vteřin, ať jste kdekoli. Bez vašeho souhlasu se nestane nic.",
+    "ctaPrimary": "Staňte se pilotním partnerem",
+    "ctaSecondary": "Jak to funguje",
+    "trust": [
+      "Postavené na Google Cloudu",
+      "Data zůstávají v europe-west3",
+      "Každé rozhodnutí je dohledatelné"
+    ]
+  },
+  "card": {
+    "label": "Čeká na rozhodnutí",
+    "time": "teď",
+    "action": "Domluvit další hovor s ACME a připravit předběžnou nabídku.",
+    "triggerLabel": "Podnět",
+    "trigger": "Z dnešního hovoru ve 14:00 s Janem Novákem.",
+    "evidenceLabel": "Podklady",
+    "evidence": [
+      "Jan chtěl cenu „do konce týdne“ — 4:12 hovoru.",
+      "Na účtu ACME není od 3. června nic dalšího."
+    ],
+    "consequence": "Vytvoří 1 úkol · připraví 1 e-mail · vratné",
+    "approve": "Schválit",
+    "refine": "Upravit",
+    "reject": "Zamítnout"
+  },
+  "problem": {
+    "eyebrow": "Problém",
+    "h2": "Většina firemních AI projektů uvízne na půl cesty. Odpověď máte, ale nikdo s ní nic neudělá.",
+    "body": "Agent najde správný kontext a napíše správnou odpověď. A tím to skončí — protože nikdo soudný nenechá software měnit údaje o zákazníkovi, posílat nabídky nebo za sebe něco slibovat. Práce se tak hromadí u toho, kdo má zrovna čas otevřít další nástroj. Problém nikdy nebyl v modelu. Byl v tom, kdo to po něm zkontroluje.",
+    "items": [
+      {
+        "title": "Nikdo nechce další chat na počítači.",
+        "body": "Šéfové nepracují u stolu."
+      },
+      {
+        "title": "V dashboardech rozhodnutí jen čekají.",
+        "body": "Kontrola zabere víc času než ušetřená práce."
+      },
+      {
+        "title": "Nikdo nenechá AI zapisovat potichu.",
+        "body": "A má pravdu."
+      }
+    ]
+  },
+  "shift": {
+    "eyebrow": "Změna",
+    "h2": "Schválení zabere pět vteřin v mobilu, ne půl hodiny u počítače.",
+    "body": "Agent Erik zabalí každé rozhodnutí do jedné karty, kterou vyřídíte palcem. Práce je hotová a podložená. Na vás zbývá to, co za vás nikdo neudělá: rozhodnout.",
+    "steps": [
+      {
+        "title": "Sběr",
+        "body": "Hovory, nahrávky, e-maily, kalendář, dokumenty."
+      },
+      {
+        "title": "Příprava",
+        "body": "Vyhledání v kontextu firmy a konkrétní návrh i s podklady."
+      },
+      {
+        "title": "Rozhodnutí",
+        "body": "Schválíte a provede se. Řeknete, co změnit, a přepracuje to. Zamítnete a je konec."
+      }
+    ]
+  },
+  "diff": {
+    "eyebrow": "Rozdíl",
+    "h2": "V čem je to jinak",
+    "colA": "Běžná firemní AI",
+    "colB": "Agent Erik",
+    "rows": [
+      {
+        "label": "Co dostanete",
+        "a": "Odpověď nebo shrnutí",
+        "b": "Připravený krok, který stačí schválit"
+      },
+      {
+        "label": "Co jde dovnitř",
+        "a": "PDF, dokumenty, zprávy",
+        "b": "Hovory a nahrávky — to, co se doopravdy řeší, ještě než to někdo napíše"
+      },
+      {
+        "label": "Jak nad tím máte kontrolu",
+        "a": "Dashboard, který někdo někdy otevře",
+        "b": "Karta v mobilu a odpověď hlasem, během vteřin"
+      },
+      {
+        "label": "Jak se platí",
+        "a": "Za licenci a měsíc",
+        "b": "Za využití. Přidat dalšího člověka nic nestojí"
+      }
+    ],
+    "note": "Z pasivního hledání se stane skutečná práce — a na konci je člověk, který ji pustí dál."
+  },
+  "anywhere": {
+    "eyebrow": "Odkudkoli",
+    "h2": "Firma jede dál, i když zrovna nesedíte u počítače.",
+    "body": "Práce nečeká, až se vrátíte k notebooku, a vy nemusíte předstírat, že jste pořád k dispozici. Návrhy dorazí, až jsou hotové. Vyřídíte je z lesa, z letiště nebo mezi dvěma schůzkami — palcem, hlasem a vlastním úsudkem. To je ta část vaší práce, která se nedá předat. Všechno před ní ano.",
+    "voiceTitle": "Stačí to říct",
+    "voiceBody": "Zamítnete a rovnou řeknete proč: „Dej tam dvanáct tisíc, ne deset.“ Erik si to vezme, přepracuje a vrátí se s novým návrhem. Žádný formulář, žádné psaní, nic nemusíte hledat.",
+    "voiceQuote": "Dej tam dvanáct tisíc, ne deset."
+  },
+  "accountability": {
+    "eyebrow": "Odpovědnost",
+    "h2": "Za každým rozhodnutím je podepsaný konkrétní člověk.",
+    "body": "Schválení tu není jen políčko v databázi. Ukládá se, kdo rozhodl, kterou verzi návrhu přesně viděl, co tím povolil a kdy. Agenti si můžou číst a připravovat, co potřebují. Ale změnit něco ve firmě — nebo sáhnout do cizího systému — jde vždycky jen přes jedno lidské rozhodnutí.",
+    "items": [
+      {
+        "title": "Podklady, ne dojmy.",
+        "body": "U každého návrhu je vidět, z čeho vychází."
+      },
+      {
+        "title": "Žádné schvalování naslepo.",
+        "body": "Nic důležitého se neschová pod obecné „pokračovat“."
+      },
+      {
+        "title": "Návrhy mají verze.",
+        "body": "Když si vyžádáte změnu, vznikne nová verze. Nic se nepřepíše potichu."
+      },
+      {
+        "title": "Víte, co půjde vzít zpět.",
+        "body": "Karta rovnou říká, jestli se to dá vrátit."
+      }
+    ]
+  },
+  "start": {
+    "eyebrow": "Kde to začíná",
+    "h2": "Nejdřív pro firmy, které žijí na telefonu.",
+    "body": "Agent Erik vznikl uvnitř fungující telefonní ústředny, kde se z každého hovoru stane použitelný firemní kontext: shrnutí, zařazení, kontrola kvality, předání dál a návrh, co udělat potom. U call center a obchodních týmů se to vyplatí nejrychleji — ale nic v systému nepředpokládá, že to musí být zrovna telefon nebo jedno konkrétní CRM."
+  },
+  "cta": {
+    "eyebrow": "Pilotní partneři",
+    "h2": "Hledáme několik málo pilotních partnerů.",
+    "body": "Stavíme to s firmami, které tím proženou skutečný provoz a řeknou nám, kde to skřípe. Máte přímý vliv na to, jak produkt vypadá, a cenu, která odpovídá tomu, že jdete do toho brzy.",
+    "pricing": "Neplatíte za licence, ale za to, co skutečně využijete. Přidat dalšího člověka, který schvaluje, nic nestojí.",
+    "status": "Erik se aktivně vyvíjí s prvními pilotními partnery. Načítání hovorů, vyhledávání v kontextu a podklady fungují už teď. Schvalování a provádění kroků stavíme právě teď — s vámi.",
+    "bandTitle": "Prožene tím váš tým skutečný provoz?",
+    "bandBody": "Hledáme pilotní partnery.",
+    "bandCta": "Ozvěte se"
+  },
+  "form": {
+    "name": "Jméno",
+    "email": "Pracovní e-mail",
+    "company": "Firma",
+    "runsOn": "Na čem váš tým dneska běží?",
+    "runsOnOptions": ["Hovory", "E-mail", "Práce v terénu", "Něco jiného"],
+    "message": "Cokoli, co bychom měli vědět (nepovinné)",
+    "submit": "Odeslat",
+    "sending": "Odesílám…",
+    "success": "Díky, ozveme se.",
+    "mailFallback": "Otevíráme e-mail s vyplněnými údaji.",
+    "error": "Něco se pokazilo. Napište nám na"
+  },
+  "how": {
+    "eyebrow": "Jak to funguje",
+    "h1": "Jak Agent Erik funguje",
+    "intro": "Stojí to na třech věcech: u všeho, co do systému vstoupí, je vidět, odkud to je; agenti navrhují, ale nic sami neprovedou; a člověk schvaluje jednu konkrétní verzi jednoho konkrétního návrhu.",
+    "loopsTitle": "Šest kroků",
+    "loops": [
+      {
+        "title": "Sběr",
+        "body": "Konektory načítají hovory, kalendáře, dokumenty a zprávy. U každé položky zůstává zdroj, čas, oprávnění i původní identita. Nic se neslije do neprůhledné paměti modelu."
+      },
+      {
+        "title": "Rozhovor",
+        "body": "Zeptáte se, vysvětlíte, zadáte — ve vlákně, které zná kontext firmy. Vlákno je pracovní podklad, ne závazný stav."
+      },
+      {
+        "title": "Návrh",
+        "body": "Agent připraví návrh: co doporučuje, proč, z čeho vychází, co neví, co přesně by se změnilo a jestli to půjde vzít zpět."
+      },
+      {
+        "title": "Rozhodnutí",
+        "body": "Schválit · Zamítnout · Vrátit k přepracování · Upravit a schválit. U schválení se uloží člověk, verze návrhu i to, co tím povolil."
+      },
+      {
+        "title": "Provedení",
+        "body": "Změnit data nebo sáhnout do cizího systému může jen samotná aplikace. Před provedením si znovu ověří oprávnění, verzi návrhu, podmínky i to, že se krok neprovede dvakrát."
+      },
+      {
+        "title": "Zlepšování",
+        "body": "Systém sleduje, co se schvaluje a co se vrací, a podle toho se zlepšuje — aniž by si tím agenti tiše rozšiřovali pravomoci."
+      }
+    ],
+    "boundaryTitle": "Kde končí automat a začíná člověk",
+    "boundaryHead": ["Zápis", "Automaticky?", "Kdo za to ručí"],
+    "boundaryRows": [
+      {
+        "write": "Co přišlo zvenčí (hovor, událost v kalendáři)",
+        "auto": "Ano",
+        "authority": "Konektor a původní zdroj"
+      },
+      {
+        "write": "Odvozené věci (přepisy, indexy, shrnutí, koncepty)",
+        "auto": "Ano",
+        "authority": "Nezávazné, s uvedeným původem"
+      },
+      {
+        "write": "Změny ve firmě a zásahy do cizích systémů",
+        "auto": "Ne",
+        "authority": "Jedno výslovné lidské rozhodnutí"
+      }
+    ],
+    "anatomyTitle": "Co je na kartě",
+    "anatomy": [
+      {
+        "title": "Co se navrhuje",
+        "body": "„Domluvit další hovor s ACME a připravit předběžnou nabídku.“"
+      },
+      {
+        "title": "Z čeho to vyšlo",
+        "body": "„Z dnešního hovoru ve 14:00 s Janem Novákem.“"
+      },
+      {
+        "title": "Podklady",
+        "body": "Dva body, u obou je vidět zdroj."
+      },
+      {
+        "title": "Co to udělá",
+        "body": "Které systémy se změní a jestli to půjde vrátit."
+      },
+      {
+        "title": "Ovládání",
+        "body": "Schválit · Upravit (hlasem) · Zamítnout. Gesto to zrychlí, ale tlačítka i čtečka obrazovky zvládnou totéž. Bez gest se obejdete."
+      }
+    ],
+    "connectorsTitle": "Konektory",
+    "connectorsBody": "Čtení a zásahy se povolují zvlášť — když Erik smí číst váš kalendář, neznamená to, že do něj smí zapisovat. Dnes: hovory a nahrávky, Google Kalendář, Google Disk. E-mail a zprávy budou následovat."
+  },
+  "privacy": {
+    "h1": "Soukromí",
+    "intro": "Tahle stránka popisuje, jak web Agenta Erika nakládá s vašimi údaji. Zatím neprošla právní kontrolou a před spuštěním ji nahradíme.",
+    "sections": [
+      {
+        "title": "Co web sbírá",
+        "body": "Web je statický a nepoužívá sledovací cookies. Jediné osobní údaje, se kterými pracuje, jsou ty, které sami vyplníte do formuláře pro pilotní partnery: jméno, pracovní e-mail, firma a zpráva."
+      },
+      {
+        "title": "K čemu to použijeme",
+        "body": "Ozveme se vám ohledně pilotního programu. Údaje neprodáváme a nepředáváme je nikomu dalšímu pro jeho vlastní marketing."
+      },
+      {
+        "title": "Kde jsou uložené",
+        "body": "Data jsou v Google Cloudu v regionu europe-west3."
+      },
+      {
+        "title": "Vaše práva",
+        "body": "Kdykoli si můžete vyžádat kopii svých údajů nebo jejich smazání. Napište nám a vyřídíme to."
+      }
+    ],
+    "contact": "Dotazy k soukromí:"
+  },
+  "footer": {
+    "tagline": "AI odvede práci. Poslední slovo máte vy.",
+    "privacy": "Soukromí",
+    "contact": "Kontakt",
+    "rights": "Všechna práva vyhrazena."
+  }
+}

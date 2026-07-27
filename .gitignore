@@ -18,3 +18,18 @@ frontend/.env.*
 functions/node_modules/
 functions/lib/
 .emulator-data/
+
+# web (Nuxt static site)
+web/node_modules/
+web/.nuxt/
+web/.output/
+web/.output-*/
+# nuxi generate leaves this as a symlink into the build output.
+web/dist
+web/firebase-debug.log
+web/.env
+web/.env.*
+!web/.env.example
+
+# editor / filesystem junk
+.fuse_hidden*
