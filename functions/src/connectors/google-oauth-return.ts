@@ -1,4 +1,20 @@
-const productionOrigin = "https://odorik-tx-260720-c58d.web.app";
+const defaultAppOrigins = [
+  "https://odorik-tx-260720-c58d.web.app",
+  "https://agent-erik-app.web.app",
+  "https://app.agenterik.cz",
+];
+
+// Every Hosting site the app runs on. Override with APP_ORIGINS (comma
+// separated, most canonical first) when a custom domain is added — no OAuth
+// client change is needed, because only the callback below is registered with
+// Google and it stays on the canonical origin.
+export const appOrigins = (process.env.APP_ORIGINS?.trim()
+  ? process.env.APP_ORIGINS.split(",")
+  : defaultAppOrigins)
+  .map((origin) => origin.trim().replace(/\/$/, ""))
+  .filter(Boolean);
+
+const productionOrigin = appOrigins[0];
 const localDevelopmentOrigin = "http://127.0.0.1:5173";
 const callbackPath = "/oauth/google/callback";
 
@@ -22,6 +38,9 @@ function isLocalDevelopment(url: URL): boolean {
     && ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
 }
 
+// Stays on the canonical origin for every deployed site: that one callback URI
+// is what Google has registered. The flow returns to the site the user started
+// from via googleOAuthReturnUrl.
 export function googleOAuthRedirectUri(requestedOrigin?: string): string {
   const url = requestedUrl(requestedOrigin);
   return url && isLocalDevelopment(url)
@@ -35,7 +54,7 @@ export function googleOAuthReturnUrl(requestedOrigin?: string): string {
   const url = requestedUrl(requestedOrigin);
   if (
     url
-    && (url.origin === productionOrigin || isLocalDevelopment(url))
+    && (appOrigins.includes(url.origin) || isLocalDevelopment(url))
   ) {
     return `${url.origin}/sources`;
   }

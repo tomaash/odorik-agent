@@ -232,8 +232,20 @@ test("returns Google OAuth to the requesting local app without allowing open red
     "http://127.0.0.1:4173/sources",
   );
   assert.equal(
+    googleOAuthReturnUrl("https://agent-erik-app.web.app/sources"),
+    "https://agent-erik-app.web.app/sources",
+  );
+  assert.equal(
+    googleOAuthReturnUrl("https://app.agenterik.cz/sources"),
+    "https://app.agenterik.cz/sources",
+  );
+  assert.equal(
     googleOAuthReturnUrl("https://attacker.example"),
     "https://odorik-tx-260720-c58d.web.app/sources",
+  );
+  assert.equal(
+    googleOAuthRedirectUri("https://agent-erik-app.web.app"),
+    defaultGoogleRedirectUri,
   );
   assert.equal(
     googleOAuthRedirectUri("http://localhost:4173"),

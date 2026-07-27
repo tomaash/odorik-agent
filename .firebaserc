@@ -1,5 +1,18 @@
 {
   "projects": {
     "default": "odorik-tx-260720-c58d"
-  }
+  },
+  "targets": {
+    "odorik-tx-260720-c58d": {
+      "hosting": {
+        "web": [
+          "agent-erik-web"
+        ],
+        "frontend": [
+          "agent-erik-app"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }
