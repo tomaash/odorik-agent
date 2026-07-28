@@ -148,10 +148,13 @@ failure handling, and every intended side effect. The workflow becomes active
 only after approval. Changes produce a new version and go through the same
 decision loop.
 
-A diagram or node editor could be generated as a view when helpful. We should
-not build a workflow compiler, visual editor, or workflow-definition agent
-until factual retrieval and the general proposal/decision loop work on real
-company data.
+A small call-to-task block language is now being tested after factual retrieval.
+It contains only implemented behavior: the completed-call trigger, internal task
+creation behind a mandatory named approver, and one-level branches over stored
+call duration, contact match, and transcript text. The workflow creates an
+immutable approval request; only the approver can create the disclosed task.
+Conversational authoring and broader primitives remain later hypotheses that
+require typed, revertible changes and proven runtime semantics.
 
 ## Call centres as the first product surface
 
@@ -213,7 +216,7 @@ abstraction is real rather than an Odorik adapter with a generic name.
 
 ## Non-goals for the next releases
 
-- a universal visual workflow builder;
+- a universal or free-form visual workflow builder;
 - arbitrary agent-generated code execution;
 - autonomous external actions;
 - full replacement of document, calendar, accounting, or messaging products;

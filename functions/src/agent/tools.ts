@@ -209,11 +209,11 @@ function extractCitationInfo(record: CompanyRecord): {
     } else if (adapterId === "gmail" || adapterId === "github") {
       externalUrl = (typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : undefined) || artifactRefs?.[0];
     } else if (adapterId === "odorik") {
-      internalRoute = "/inbox";
+      internalRoute = "/contacts";
     }
   } else if (record.kind === "call" || record.kind === "interaction") {
     adapterId = "odorik";
-    internalRoute = "/inbox";
+    internalRoute = "/contacts";
   } else if (record.kind === "contact") {
     adapterId = "crm";
     internalRoute = `/contacts/${record.recordId}`;
@@ -222,6 +222,7 @@ function extractCitationInfo(record: CompanyRecord): {
     internalRoute = `/requests/${record.recordId}`;
   } else if (record.kind === "task" || record.kind === "review" || record.kind === "audit_event") {
     adapterId = "crm";
+    if (record.kind === "task") internalRoute = "/tasks";
   }
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {

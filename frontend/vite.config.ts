@@ -11,6 +11,25 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [vue()],
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks(id) {
+            if (id.includes('/node_modules/@firebase/') || id.includes('/node_modules/firebase/')) {
+              return 'firebase'
+            }
+            if (
+              id.includes('/node_modules/vue/')
+              || id.includes('/node_modules/vue-router/')
+              || id.includes('/node_modules/vue-i18n/')
+              || id.includes('/node_modules/pinia/')
+            ) {
+              return 'vue'
+            }
+          },
+        },
+      },
+    },
     server: {
       host: '127.0.0.1',
       port: 5173,

@@ -1,5 +1,5 @@
 {
-  "name": "odorik-crm-functions",
+  "name": "agent-erik-functions",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -20,6 +20,7 @@
     "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting --import=./.emulator-data --export-on-exit=./.emulator-data"
   },
   "dependencies": {
+    "@agent-erik/workflow": "file:shared",
     "@trpc/server": "11.18.0",
     "firebase-admin": "13.8.0",
     "firebase-functions": "7.2.5",

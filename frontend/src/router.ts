@@ -22,7 +22,14 @@ const router = createRouter({
       component: () => import('./views/AppLayout.vue'),
       meta: { requiresAuth: true, requiresEnabled: true },
       children: [
-        { path: '', name: 'assistant', component: () => import('./views/AssistantPage.vue') },
+        { path: '', redirect: '/tasks' },
+        { path: 'tasks', name: 'tasks', component: () => import('./views/TasksPage.vue') },
+        { path: 'pipeline', name: 'pipeline', component: () => import('./views/PipelinePage.vue') },
+        { path: 'operations', redirect: '/tasks' },
+        { path: 'decisions/:pathMatch(.*)*', redirect: '/tasks' },
+        { path: 'ask', name: 'ask', component: () => import('./views/AssistantPage.vue') },
+        { path: 'workflows', name: 'workflows', component: () => import('./views/WorkflowsPage.vue') },
+        { path: 'workflows/:id', name: 'workflow-editor', component: () => import('./views/WorkflowEditorPage.vue') },
         { path: 'intake', name: 'inbox', component: () => import('./views/InboxPage.vue') },
         { path: 'intake/:id', name: 'intake-review', component: () => import('./views/RequestReviewPage.vue') },
         { path: 'requests', name: 'requests', component: () => import('./views/RequestsPage.vue') },
@@ -51,7 +58,7 @@ router.beforeEach(async (to) => {
   if (requiresEnabled && !authStore.isEnabled) return { name: 'pending' }
   if (to.name === 'login' && authStore.isAuthenticated) {
     if (sessionStorage.getItem('pendingInvitationToken')) return { name: 'join-team' }
-    return authStore.isEnabled ? { name: 'assistant' } : { name: 'pending' }
+    return authStore.isEnabled ? { name: 'tasks' } : { name: 'pending' }
   }
   if (
     to.name === 'pending'

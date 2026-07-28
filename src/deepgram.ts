@@ -4,7 +4,12 @@ export type DeepgramTranscriptionResult = {
   language: string;
   transcript: string;
   summary: string;
-  segments: Array<{ speaker: string; text: string }>;
+  segments: Array<{
+    speaker: string;
+    text: string;
+    startSeconds?: number;
+    endSeconds?: number;
+  }>;
   actionItems: string[];
 };
 
@@ -45,7 +50,7 @@ export async function transcribeAudioWithDeepgram(input: {
   }
 
   const fullTranscript = alternative.transcript || "";
-  const segments: Array<{ speaker: string; text: string }> = [];
+  const segments: DeepgramTranscriptionResult["segments"] = [];
 
   const paragraphs = alternative.paragraphs?.paragraphs || [];
   if (paragraphs.length > 0) {
@@ -54,36 +59,53 @@ export async function transcribeAudioWithDeepgram(input: {
       const paragraphText =
         p.sentences?.map((s: any) => s.text).join(" ") || p.transcript || "";
       if (paragraphText.trim()) {
+        const firstSentence = p.sentences?.[0];
+        const lastSentence = p.sentences?.[p.sentences.length - 1];
+        const startSeconds = Number(p.start ?? firstSentence?.start);
+        const endSeconds = Number(p.end ?? lastSentence?.end);
         segments.push({
           speaker: speakerLabel,
           text: paragraphText.trim(),
+          ...(Number.isFinite(startSeconds) ? { startSeconds } : {}),
+          ...(Number.isFinite(endSeconds) ? { endSeconds } : {}),
         });
       }
     }
   } else if (alternative.words && alternative.words.length > 0) {
     let currentSpeaker: number | null = null;
     let currentText = "";
+    let currentStart: number | undefined;
+    let currentEnd: number | undefined;
 
     for (const word of alternative.words) {
       const wordSpeaker = word.speaker ?? 0;
       if (currentSpeaker === null) {
         currentSpeaker = wordSpeaker;
         currentText = word.punctuated_word || word.word;
+        currentStart = Number.isFinite(Number(word.start)) ? Number(word.start) : undefined;
+        currentEnd = Number.isFinite(Number(word.end)) ? Number(word.end) : undefined;
       } else if (currentSpeaker === wordSpeaker) {
         currentText += ` ${word.punctuated_word || word.word}`;
+        currentEnd = Number.isFinite(Number(word.end)) ? Number(word.end) : currentEnd;
       } else {
         segments.push({
           speaker: `Speaker ${currentSpeaker}`,
           text: currentText.trim(),
+          ...(currentStart === undefined ? {} : { startSeconds: currentStart }),
+          ...(currentEnd === undefined ? {} : { endSeconds: currentEnd }),
         });
         currentSpeaker = wordSpeaker;
         currentText = word.punctuated_word || word.word;
+        currentStart = Number.isFinite(Number(word.start)) ? Number(word.start) : undefined;
+        currentEnd = Number.isFinite(Number(word.end)) ? Number(word.end) : undefined;
       }
     }
     if (currentText.trim() && currentSpeaker !== null) {
       segments.push({
         speaker: `Speaker ${currentSpeaker}`,
         text: currentText.trim(),
+        ...(currentStart === undefined ? {} : { startSeconds: currentStart }),
+        ...(currentEnd === undefined ? {} : { endSeconds: currentEnd }),
       });
     }
   }

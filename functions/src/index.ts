@@ -16,6 +16,10 @@ import { projectOdorikCallContext } from "./connectors/odorik.js";
 import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.js";
 import { db } from "./firestore.js";
 import { explorersCompanyId } from "./tenancy.js";
+import {
+  runEnabledWorkflowsForCall,
+  workflowRuntimeFlags,
+} from "./workflow/runtime.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { sendPartnerForm } from "./partner-form.js";
 
@@ -38,10 +42,35 @@ export const processCallCrm = onDocumentUpdated(
     const before = event.data?.before.data();
     const after = event.data?.after.data();
     if (!shouldProcessCallUpdate(before, after)) return;
+    const flags = workflowRuntimeFlags();
+    if (!flags.legacyCrmEnabled) return;
     await processCompletedCall({
       companyId: event.params.companyId,
       callId: event.params.callId,
       apiKey: geminiApiKey.value(),
+    });
+  },
+);
+
+export const processCallWorkflows = onDocumentUpdated(
+  {
+    document: "companies/{companyId}/calls/{callId}",
+    database: "odorik",
+    region: "europe-west3",
+    timeoutSeconds: 300,
+    memory: "512MiB",
+    maxInstances: 3,
+    serviceAccount: runtimeServiceAccount,
+  },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!shouldProcessCallUpdate(before, after)) return;
+    const flags = workflowRuntimeFlags();
+    if (!flags.enabled) return;
+    await runEnabledWorkflowsForCall({
+      companyId: event.params.companyId,
+      callId: event.params.callId,
     });
   },
 );

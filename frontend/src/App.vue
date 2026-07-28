@@ -12,9 +12,9 @@ router.isReady().finally(() => {
 
 <template>
   <main v-if="!ready" class="app-boot" role="status" aria-live="polite">
-    <div class="app-boot__mark" aria-hidden="true">CA</div>
+    <div class="app-boot__mark" aria-hidden="true">E</div>
     <div class="app-boot__spinner" aria-hidden="true" />
-    <p class="app-boot__label">Načítám Company Agent…</p>
+    <p class="app-boot__label">Načítám Agent Erik…</p>
   </main>
   <router-view v-else />
 </template>

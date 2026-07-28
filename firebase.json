@@ -4,7 +4,10 @@
       "source": "functions",
       "codebase": "crm",
       "runtime": "nodejs22",
-      "predeploy": ["npm --prefix functions run build"]
+      "predeploy": [
+        "npm --prefix functions/shared run build",
+        "npm --prefix functions run build"
+      ]
     }
   ],
   "hosting": [

@@ -1,7 +1,8 @@
-# AI-first company operations platform
+# Agent Erik
 
-This repository is evolving from a call-to-CRM application into a
-workflow-agnostic operating interface for AI-first companies.
+Agent Erik is an internal operating interface for teams working from calls,
+contacts, tasks, and deals. This repository is evolving from a call-to-CRM
+application into that focused, accountable product.
 
 The intended product has two primary surfaces:
 
@@ -85,8 +86,18 @@ The existing vertical slice remains useful as a proving ground:
   without an invitation remains pending.
 - The MVP supports one team per user, `admin` and `member` roles, and no
   self-service team creation or team switcher.
-- The new **Agent** screen is the default signed-in destination; the existing
-  CRM remains available as Intake, Requests, and Contacts.
+- The signed-in application opens on **Tasks**. **Pipeline** provides one simple
+  contact-linked deal board; **Contacts** joins calls, deals, tasks, and legacy
+  requests; **Ask** stays cited and read-only; and **Sources** manages
+  connectors.
+- A dependency-free shared block language validates and evaluates in both
+  browser and Node. Ordered task blocks and one-level factual IF/ELSE conditions
+  can preview completed calls and create deterministic approval requests.
+  Only each action block's named approver can create its disclosed task.
+- Approval is mandatory and attached to every action; it cannot be omitted or
+  wired around. The palette exposes no speculative read, draft, or
+  external-action blocks. External capabilities are added only after connector,
+  authorization, execution, retry, and audit behavior exists.
 
 This code is not being discarded. During the pivot it serves as:
 
@@ -133,6 +144,8 @@ of enabled company members.
 ## Repository map
 
 - `src/`, `Dockerfile`, `infra/`: Odorik recording ingestion and transcription
+- `functions/shared/`: dependency-free internal workflow schema, validator,
+  condition evaluator, template renderer, and preview contract
 - `functions/`: Firebase Auth context, tRPC, CRM extraction and review
 - `functions/src/connectors/`: adapter registry, encrypted connection
   credentials, Odorik projection, Calendar OAuth and incremental sync
@@ -158,7 +171,7 @@ npm --prefix frontend run build
 ```
 
 Google connector OAuth in the emulator uses the deterministic frontend origin
-`http://127.0.0.1:5173`. The `Company Agent connectors` web OAuth client must
+`http://127.0.0.1:5173`. The `Agent Erik connectors` web OAuth client must
 keep both exact callbacks:
 
 ```text
@@ -212,3 +225,25 @@ Pushes to `main` also deploy through GitHub Actions using Workload Identity
 Federation scoped to this repository. Existing Odorik destinations, production
 secrets, and retention policies must not be changed as an incidental part of
 the platform migration.
+
+## Workflow controls
+
+The internal workflow engine is on by default and evaluates enabled schema-v4
+approval-gated programs. Immutable schema-v2 and schema-v3 versions normalize
+to equivalent action blocks whose existing assignee becomes the mandatory
+approver. The engine can be stopped independently:
+
+```text
+WORKFLOW_ENGINE_ENABLED=false
+LEGACY_CRM_ENABLED=true
+```
+
+Schema-v1 experiments are preserved as disabled legacy records. The exact
+untouched demo plus supported schema-v2 and schema-v3 drafts upgrade to the
+approval-gated language. The legacy CRM path remains independently controlled
+during the transition.
+
+The GCP project id, named Firestore database, legacy deployed function names,
+and `odorik-crm@...` service account are historical infrastructure identifiers.
+They deliberately remain unchanged. `odorik` continues to name the telephony
+provider and its adapter; it no longer names the Agent Erik product.

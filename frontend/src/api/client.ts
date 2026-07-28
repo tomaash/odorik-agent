@@ -1,5 +1,9 @@
 import { createTRPCClient, httpBatchLink, httpLink } from '@trpc/client'
-import type { AppRouter } from '@odorik/functions/router'
+import type { AppRouter } from '@agent-erik/functions/router'
+import type {
+  ValidationResult,
+  WorkflowSpec,
+} from '@agent-erik/workflow'
 import { auth } from '../firebase'
 
 export const trpc = createTRPCClient<AppRouter>({
@@ -108,7 +112,12 @@ export type IntakeDetails = {
     transcript?: string
     summary?: string
     from?: string
-    segments?: Array<{ speaker?: string; text?: string }>
+    segments?: Array<{
+      speaker?: string
+      text?: string
+      startSeconds?: number
+      endSeconds?: number
+    }>
   }) | null
   processingRun: (Record<string, unknown> & { id: string; proposals?: FieldProposal[] }) | null
   task: (Record<string, unknown> & { id: string; status?: string }) | null
@@ -154,6 +163,8 @@ export type ContactListItem = {
 export type ContactDetails = {
   contact: ContactListItem
   requests: ServiceRequestListItem[]
+  deals: DealItem[]
+  tasks: TaskItem[]
   interactions: Array<Record<string, unknown> & {
     id: string
     summary?: string | null
@@ -162,6 +173,74 @@ export type ContactDetails = {
     createdAt?: string | null
     durationSeconds?: number | null
   }>
+}
+
+export type TaskStatus = 'open' | 'completed' | 'dismissed'
+
+export type TaskItem = {
+  id: string
+  objectType?: 'task'
+  status: TaskStatus
+  title: string
+  instructions?: string | null
+  assigneeUid: string
+  assigneeName: string
+  dueAt?: string | null
+  contactId?: string | null
+  dealId?: string | null
+  callId?: string | null
+  context?: {
+    contactName?: string | null
+    contactPhone?: string | null
+    callerName?: string | null
+    callerPhone?: string | null
+    callSummary?: string | null
+    transcriptExcerpt?: string | null
+  } | null
+  source?: {
+    kind?: 'manual' | 'call' | 'deal' | 'workflow'
+    workflowId?: string
+    workflowVersion?: number
+    approvalId?: string
+    approvedBy?: string
+  } | null
+  outcomeNote?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  completedAt?: string | null
+  dismissedAt?: string | null
+}
+
+export type PipelineStage = {
+  id: string
+  name: string
+  category: 'open' | 'won' | 'lost'
+  position: number
+  color: string
+}
+
+export type Pipeline = {
+  id: string
+  name: string
+  stages: PipelineStage[]
+}
+
+export type DealItem = {
+  id: string
+  objectType: 'deal'
+  title: string
+  pipelineId: string
+  stageId: string
+  stageName: string
+  stageCategory: 'open' | 'won' | 'lost'
+  contactId: string
+  contactName: string
+  contactPhone?: string | null
+  ownerUid: string
+  ownerName: string
+  createdAt?: string | null
+  updatedAt?: string | null
+  stageChangedAt?: string | null
 }
 
 export type AssistantCitation = {
@@ -202,6 +281,112 @@ export type AssistantMessage = {
   confidence?: 'high' | 'medium' | 'low'
   limitations?: string[]
   createdAt?: string | null
+}
+
+export type WorkflowListItem = {
+  id: string
+  name: string
+  status: 'draft' | 'enabled' | 'paused' | 'legacy'
+  deployedVersion: number | null
+  versionCount: number
+  draft: WorkflowSpec | null
+  legacy?: boolean
+  warning?: string
+  updatedAt: string | null
+  recentRuns: Record<string, number>
+}
+
+export type WorkflowDetails = WorkflowListItem & {
+  draftValidation?: ValidationResult
+}
+
+export type DryRunResult = {
+  workflowId: string
+  sampleSize: number
+  wouldRequest: number
+  matchedCalls: number
+  skipped: number
+  failed: number
+  results: Array<{
+    callId: string
+    occurredAt?: string | null
+    status: 'would_request' | 'would_skip' | 'failed'
+    tasks?: Array<{
+      blockId: string
+      title: string
+      instructions: string | null
+      assigneeUid: string
+      assigneeName: string
+      approverUid: string
+      approverName: string
+      dueAt: string | null
+      context: {
+        callerName?: string | null
+        callerPhone?: string | null
+        callSummary?: string | null
+        transcriptExcerpt?: string | null
+      }
+    }>
+    conditions?: Array<{
+      blockId: string
+      field: 'call.durationSeconds' | 'caller.hasContact' | 'transcript.text'
+      operator: 'eq' | 'contains' | 'gt' | 'gte' | 'lt' | 'lte'
+      expected: string | number | boolean
+      actual: string | number | boolean | null
+      result: boolean
+      branch: 'then' | 'else'
+    }>
+    error?: string
+  }>
+}
+
+export type ApprovalStatus =
+  | 'pending'
+  | 'executing'
+  | 'approved'
+  | 'rejected'
+  | 'execution_failed'
+
+export type ActionApprovalItem = {
+  id: string
+  objectType: 'action_approval'
+  status: ApprovalStatus
+  approverUid: string
+  approverName: string
+  action: {
+    kind: 'task.create'
+    taskId: string
+    title: string
+    instructions?: string | null
+    assigneeUid: string
+    assigneeName: string
+    dueAt?: string | null
+    contactId?: string | null
+    callId?: string | null
+    context?: {
+      callerName?: string | null
+      callerPhone?: string | null
+      callSummary?: string | null
+      transcriptExcerpt?: string | null
+    } | null
+  }
+  source: {
+    kind: 'workflow'
+    callId: string
+    workflowId: string
+    workflowVersion: number
+    runId: string
+    blockId: string
+  }
+  effectDigest: string
+  taskId?: string | null
+  executionError?: string | null
+  rejectionNote?: string | null
+  createdAt?: string | null
+  updatedAt?: string | null
+  approvedAt?: string | null
+  rejectedAt?: string | null
+  executedAt?: string | null
 }
 
 export type AdapterId = 'odorik' | 'google_calendar' | 'google_drive' | 'gmail' | 'github'
@@ -350,6 +535,88 @@ export async function getContact(contactId: string): Promise<ContactDetails> {
   return trpc.contacts.get.query({ contactId }) as Promise<ContactDetails>
 }
 
+export async function listTasks(input?: {
+  status?: TaskStatus
+  assigneeUid?: string
+  contactId?: string
+  dealId?: string
+}): Promise<TaskItem[]> {
+  return trpc.tasks.list.query({ ...(input || {}), limit: 200 }) as Promise<TaskItem[]>
+}
+
+export async function createTask(input: {
+  title: string
+  instructions?: string
+  assigneeUid: string
+  dueAt?: string | null
+  contactId?: string | null
+  dealId?: string | null
+  callId?: string | null
+}): Promise<TaskItem> {
+  return trpc.tasks.create.mutate(input) as Promise<TaskItem>
+}
+
+export async function updateTask(input: {
+  taskId: string
+  title?: string
+  instructions?: string
+  assigneeUid?: string
+  dueAt?: string | null
+}): Promise<TaskItem> {
+  return trpc.tasks.update.mutate(input) as Promise<TaskItem>
+}
+
+export async function transitionTask(input: {
+  taskId: string
+  to: TaskStatus
+  note?: string
+}) {
+  return trpc.tasks.transition.mutate(input)
+}
+
+export async function listActionApprovals(input?: {
+  status?: ApprovalStatus
+  approverUid?: string
+}): Promise<ActionApprovalItem[]> {
+  return trpc.approvals.list.query({ ...(input || {}), limit: 200 }) as Promise<ActionApprovalItem[]>
+}
+
+export async function approveAction(approvalId: string) {
+  return trpc.approvals.approve.mutate({ approvalId })
+}
+
+export async function rejectAction(approvalId: string, note?: string) {
+  return trpc.approvals.reject.mutate({
+    approvalId,
+    ...(note?.trim() ? { note: note.trim() } : {}),
+  })
+}
+
+export async function getPipeline(): Promise<Pipeline> {
+  return trpc.pipeline.get.query() as Promise<Pipeline>
+}
+
+export async function listDeals(contactId?: string): Promise<DealItem[]> {
+  return trpc.deals.list.query({ ...(contactId ? { contactId } : {}), limit: 200 }) as Promise<DealItem[]>
+}
+
+export async function createDeal(input: {
+  title: string
+  contactId: string
+  ownerUid: string
+  stageId?: string
+}): Promise<DealItem> {
+  return trpc.deals.create.mutate(input) as Promise<DealItem>
+}
+
+export async function moveDeal(dealId: string, stageId: string) {
+  return trpc.deals.move.mutate({ dealId, stageId })
+}
+
+export async function archiveDeal(dealId: string) {
+  return trpc.deals.archive.mutate({ dealId })
+}
+
 export async function getAssistantStatus() {
   return trpc.assistant.status.query()
 }
@@ -360,6 +627,52 @@ export async function getAssistantHistory(threadId = 'general'): Promise<Assista
 
 export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {
   return trpc.assistant.ask.mutate({ threadId, question }) as Promise<AssistantAnswer>
+}
+
+export async function listWorkflows(): Promise<WorkflowListItem[]> {
+  return trpc.workflows.list.query() as Promise<WorkflowListItem[]>
+}
+
+export async function getWorkflow(workflowId: string): Promise<WorkflowDetails> {
+  return trpc.workflows.get.query({ workflowId }) as Promise<WorkflowDetails>
+}
+
+export async function createWorkflow(name?: string): Promise<{
+  id: string
+  spec: WorkflowSpec
+  status: 'draft'
+  deployedVersion: null
+}> {
+  return trpc.workflows.create.mutate(name ? { name } : undefined) as Promise<{
+    id: string
+    spec: WorkflowSpec
+    status: 'draft'
+    deployedVersion: null
+  }>
+}
+
+export async function saveWorkflow(workflowId: string, spec: WorkflowSpec) {
+  return trpc.workflows.save.mutate({ workflowId, spec })
+}
+
+export async function enableWorkflow(workflowId: string) {
+  return trpc.workflows.enable.mutate({ workflowId })
+}
+
+export async function pauseWorkflow(workflowId: string) {
+  return trpc.workflows.pause.mutate({ workflowId })
+}
+
+export async function dryRunWorkflow(
+  workflowId: string,
+  spec: WorkflowSpec,
+  limit = 20,
+): Promise<DryRunResult> {
+  return trpc.workflows.dryRun.mutate({ workflowId, spec, limit }) as Promise<DryRunResult>
+}
+
+export async function getWorkflowHealth() {
+  return trpc.workflows.health.query()
 }
 
 export async function listSources(): Promise<SourcesResponse> {

@@ -31,7 +31,7 @@ async function signOut() {
 
 <template>
   <main class="app-gradient min-h-screen min-w-0 overflow-x-hidden flex items-center justify-center p-4 sm:p-5">
-    <Card class="min-w-0 w-full max-w-xl overflow-hidden shadow-lg rounded-3xl [&_.p-card-body]:p-0">
+    <Card class="min-w-0 w-full max-w-xl overflow-hidden border border-surface-200 rounded-lg [&_.p-card-body]:p-0">
       <template #content>
         <div class="p-5 sm:p-9 text-center">
           <div class="w-16 h-16 mx-auto rounded-full bg-amber-100 text-amber-700 flex items-center justify-center mb-6">

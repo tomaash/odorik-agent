@@ -14,7 +14,12 @@ type CallDocument = {
   transcript?: string;
   summary?: string;
   language?: string;
-  segments?: Array<{ speaker?: string; text?: string }>;
+  segments?: Array<{
+    speaker?: string;
+    text?: string;
+    startSeconds?: number;
+    endSeconds?: number;
+  }>;
   from?: string | null;
   to?: string | null;
   duration?: number | null;

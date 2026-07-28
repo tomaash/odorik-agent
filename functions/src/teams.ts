@@ -60,14 +60,14 @@ async function sendInvitationEmail(input: {
     const { data, error } = await resend.emails.send({
       from: "Agent Erik <hello@agenterik.cz>",
       to: input.email,
-      subject: `Invitation to join ${input.teamName}`,
+      subject: `Join ${input.teamName} on Agent Erik`,
       html: [
         "<p>Hello,</p>",
-        `<p>${escapeHtml(input.inviterName)} invited you to join <strong>${escapeHtml(input.teamName)}</strong>.</p>`,
+        `<p>${escapeHtml(input.inviterName)} invited you to join <strong>${escapeHtml(input.teamName)}</strong> on Agent Erik.</p>`,
         `<p><a href="${escapeHtml(invitationUrl)}">Review invitation</a></p>`,
         "<p>This invitation expires in seven days. Sign in with the Google account matching this email address.</p>",
       ].join(""),
-      text: `${input.inviterName} invited you to join ${input.teamName}.\n\n${invitationUrl}\n\nThis invitation expires in seven days.`,
+      text: `${input.inviterName} invited you to join ${input.teamName} on Agent Erik.\n\n${invitationUrl}\n\nThis invitation expires in seven days.`,
     }, {
       idempotencyKey: `team-invite/${input.companyId}/${input.invitationId}/${input.tokenVersion}`,
     });
