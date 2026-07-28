@@ -6,10 +6,19 @@
 @import "tailwindcss-primeui";
 
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #17211c;
-  background: #f4f7f5;
+  font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  color: #1d1c1a;
+  background: #f4f2ee;
   font-synthesis: none;
+  --paper: #faf9f6;
+  --paper-muted: #f4f2ee;
+  --hairline: #e3e1dc;
+  --ink: #171716;
+  --muted: #68645e;
+  --accent: #354fd8;
+  --accent-soft: #eef1ff;
+  --missing: #c77c12;
+  --missing-soft: #fff6e3;
 }
 
 body {
@@ -18,9 +27,17 @@ body {
   min-height: 100vh;
   overflow-x: hidden;
   -webkit-font-smoothing: antialiased;
+  background: var(--paper-muted);
 }
 
 button, input, textarea { font: inherit; }
+
+code,
+pre,
+.font-mono,
+.meta-label {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
 
 #app {
   min-width: 0;
@@ -47,16 +64,58 @@ img, svg {
 
 .app-gradient {
   background:
-    radial-gradient(circle at 10% 0%, rgba(47, 133, 90, .11), transparent 36rem),
-    linear-gradient(180deg, #f8fbf9 0%, #f1f5f2 100%);
+    linear-gradient(rgba(29, 28, 26, .025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(29, 28, 26, .025) 1px, transparent 1px),
+    var(--paper);
+  background-size: 24px 24px;
 }
 
 .transcript-segment[data-active="true"] {
-  border-color: #2f855a;
-  background: #edf8f1;
-  box-shadow: 0 0 0 2px rgba(47, 133, 90, .12);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 2px rgba(53, 79, 216, .1);
 }
 
 .mobile-nav {
   padding-bottom: max(.5rem, env(safe-area-inset-bottom));
+}
+
+.mobile-nav .router-link-active .mobile-nav-indicator {
+  background: var(--accent);
+}
+
+.hairline-card {
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .76);
+  box-shadow: none;
+}
+
+.eyebrow {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  color: var(--accent);
+  font-size: .69rem;
+  font-weight: 500;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+}
+
+.dense-rule {
+  border-bottom: 1px solid var(--hairline);
+}
+
+.p-button {
+  font-weight: 600;
+}
+
+.p-card,
+.p-panel,
+.p-dialog {
+  box-shadow: none !important;
+}
+
+.p-inputtext,
+.p-textarea,
+.p-select {
+  background: rgba(255, 255, 255, .82);
 }

@@ -86,10 +86,10 @@ onMounted(load)
 </script>
 
 <template>
-  <section class="min-w-0 max-w-5xl mx-auto pb-32 md:pb-8">
+  <section class="min-w-0 max-w-5xl mx-auto px-4 sm:px-6 py-7 pb-32 md:pb-8">
     <header class="min-w-0 grid gap-3 sm:flex sm:items-start sm:justify-between mb-6 sm:mb-8">
       <div class="min-w-0">
-        <div class="text-sm font-semibold uppercase tracking-[.14em] text-emerald-700 mb-2">{{ t('assistant.eyebrow') }}</div>
+        <div class="eyebrow mb-2">{{ t('assistant.eyebrow') }}</div>
         <h1 class="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-2 break-words">{{ t('assistant.title') }}</h1>
         <p class="text-surface-500 text-base sm:text-lg leading-relaxed max-w-3xl m-0">{{ t('assistant.subtitle') }}</p>
       </div>
@@ -109,15 +109,15 @@ onMounted(load)
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <template v-else>
-      <div v-if="messages.length === 0" class="rounded-3xl border border-surface-200 bg-white/80 p-5 sm:p-8 shadow-sm mb-5">
-        <div class="w-12 h-12 rounded-2xl bg-emerald-100 text-emerald-800 flex items-center justify-center mb-4"><i class="pi pi-sparkles text-xl" /></div>
+      <div v-if="messages.length === 0" class="rounded-lg border border-surface-200 bg-white/70 p-5 sm:p-8 mb-5">
+        <div class="w-10 h-10 rounded-md bg-surface-950 text-white flex items-center justify-center mb-4 font-semibold">E</div>
         <p class="text-surface-600 leading-relaxed mt-0 mb-5">{{ t('assistant.empty') }}</p>
         <div class="grid gap-2 sm:grid-cols-3">
           <button
             v-for="suggestion in suggestions"
             :key="suggestion"
             type="button"
-            class="text-left rounded-2xl border border-surface-200 bg-white p-4 text-sm leading-relaxed cursor-pointer hover:border-emerald-300 hover:bg-emerald-50 transition"
+            class="text-left rounded-md border border-surface-200 bg-white p-4 text-sm leading-relaxed cursor-pointer hover:border-indigo-300 hover:bg-indigo-50 transition"
             @click="send(suggestion)"
           >
             {{ suggestion }}
@@ -131,14 +131,14 @@ onMounted(load)
           :key="message.id"
           :class="['min-w-0 flex', message.role === 'user' ? 'justify-end' : 'justify-start']"
         >
-          <div v-if="message.role === 'user'" class="max-w-[90%] sm:max-w-[75%] rounded-3xl rounded-br-lg bg-emerald-800 text-white px-4 py-3 sm:px-5 sm:py-4 shadow-sm">
+          <div v-if="message.role === 'user'" class="max-w-[90%] sm:max-w-[75%] rounded-lg rounded-br-sm bg-surface-950 text-white px-4 py-3 sm:px-5 sm:py-4">
             <p class="m-0 whitespace-pre-wrap break-words leading-relaxed">{{ message.text }}</p>
           </div>
 
-          <Card v-else class="min-w-0 w-full rounded-3xl border border-surface-200 shadow-sm overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+          <Card v-else class="min-w-0 w-full rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
             <template #title>
               <div class="flex items-center justify-between gap-3 flex-wrap text-base">
-                <span class="flex items-center gap-2"><i class="pi pi-sparkles text-emerald-700" />Agent</span>
+                <span class="flex items-center gap-2"><span class="w-5 h-5 rounded bg-surface-950 text-white text-[.65rem] flex items-center justify-center">E</span>{{ t('app.agentName') }}</span>
                 <Tag v-if="message.confidence" :value="message.confidence" :severity="message.confidence === 'high' ? 'success' : message.confidence === 'medium' ? 'warn' : 'secondary'" rounded />
               </div>
             </template>
@@ -146,7 +146,7 @@ onMounted(load)
               <p class="m-0 whitespace-pre-wrap break-words leading-relaxed">{{ message.text }}</p>
 
               <details v-if="message.citations?.length" class="mt-5 border-t border-surface-100 pt-4">
-                <summary class="cursor-pointer font-semibold text-sm text-emerald-800">{{ t('assistant.sources') }} · {{ message.citations.length }}</summary>
+                <summary class="cursor-pointer font-semibold text-sm text-indigo-700">{{ t('assistant.sources') }} · {{ message.citations.length }}</summary>
                 <div class="grid gap-3 mt-3">
                   <SourceCard
                     v-for="citation in message.citations"
@@ -174,7 +174,7 @@ onMounted(load)
       </div>
 
       <div class="fixed md:sticky left-0 right-0 bottom-[4.55rem] md:bottom-4 z-20 px-3 md:px-0">
-        <form class="max-w-5xl mx-auto min-w-0 flex items-end gap-2 rounded-2xl border border-surface-200 bg-white/95 backdrop-blur p-2 sm:p-3 shadow-xl" @submit.prevent="send()">
+        <form class="max-w-5xl mx-auto min-w-0 flex items-end gap-2 rounded-lg border border-surface-200 bg-white/95 backdrop-blur p-2 sm:p-3" @submit.prevent="send()">
           <Textarea
             v-model="question"
             :placeholder="t('assistant.placeholder')"

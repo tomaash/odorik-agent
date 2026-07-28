@@ -471,10 +471,10 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <section class="min-w-0">
+  <section class="min-w-0 px-4 sm:px-6 py-7">
     <header class="min-w-0 mb-6 sm:mb-8">
       <div class="min-w-0">
-        <div class="text-sm font-semibold uppercase tracking-[.14em] text-emerald-700 mb-2">{{ t('sources.eyebrow') }}</div>
+        <div class="eyebrow mb-2">{{ t('sources.eyebrow') }}</div>
         <h1 class="text-3xl sm:text-4xl font-bold tracking-tight leading-tight mb-2">{{ t('sources.title') }}</h1>
         <p class="text-surface-500 text-base sm:text-lg leading-relaxed max-w-3xl m-0">{{ t('sources.subtitle') }}</p>
       </div>
@@ -484,7 +484,7 @@ onUnmounted(() => {
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
 
-    <Card id="calendar-picker" v-if="calendarConnection && isAdmin" class="scroll-mt-4 rounded-3xl border border-emerald-200 shadow-sm mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
+    <Card id="calendar-picker" v-if="calendarConnection && isAdmin" class="scroll-mt-4 rounded-lg border border-indigo-200 mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
       <template #title>{{ t('sources.calendarPicker.title') }}</template>
       <template #subtitle>{{ t('sources.calendarPicker.description') }}</template>
       <template #content>
@@ -733,12 +733,12 @@ onUnmounted(() => {
       <Card
         v-for="adapter in data?.adapters"
         :key="adapter.id"
-        class="min-w-0 rounded-3xl border border-surface-200 shadow-sm overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
+        class="min-w-0 rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
       >
         <template #title>
           <div class="min-w-0 flex items-start justify-between gap-3">
             <div class="min-w-0 flex items-center gap-3">
-              <span class="w-11 h-11 rounded-2xl bg-emerald-50 text-emerald-800 flex items-center justify-center shrink-0">
+              <span class="w-10 h-10 rounded-md bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
                 <i :class="[adapterIcon(adapter), 'text-lg']" />
               </span>
               <div class="min-w-0">

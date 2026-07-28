@@ -28,6 +28,25 @@ import {
   qdrantFromEnvironment,
 } from "./agent/search.js";
 import { CompanyFactTools } from "./agent/tools.js";
+import type { WorkflowSpec } from "@agent-erik/workflow";
+import {
+  createWorkflowDraft,
+  enableWorkflow,
+  getWorkflow,
+  listWorkflows,
+  pauseWorkflow,
+  saveWorkflowDraft,
+} from "./workflow/repository.js";
+import {
+  dryRunHistory,
+  workflowHealth,
+  workflowRuntimeFlags,
+} from "./workflow/runtime.js";
+import {
+  approveAction,
+  listActionApprovals,
+  rejectAction,
+} from "./approvals/repository.js";
 import { encryptCredentials } from "./connectors/credentials.js";
 import {
   createOdorikConnection,
@@ -69,6 +88,19 @@ import {
   registerUser,
   registrationStatus,
 } from "./tenancy.js";
+import {
+  createTask,
+  listTasks,
+  transitionTask,
+  updateTask,
+} from "./tasks/repository.js";
+import {
+  archiveDeal,
+  createDeal,
+  getPipeline,
+  listDeals,
+  moveDeal,
+} from "./pipeline/repository.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
@@ -597,6 +629,197 @@ export const appRouter = router({
     }),
   }),
 
+  tasks: router({
+    list: enabledProcedure
+      .input(z.object({
+        status: z.enum(["open", "completed", "dismissed"]).optional(),
+        assigneeUid: z.string().min(1).max(128).optional(),
+        contactId: z.string().min(1).max(200).optional(),
+        dealId: z.string().min(1).max(200).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }).optional())
+      .query(({ ctx, input }) => listTasks({
+        companyId: ctx.companyId,
+        ...(input || {}),
+      })),
+    create: enabledProcedure
+      .input(z.object({
+        title: z.string().trim().min(1).max(300),
+        instructions: z.string().trim().max(5_000).optional(),
+        assigneeUid: z.string().min(1).max(128),
+        dueAt: z.string().datetime().nullable().optional(),
+        contactId: z.string().min(1).max(200).nullable().optional(),
+        dealId: z.string().min(1).max(200).nullable().optional(),
+        callId: z.string().min(1).max(200).nullable().optional(),
+      }))
+      .mutation(({ ctx, input }) => createTask({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
+    update: enabledProcedure
+      .input(z.object({
+        taskId: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(300).optional(),
+        instructions: z.string().trim().max(5_000).optional(),
+        assigneeUid: z.string().min(1).max(128).optional(),
+        dueAt: z.string().datetime().nullable().optional(),
+      }))
+      .mutation(({ ctx, input }) => updateTask({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
+    transition: enabledProcedure
+      .input(z.object({
+        taskId: z.string().min(1).max(200),
+        to: z.enum(["open", "completed", "dismissed"]),
+        note: z.string().trim().max(2_000).optional(),
+      }))
+      .mutation(({ ctx, input }) => transitionTask({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
+  }),
+
+  approvals: router({
+    list: enabledProcedure
+      .input(z.object({
+        status: z.enum([
+          "pending",
+          "executing",
+          "approved",
+          "rejected",
+          "execution_failed",
+        ]).optional(),
+        approverUid: z.string().min(1).max(128).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }).optional())
+      .query(({ ctx, input }) => listActionApprovals({
+        companyId: ctx.companyId,
+        ...(input || {}),
+      })),
+    approve: enabledProcedure
+      .input(z.object({ approvalId: z.string().min(1).max(200) }))
+      .mutation(({ ctx, input }) => approveAction({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        approvalId: input.approvalId,
+      })),
+    reject: enabledProcedure
+      .input(z.object({
+        approvalId: z.string().min(1).max(200),
+        note: z.string().trim().max(2_000).optional(),
+      }))
+      .mutation(({ ctx, input }) => rejectAction({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        approvalId: input.approvalId,
+        note: input.note,
+      })),
+  }),
+
+  pipeline: router({
+    get: enabledProcedure.query(({ ctx }) => getPipeline(ctx.companyId)),
+  }),
+
+  deals: router({
+    list: enabledProcedure
+      .input(z.object({
+        contactId: z.string().min(1).max(200).optional(),
+        limit: z.number().int().min(1).max(200).default(100),
+      }).optional())
+      .query(({ ctx, input }) => listDeals({
+        companyId: ctx.companyId,
+        ...(input || {}),
+      })),
+    create: enabledProcedure
+      .input(z.object({
+        title: z.string().trim().min(1).max(300),
+        contactId: z.string().min(1).max(200),
+        ownerUid: z.string().min(1).max(128),
+        stageId: z.string().min(1).max(100).optional(),
+      }))
+      .mutation(({ ctx, input }) => createDeal({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
+    move: enabledProcedure
+      .input(z.object({
+        dealId: z.string().min(1).max(200),
+        stageId: z.string().min(1).max(100),
+      }))
+      .mutation(({ ctx, input }) => moveDeal({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
+    archive: enabledProcedure
+      .input(z.object({ dealId: z.string().min(1).max(200) }))
+      .mutation(({ ctx, input }) => archiveDeal({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        dealId: input.dealId,
+      })),
+  }),
+
+  workflows: router({
+    list: enabledProcedure.query(({ ctx }) => listWorkflows(ctx.companyId)),
+    get: enabledProcedure
+      .input(z.object({ workflowId: z.string().min(1).max(200) }))
+      .query(({ ctx, input }) => getWorkflow(ctx.companyId, input.workflowId)),
+    create: enabledProcedure
+      .input(z.object({ name: z.string().trim().max(200).optional() }).optional())
+      .mutation(({ ctx, input }) => createWorkflowDraft({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        name: input?.name,
+      })),
+    save: enabledProcedure
+      .input(z.object({
+        workflowId: z.string().min(1).max(200),
+        spec: z.unknown(),
+      }))
+      .mutation(({ ctx, input }) => saveWorkflowDraft({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        workflowId: input.workflowId,
+        spec: input.spec as WorkflowSpec,
+      })),
+    enable: enabledProcedure
+      .input(z.object({ workflowId: z.string().min(1).max(200) }))
+      .mutation(({ ctx, input }) => enableWorkflow({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        workflowId: input.workflowId,
+      })),
+    pause: enabledProcedure
+      .input(z.object({ workflowId: z.string().min(1).max(200) }))
+      .mutation(({ ctx, input }) => pauseWorkflow({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        workflowId: input.workflowId,
+      })),
+    dryRun: enabledProcedure
+      .input(z.object({
+        workflowId: z.string().min(1).max(200),
+        spec: z.unknown().optional(),
+        limit: z.number().int().min(1).max(50).default(20),
+      }))
+      .mutation(({ ctx, input }) => dryRunHistory({
+        companyId: ctx.companyId,
+        workflowId: input.workflowId,
+        spec: input.spec as WorkflowSpec | undefined,
+        limit: input.limit,
+      })),
+    health: enabledProcedure.query(async ({ ctx }) => ({
+      flags: workflowRuntimeFlags(),
+      ...await workflowHealth(ctx.companyId),
+    })),
+  }),
+
   intake: router({
     list: enabledProcedure
       .input(z.object({ limit: z.number().int().min(1).max(50).default(30) }).optional())
@@ -682,7 +905,7 @@ export const appRouter = router({
     get: enabledProcedure
       .input(z.object({ contactId: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
-        const [snapshot, requests, interactions] = await Promise.all([
+        const [snapshot, requests, interactions, deals, tasks] = await Promise.all([
           db.doc(companyDocumentPath(ctx.companyId, "contacts", input.contactId)).get(),
           listServiceRequests({
             companyId: ctx.companyId,
@@ -692,12 +915,24 @@ export const appRouter = router({
           }),
           db.collection(companyCollectionPath(ctx.companyId, "interactions"))
             .where("contactId", "==", input.contactId).limit(50).get(),
+          listDeals({
+            companyId: ctx.companyId,
+            contactId: input.contactId,
+            limit: 50,
+          }),
+          listTasks({
+            companyId: ctx.companyId,
+            contactId: input.contactId,
+            limit: 100,
+          }),
         ]);
         if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
         return jsonSafe({
           contact: { id: snapshot.id, ...snapshot.data()! },
           requests,
           interactions: interactions.docs.map((doc) => ({ id: doc.id, ...doc.data() })),
+          deals,
+          tasks,
         });
       }),
   }),

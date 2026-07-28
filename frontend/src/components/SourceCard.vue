@@ -30,7 +30,7 @@ const internalRoute = computed(() => {
   if (props.citation.internalRoute) return props.citation.internalRoute
   if (props.citation.kind === 'contact') return `/contacts/${props.citation.recordId}`
   if (props.citation.kind === 'service_request') return `/requests/${props.citation.recordId}`
-  if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return '/inbox'
+  if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return '/contacts'
   return null
 })
 

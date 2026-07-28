@@ -22,12 +22,12 @@ onMounted(() => store.loadList())
 </script>
 
 <template>
-  <section class="min-w-0">
+  <section class="min-h-screen min-w-0 px-4 py-5 sm:p-6">
     <div class="grid gap-4 sm:flex sm:items-end sm:justify-between mb-6">
       <div class="min-w-0">
-        <div class="text-sm font-semibold uppercase tracking-[.14em] text-emerald-700 mb-2">CRM</div>
-        <h1 class="text-3xl sm:text-4xl font-bold tracking-tight mb-2 break-words">{{ t('contacts.title') }}</h1>
-        <p class="text-surface-500 text-base sm:text-lg leading-relaxed">{{ t('contacts.subtitle') }}</p>
+        <div class="eyebrow mb-2">CRM</div>
+        <h1 class="text-2xl sm:text-3xl font-semibold tracking-[-.03em] mb-2 break-words">{{ t('contacts.title') }}</h1>
+        <p class="text-surface-500 text-sm sm:text-base leading-relaxed">{{ t('contacts.subtitle') }}</p>
       </div>
       <Button icon="pi pi-refresh" severity="secondary" outlined :loading="store.loading" :aria-label="t('common.refresh')" @click="store.loadList" />
     </div>
@@ -44,10 +44,10 @@ onMounted(() => store.loadList())
         v-for="contact in filteredItems"
         :key="contact.id"
         :to="`/contacts/${contact.id}`"
-        class="min-w-0 overflow-hidden no-underline text-surface-900 bg-white border border-surface-200 rounded-2xl p-4 sm:p-5 shadow-sm hover:shadow-md hover:border-emerald-300 transition"
+        class="hairline-card min-w-0 overflow-hidden no-underline text-surface-900 p-4 sm:p-5 hover:border-indigo-300 transition"
       >
         <div class="flex items-start gap-3 min-w-0">
-          <div class="w-11 h-11 rounded-full bg-emerald-50 text-emerald-700 flex items-center justify-center shrink-0"><i class="pi pi-user" /></div>
+          <div class="w-10 h-10 rounded-md bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0"><i class="pi pi-user" /></div>
           <div class="min-w-0">
             <h2 class="text-lg font-semibold m-0 break-words">{{ contact.displayName || t('contacts.unknown') }}</h2>
             <p class="text-sm text-surface-500 mt-1 mb-0 break-all">{{ contact.phoneE164 || contact.phoneRaw || '—' }}</p>
@@ -55,7 +55,7 @@ onMounted(() => store.loadList())
           </div>
         </div>
       </router-link>
-      <div v-if="filteredItems.length === 0" class="sm:col-span-2 xl:col-span-3 rounded-2xl border border-dashed border-surface-300 bg-white/70 p-12 text-center text-surface-500">
+      <div v-if="filteredItems.length === 0" class="sm:col-span-2 xl:col-span-3 rounded-md border border-dashed border-surface-300 bg-white/70 p-12 text-center text-surface-500">
         <i class="pi pi-users text-3xl block mb-3 text-surface-300" />{{ t('contacts.empty') }}
       </div>
     </div>

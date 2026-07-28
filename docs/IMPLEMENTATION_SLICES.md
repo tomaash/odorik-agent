@@ -3,10 +3,10 @@
 ## Roadmap rule
 
 Each slice must prove one complete operating loop and leave a usable outcome.
-We are not committing to an agent-authored workflow language yet. First prove
-that an agent can navigate heterogeneous company context, answer factual
-questions with evidence, and expose its limitations. Then generalize ingestion
-and add accountable actions.
+The streamlined redesign starts with objects the application can honestly own:
+internal tasks, contact-linked deals, and a small call-to-task block language.
+Speculative workflow primitives and chat authoring remain deferred. See
+`REDESIGN_PLAN.md` and `INTERNAL_WORKFLOW.md`.
 
 The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
@@ -185,7 +185,14 @@ channel.
 Exit criterion: a person can approve one external action and later prove what
 was authorized and what the provider actually did.
 
-## Revisit workflow definition only after these proofs
+## Small executable language before a universal builder
+
+The current product experiment is a deliberately small block language. A
+completed transcribed call runs ordered internal-task blocks and one-level
+IF/ELSE blocks over stored call duration, contact match, or transcript text.
+Each action has an inseparable named approver and can only create its exact task
+after approval. There are no generic reads, AI drafts, nested expressions,
+free-form decisions, or external writes.
 
 Conversational workflow authoring becomes worth testing when:
 
@@ -195,6 +202,7 @@ Conversational workflow authoring becomes worth testing when:
 - the factual and action eval sets catch regressions; and
 - users repeatedly ask to create or modify recurring behavior themselves.
 
-At that point, start with a small declarative specification over registered
-capabilities. Do not generate executable code and do not begin with a universal
-visual workflow builder.
+The current editor changes only typed, executable blocks. Do not generate
+executable code or expand it into a universal workflow builder. Agent-authored
+changesets, nested or inferred conditions, run suspension, and external actions
+still require the proofs above.
