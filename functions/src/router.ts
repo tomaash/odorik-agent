@@ -85,6 +85,7 @@ import {
 import {
   archiveCase,
   createCase,
+  getCaseDetails,
   getPipeline,
   listCases,
   moveCase,
@@ -662,6 +663,12 @@ export const appRouter = router({
       .query(({ ctx, input }) => listCases({
         companyId: ctx.companyId,
         ...(input || {}),
+      })),
+    get: enabledProcedure
+      .input(z.object({ caseId: z.string().min(1).max(200) }))
+      .query(({ ctx, input }) => getCaseDetails({
+        companyId: ctx.companyId,
+        caseId: input.caseId,
       })),
     create: enabledProcedure
       .input(z.object({

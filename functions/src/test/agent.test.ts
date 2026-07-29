@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentModel, ModelTurn } from "../agent/gemini.js";
 import { parseAgentFinal, runFactAgent } from "../agent/loop.js";
-import { chunkRecord } from "../agent/knowledge.js";
+import { chunkRecord, extractRecordMetadata } from "../agent/knowledge.js";
 import {
   bm25Search,
   embeddingDimensions,
@@ -49,6 +49,17 @@ test("BM25 finds exact company names and identifiers", () => {
   ];
   const result = bm25Search("telefon Eva Novakova", documents, 2);
   assert.equal(result[0]?.recordId, "eva");
+});
+
+test("case citations open the dedicated case workspace", () => {
+  assert.equal(extractRecordMetadata({
+    kind: "case",
+    recordId: "case-1",
+    sourcePath: "companies/default/cases/case-1",
+    title: "Renew ACME",
+    occurredAt: null,
+    data: { stageId: "follow_up", contactId: "contact-1" },
+  }).internalRoute, "/cases/case-1");
 });
 
 test("RRF combines rankings without comparing incompatible raw scores", () => {

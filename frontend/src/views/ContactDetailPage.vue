@@ -84,7 +84,7 @@ void Promise.all([
             <router-link
               v-for="item in details.cases"
               :key="item.id"
-              to="/pipeline"
+              :to="`/cases/${item.id}`"
               class="block p-4 no-underline text-[var(--ink)] hover:bg-white"
             >
               <div class="flex items-start justify-between gap-3">

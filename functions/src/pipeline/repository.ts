@@ -33,6 +33,8 @@ export type CaseSource = {
   approvedBy?: string;
 };
 
+type RawRecord = { id: string } & FirebaseFirestore.DocumentData;
+
 export const defaultPipelineId = "default";
 export const defaultStages: PipelineStage[] = [
   { id: "new", name: "New", position: 0, color: "slate", terminal: false, archived: false },
@@ -294,6 +296,134 @@ export async function listCases(input: {
     .map((document) => ({ id: document.id, ...document.data() })));
 }
 
+export async function getCaseDetails(input: {
+  companyId: string;
+  caseId: string;
+}) {
+  const caseRef = db.doc(companyDocumentPath(input.companyId, "cases", input.caseId));
+  const caseSnapshot = await caseRef.get();
+  if (!caseSnapshot.exists) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+  }
+  const caseData = caseSnapshot.data() || {};
+  const contactId = String(caseData.contactId || "");
+  if (!contactId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "This case does not have a valid contact.",
+    });
+  }
+
+  const [
+    pipeline,
+    contactSnapshot,
+    taskSnapshot,
+    approvalSnapshot,
+    caseActivitySnapshot,
+    relatedActivitySnapshot,
+  ] = await Promise.all([
+    ensurePipeline(input.companyId),
+    db.doc(companyDocumentPath(input.companyId, "contacts", contactId)).get(),
+    db.collection(companyCollectionPath(input.companyId, "workItems"))
+      .where("caseId", "==", input.caseId)
+      .limit(200)
+      .get(),
+    db.collection(companyCollectionPath(input.companyId, "actionApprovals"))
+      .where("action.caseId", "==", input.caseId)
+      .limit(100)
+      .get(),
+    db.collection(companyCollectionPath(input.companyId, "auditEvents"))
+      .where("aggregateId", "==", input.caseId)
+      .limit(200)
+      .get(),
+    db.collection(companyCollectionPath(input.companyId, "auditEvents"))
+      .where("caseId", "==", input.caseId)
+      .limit(200)
+      .get(),
+  ]);
+
+  const tasks = taskSnapshot.docs
+    .filter((document) => document.data().objectType === "task")
+    .map((document) => ({ id: document.id, ...document.data() }) as RawRecord)
+    .sort((left, right) => (
+      (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
+    ));
+  const approvals = approvalSnapshot.docs
+    .filter((document) => document.data().objectType === "action_approval")
+    .map((document) => ({ id: document.id, ...document.data() }) as RawRecord)
+    .sort((left, right) => (
+      (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
+    ));
+
+  const callIds = new Set<string>();
+  const addCallId = (value: unknown) => {
+    if (typeof value === "string" && value.trim()) callIds.add(value);
+  };
+  addCallId(caseData.callId);
+  addCallId(caseData.source?.callId);
+  for (const task of tasks) {
+    addCallId(task.callId);
+    addCallId(task.source?.callId);
+  }
+  for (const approval of approvals) {
+    addCallId(approval.action?.callId);
+    addCallId(approval.source?.callId);
+  }
+  const callSnapshots = callIds.size
+    ? await db.getAll(...[...callIds].map((callId) => (
+        db.doc(companyDocumentPath(input.companyId, "calls", callId))
+      )))
+    : [];
+  const calls = callSnapshots
+    .filter((snapshot) => snapshot.exists)
+    .map((snapshot) => ({ id: snapshot.id, ...snapshot.data()! }) as RawRecord)
+    .sort((left, right) => {
+      const leftAt = left.odorikTime
+        || left.processedAt?.toDate?.()?.toISOString?.()
+        || left.uploadedAt?.toDate?.()?.toISOString?.()
+        || "";
+      const rightAt = right.odorikTime
+        || right.processedAt?.toDate?.()?.toISOString?.()
+        || right.uploadedAt?.toDate?.()?.toISOString?.()
+        || "";
+      return String(rightAt).localeCompare(String(leftAt));
+    });
+
+  const activityById = new Map(
+    [
+      ...caseActivitySnapshot.docs.filter((document) => (
+        document.data().aggregateType === "case"
+        || document.data().aggregateType === "deal"
+      )),
+      ...relatedActivitySnapshot.docs,
+    ]
+      .map((document) => [
+        document.id,
+        { id: document.id, ...document.data() } as RawRecord,
+      ] as const),
+  );
+  const activity = [...activityById.values()].sort((left, right) => (
+    (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
+  ));
+
+  return jsonSafe({
+    case: { id: caseSnapshot.id, ...caseData },
+    pipeline,
+    contact: contactSnapshot.exists
+      ? { id: contactSnapshot.id, ...contactSnapshot.data()! }
+      : {
+          id: contactId,
+          displayName: caseData.contactName || "Unknown contact",
+          phoneE164: caseData.contactPhone || null,
+          missing: true,
+        },
+    tasks,
+    approvals,
+    calls,
+    activity,
+  });
+}
+
 export async function createCase(input: {
   companyId: string;
   actorUid: string;
@@ -365,6 +495,7 @@ export async function createCase(input: {
     transaction.create(activityRef, {
       aggregateType: "case",
       aggregateId: caseRef.id,
+      caseId: caseRef.id,
       type: "case_created",
       actor: { kind: "user", id: input.actorUid },
       after: {
@@ -474,6 +605,7 @@ export async function moveCase(input: {
     transaction.create(activityRef, {
       aggregateType: "case",
       aggregateId: input.caseId,
+      caseId: input.caseId,
       type: "case_stage_changed",
       actor: { kind: "user", id: input.actorUid },
       before: { stageId: currentStageId, revision },
@@ -500,13 +632,32 @@ export async function archiveCase(input: {
   caseId: string;
 }) {
   const ref = db.doc(companyDocumentPath(input.companyId, "cases", input.caseId));
-  const snapshot = await ref.get();
-  if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
-  await ref.set({
-    archived: true,
-    archivedAt: FieldValue.serverTimestamp(),
-    archivedBy: input.actorUid,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-  return { id: input.caseId, archived: true as const };
+  const activityRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+    }
+    if (snapshot.data()?.archived === true) {
+      return { id: input.caseId, archived: true as const, duplicate: true };
+    }
+    const now = Timestamp.now();
+    transaction.update(ref, {
+      archived: true,
+      archivedAt: now,
+      archivedBy: input.actorUid,
+      updatedAt: now,
+    });
+    transaction.create(activityRef, {
+      aggregateType: "case",
+      aggregateId: input.caseId,
+      caseId: input.caseId,
+      type: "case_archived",
+      actor: { kind: "user", id: input.actorUid },
+      before: { archived: false },
+      after: { archived: true },
+      createdAt: now,
+    });
+    return { id: input.caseId, archived: true as const, duplicate: false };
+  });
 }

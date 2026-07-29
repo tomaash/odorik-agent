@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import DatePicker from 'primevue/datepicker'
@@ -31,6 +32,7 @@ import {
 import { isTaskOverdue, sortedTasks, taskStatusCounts } from '../task-model'
 
 const { t, locale } = useI18n()
+const route = useRoute()
 const authStore = useAuthStore()
 const tasks = ref<TaskItem[]>([])
 const approvals = ref<ActionApprovalItem[]>([])
@@ -41,7 +43,7 @@ const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
 const scope = ref<TaskStatus>('open')
-const view = ref<'tasks' | 'approvals'>('tasks')
+const view = ref<'tasks' | 'approvals'>(route.query.view === 'approvals' ? 'approvals' : 'tasks')
 const processingApprovalId = ref('')
 const dialog = ref<'create' | 'outcome' | null>(null)
 const selectedTask = ref<TaskItem | null>(null)
@@ -96,6 +98,12 @@ function approvalTitle(approval: ActionApprovalItem) {
   return approval.action.kind === 'case.move'
     ? approval.action.caseTitle
     : approval.action.title
+}
+
+function approvalCaseId(approval: ActionApprovalItem) {
+  return approval.action.kind === 'case.create' || approval.action.kind === 'case.move'
+    ? approval.action.caseId
+    : null
 }
 
 function approvalActionLabel(approval: ActionApprovalItem) {
@@ -324,7 +332,16 @@ onMounted(load)
             <Tag :value="t(`approvals.status.${approval.status}`)" :severity="approvalSeverity(approval.status)" />
             <span class="eyebrow !text-violet-700">{{ approvalActionLabel(approval) }}</span>
           </div>
-          <h2 class="text-sm font-semibold leading-snug m-0 break-words">{{ approvalTitle(approval) }}</h2>
+          <h2 class="text-sm font-semibold leading-snug m-0 break-words">
+            <router-link
+              v-if="approvalCaseId(approval)"
+              :to="`/cases/${approvalCaseId(approval)}`"
+              class="text-[var(--ink)] no-underline hover:text-indigo-700"
+            >
+              {{ approvalTitle(approval) }}
+            </router-link>
+            <template v-else>{{ approvalTitle(approval) }}</template>
+          </h2>
           <p v-if="approval.action.kind === 'task.create' && approval.action.instructions" class="text-sm text-surface-600 leading-relaxed mt-1.5 mb-0 break-words">{{ approval.action.instructions }}</p>
           <div class="mt-3 rounded-md border border-violet-200 bg-white/80 p-3 grid gap-1.5 text-xs">
             <strong class="text-violet-950">{{ t('approvals.exactEffect') }}</strong>
@@ -405,6 +422,9 @@ onMounted(load)
             <span :class="isTaskOverdue(task) ? 'text-rose-700' : ''"><i class="pi pi-calendar mr-1" />{{ formatDate(task.dueAt) }}</span>
             <router-link v-if="task.contactId" :to="`/contacts/${task.contactId}`" class="text-indigo-700 no-underline">
               {{ task.context?.contactName || task.context?.callerName || task.context?.contactPhone || task.context?.callerPhone || t('tasks.contact') }}
+            </router-link>
+            <router-link v-if="task.caseId" :to="`/cases/${task.caseId}`" class="text-indigo-700 no-underline">
+              {{ cases.find((item) => item.id === task.caseId)?.title || t('tasks.fields.case') }}
             </router-link>
           </div>
           <details v-if="task.context?.callSummary || task.context?.transcriptExcerpt" class="mt-3">

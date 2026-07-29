@@ -53,7 +53,8 @@ migrated one-to-one, preserving IDs and links.
 Primary navigation:
 
 - **Tasks** — default destination, team work queue, and action approvals.
-- **Pipeline** — one board of cases in company-defined stages.
+- **Pipeline** — one board of cases in company-defined stages. Opening a card
+  enters that case's workspace.
 - **Contacts** — customer identity, cases, tasks, calls, and transcripts.
 - **Ask** — cited, read-only questions over company data.
 
@@ -82,6 +83,22 @@ only reference an executed approval.
 A case has a title, exactly one contact, one active owner, one stable pipeline
 and stage, a monotonic revision, origin and authorization, and stage-change
 audit history.
+
+The dedicated case detail route, `/cases/:caseId`, is the working surface for
+one ongoing customer situation. It combines:
+
+- the current owner, contact, stage, revision, origin, and archive state;
+- exact-revision stage movement and manual task creation;
+- open and completed tasks linked to the case;
+- case-targeted workflow approvals;
+- only calls explicitly linked by the case, a linked task, or an approval; and
+- a chronological activity history backed by audit events and durable object
+  timestamps.
+
+The workspace does not present every call from the same contact as case
+evidence. A contact can have multiple independent cases, so only explicit links
+are safe. Archiving removes a case from the active board without deleting its
+tasks, calls, approvals, or history.
 
 The single pipeline starts as:
 

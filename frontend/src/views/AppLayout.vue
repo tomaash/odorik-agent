@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import Avatar from 'primevue/avatar'
 import Button from 'primevue/button'
 import Drawer from 'primevue/drawer'
@@ -11,6 +11,7 @@ import { i18n, setLocale } from '../i18n'
 
 const authStore = useAuthStore()
 const router = useRouter()
+const route = useRoute()
 const locale = ref(i18n.global.locale.value)
 const menuOpen = ref(false)
 const localeOptions = [
@@ -32,6 +33,12 @@ const secondaryNavigation = [
 function changeLocale(value: string) {
   locale.value = value as 'cs' | 'en'
   setLocale(value)
+}
+
+function navigationActive(path: string) {
+  return route.path === path
+    || route.path.startsWith(`${path}/`)
+    || (path === '/pipeline' && route.path.startsWith('/cases/'))
 }
 
 async function signOut() {
@@ -123,6 +130,7 @@ async function signOut() {
           :key="item.to"
           :to="item.to"
           class="group h-10 px-3 flex items-center gap-3 rounded-md text-sm font-medium no-underline text-surface-600 hover:text-surface-950 hover:bg-white transition"
+          :class="navigationActive(item.to) ? '!bg-white !text-surface-950 border border-surface-200' : ''"
           active-class="!bg-white !text-surface-950 border border-surface-200"
         >
           <i :class="[item.icon, 'text-xs text-surface-400 group-[.router-link-active]:text-indigo-600']" />
@@ -195,9 +203,13 @@ async function signOut() {
         :key="item.to"
         :to="item.to"
         class="relative min-w-0 h-14 px-1 pt-2 flex flex-col items-center gap-1 text-[.64rem] font-medium no-underline text-surface-500"
+        :class="navigationActive(item.to) ? '!text-surface-950' : ''"
         active-class="!text-surface-950"
       >
-        <span class="mobile-nav-indicator absolute top-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-transparent" />
+        <span
+          class="mobile-nav-indicator absolute top-0 left-1/2 -translate-x-1/2 w-1 h-1 rounded-full bg-transparent"
+          :class="navigationActive(item.to) ? '!bg-[var(--accent)]' : ''"
+        />
         <i :class="[item.icon, 'text-sm']" />
         <span class="truncate max-w-full">{{ $t(item.label) }}</span>
       </router-link>

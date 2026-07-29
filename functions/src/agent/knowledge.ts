@@ -177,7 +177,7 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
   } else if (record.kind === "task" || record.kind === "case" || record.kind === "audit_event") {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
-    if (record.kind === "case") internalRoute = "/pipeline";
+    if (record.kind === "case") internalRoute = `/cases/${record.recordId}`;
   }
 
   if (!externalUrl && artifactRefs[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {

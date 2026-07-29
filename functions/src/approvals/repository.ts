@@ -31,6 +31,17 @@ type ExecutionStatus =
 
 const executionLeaseMs = 5 * 60 * 1_000;
 
+function caseIdForAction(value: unknown): string | null {
+  if (!value || typeof value !== "object") return null;
+  const action = value as { kind?: unknown; caseId?: unknown };
+  if (
+    (action.kind === "case.create" || action.kind === "case.move")
+    && typeof action.caseId === "string"
+    && action.caseId
+  ) return action.caseId;
+  return null;
+}
+
 function inferredDecision(data: FirebaseFirestore.DocumentData): DecisionStatus {
   if (data.decisionStatus === "approved" || data.decisionStatus === "rejected") {
     return data.decisionStatus;
@@ -94,6 +105,7 @@ export async function requestWorkflowActionApproval(input: {
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
   const digest = actionEffectDigest(action);
+  const caseId = caseIdForAction(action);
   return db.runTransaction(async (transaction) => {
     const existing = await transaction.get(approvalRef);
     if (existing.exists) {
@@ -119,6 +131,7 @@ export async function requestWorkflowActionApproval(input: {
     transaction.create(auditRef, {
       aggregateType: "action_approval",
       aggregateId: approvalRef.id,
+      ...(caseId ? { caseId } : {}),
       type: "approval_requested",
       actor: { kind: "system", id: input.actorUid },
       after: {
@@ -206,6 +219,7 @@ async function claimApproval(input: {
 
     const attemptId = randomUUID();
     const now = Timestamp.now();
+    const caseId = caseIdForAction(data.action);
     transaction.update(approvalRef, {
       status: "executing",
       decisionStatus: "approved",
@@ -220,6 +234,7 @@ async function claimApproval(input: {
     transaction.create(auditRef, {
       aggregateType: "action_approval",
       aggregateId: input.approvalId,
+      ...(caseId ? { caseId } : {}),
       type: decisionStatus === "pending" ? "approval_approved" : "approval_execution_retried",
       actor: { kind: "user", id: input.actorUid },
       before: { decisionStatus, executionStatus },
@@ -300,6 +315,7 @@ export async function approveAction(input: {
       companyCollectionPath(input.companyId, "auditEvents"),
     ).doc();
     const now = Timestamp.now();
+    const caseId = caseIdForAction(action);
     await db.runTransaction(async (transaction) => {
       const latest = await transaction.get(claimed.ref);
       if (latest.data()?.executionAttemptId !== claimed.attemptId) {
@@ -321,6 +337,7 @@ export async function approveAction(input: {
       transaction.create(auditRef, {
         aggregateType: "action_approval",
         aggregateId: input.approvalId,
+        ...(caseId ? { caseId } : {}),
         type: "approval_executed",
         actor: { kind: "user", id: input.actorUid },
         before: { executionStatus: "executing" },
@@ -390,6 +407,7 @@ export async function rejectAction(input: {
     }
     const now = Timestamp.now();
     const note = String(input.note || "").trim().slice(0, 2_000) || null;
+    const caseId = caseIdForAction(data.action);
     transaction.update(approvalRef, {
       status: "rejected",
       decisionStatus: "rejected",
@@ -402,6 +420,7 @@ export async function rejectAction(input: {
     transaction.create(auditRef, {
       aggregateType: "action_approval",
       aggregateId: input.approvalId,
+      ...(caseId ? { caseId } : {}),
       type: "approval_rejected",
       actor: { kind: "user", id: input.actorUid },
       before: { decisionStatus: "pending", executionStatus: "not_started" },
