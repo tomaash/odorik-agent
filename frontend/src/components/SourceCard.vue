@@ -14,7 +14,7 @@ const adapterId = computed(() => {
   if (url.includes('drive.google.com') || path.includes('drive')) return 'google_drive'
   if (url.includes('calendar.google.com') || path.includes('calendar')) return 'google_calendar'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return 'odorik'
-  if (props.citation.kind === 'contact' || props.citation.kind === 'service_request') return 'crm'
+  if (props.citation.kind === 'contact' || props.citation.kind === 'case') return 'crm'
   return 'unknown'
 })
 
@@ -29,7 +29,7 @@ const externalUrl = computed(() => {
 const internalRoute = computed(() => {
   if (props.citation.internalRoute) return props.citation.internalRoute
   if (props.citation.kind === 'contact') return `/contacts/${props.citation.recordId}`
-  if (props.citation.kind === 'service_request') return `/requests/${props.citation.recordId}`
+  if (props.citation.kind === 'case') return '/pipeline'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return '/contacts'
   return null
 })
@@ -48,7 +48,7 @@ const icon = computed(() => {
       return 'pi pi-github'
     default:
       if (props.citation.kind === 'contact') return 'pi pi-user'
-      if (props.citation.kind === 'service_request') return 'pi pi-ticket'
+      if (props.citation.kind === 'case') return 'pi pi-folder'
       if (props.citation.kind === 'task') return 'pi pi-check-square'
       return 'pi pi-file'
   }
@@ -68,7 +68,7 @@ const badgeLabel = computed(() => {
       return 'GitHub'
     default:
       if (props.citation.kind === 'contact') return 'CRM Contact'
-      if (props.citation.kind === 'service_request') return 'CRM Request'
+      if (props.citation.kind === 'case') return 'CRM Case'
       if (props.citation.kind === 'task') return 'CRM Task'
       if (props.citation.kind === 'context_item') return 'Dokument'
       return props.citation.kind
@@ -92,7 +92,7 @@ const externalButtonText = computed(() => {
 
 const internalButtonText = computed(() => {
   if (props.citation.kind === 'contact') return 'View Contact'
-  if (props.citation.kind === 'service_request') return 'View Request'
+  if (props.citation.kind === 'case') return 'View Case'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return 'View Call'
   return 'View Record'
 })

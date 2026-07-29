@@ -83,11 +83,12 @@ import {
   updateTask,
 } from "./tasks/repository.js";
 import {
-  archiveDeal,
-  createDeal,
+  archiveCase,
+  createCase,
   getPipeline,
-  listDeals,
-  moveDeal,
+  listCases,
+  moveCase,
+  updatePipeline,
 } from "./pipeline/repository.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
@@ -544,7 +545,7 @@ export const appRouter = router({
         status: z.enum(["open", "completed", "dismissed"]).optional(),
         assigneeUid: z.string().min(1).max(128).optional(),
         contactId: z.string().min(1).max(200).optional(),
-        dealId: z.string().min(1).max(200).optional(),
+        caseId: z.string().min(1).max(200).optional(),
         limit: z.number().int().min(1).max(200).default(100),
       }).optional())
       .query(({ ctx, input }) => listTasks({
@@ -558,7 +559,7 @@ export const appRouter = router({
         assigneeUid: z.string().min(1).max(128),
         dueAt: z.string().datetime().nullable().optional(),
         contactId: z.string().min(1).max(200).nullable().optional(),
-        dealId: z.string().min(1).max(200).nullable().optional(),
+        caseId: z.string().min(1).max(200).nullable().optional(),
         callId: z.string().min(1).max(200).nullable().optional(),
       }))
       .mutation(({ ctx, input }) => createTask({
@@ -631,15 +632,34 @@ export const appRouter = router({
 
   pipeline: router({
     get: enabledProcedure.query(({ ctx }) => getPipeline(ctx.companyId)),
+    update: adminProcedure
+      .input(z.object({
+        expectedRevision: z.number().int().nonnegative(),
+        name: z.string().trim().min(1).max(100),
+        initialStageId: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+        stages: z.array(z.object({
+          id: z.string().regex(/^[a-z0-9][a-z0-9_-]{0,63}$/),
+          name: z.string().trim().min(1).max(100),
+          position: z.number().int().nonnegative(),
+          color: z.string().min(1).max(30),
+          terminal: z.boolean(),
+          archived: z.boolean(),
+        })).min(1).max(20),
+      }))
+      .mutation(({ ctx, input }) => updatePipeline({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        ...input,
+      })),
   }),
 
-  deals: router({
+  cases: router({
     list: enabledProcedure
       .input(z.object({
         contactId: z.string().min(1).max(200).optional(),
         limit: z.number().int().min(1).max(200).default(100),
       }).optional())
-      .query(({ ctx, input }) => listDeals({
+      .query(({ ctx, input }) => listCases({
         companyId: ctx.companyId,
         ...(input || {}),
       })),
@@ -650,27 +670,29 @@ export const appRouter = router({
         ownerUid: z.string().min(1).max(128),
         stageId: z.string().min(1).max(100).optional(),
       }))
-      .mutation(({ ctx, input }) => createDeal({
+      .mutation(({ ctx, input }) => createCase({
         companyId: ctx.companyId,
         actorUid: ctx.uid,
         ...input,
       })),
     move: enabledProcedure
       .input(z.object({
-        dealId: z.string().min(1).max(200),
+        caseId: z.string().min(1).max(200),
         stageId: z.string().min(1).max(100),
+        expectedRevision: z.number().int().nonnegative(),
+        expectedStageId: z.string().min(1).max(100),
       }))
-      .mutation(({ ctx, input }) => moveDeal({
+      .mutation(({ ctx, input }) => moveCase({
         companyId: ctx.companyId,
         actorUid: ctx.uid,
         ...input,
       })),
     archive: enabledProcedure
-      .input(z.object({ dealId: z.string().min(1).max(200) }))
-      .mutation(({ ctx, input }) => archiveDeal({
+      .input(z.object({ caseId: z.string().min(1).max(200) }))
+      .mutation(({ ctx, input }) => archiveCase({
         companyId: ctx.companyId,
         actorUid: ctx.uid,
-        dealId: input.dealId,
+        caseId: input.caseId,
       })),
   }),
 
@@ -744,11 +766,11 @@ export const appRouter = router({
     get: enabledProcedure
       .input(z.object({ contactId: z.string().min(1) }))
       .query(async ({ ctx, input }) => {
-        const [snapshot, calls, deals, tasks] = await Promise.all([
+        const [snapshot, calls, cases, tasks] = await Promise.all([
           db.doc(companyDocumentPath(ctx.companyId, "contacts", input.contactId)).get(),
           db.collection(companyCollectionPath(ctx.companyId, "calls"))
             .where("contactId", "==", input.contactId).limit(50).get(),
-          listDeals({
+          listCases({
             companyId: ctx.companyId,
             contactId: input.contactId,
             limit: 50,
@@ -766,7 +788,7 @@ export const appRouter = router({
             .sort((a, b) => String(b.data().odorikTime || b.data().uploadedAt || "")
               .localeCompare(String(a.data().odorikTime || a.data().uploadedAt || "")))
             .map((document) => ({ id: document.id, ...document.data() })),
-          deals,
+          cases,
           tasks,
         });
       }),

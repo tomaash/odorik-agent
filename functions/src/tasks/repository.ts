@@ -6,9 +6,9 @@ import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 export type TaskStatus = "open" | "completed" | "dismissed";
 
 export type TaskSource = {
-  kind: "manual" | "call" | "deal" | "workflow";
+  kind: "manual" | "call" | "case" | "workflow";
   callId?: string;
-  dealId?: string;
+  caseId?: string;
   workflowId?: string;
   workflowVersion?: number;
   runId?: string;
@@ -25,7 +25,7 @@ export type CreateTaskInput = {
   assigneeUid: string;
   dueAt?: string | null;
   contactId?: string | null;
-  dealId?: string | null;
+  caseId?: string | null;
   callId?: string | null;
   source?: TaskSource;
   context?: {
@@ -89,9 +89,9 @@ export async function createTask(input: CreateTaskInput) {
     }
     const now = Timestamp.now();
     const source = input.source || {
-      kind: input.callId ? "call" : input.dealId ? "deal" : "manual",
+      kind: input.callId ? "call" : input.caseId ? "case" : "manual",
       ...(input.callId ? { callId: input.callId } : {}),
-      ...(input.dealId ? { dealId: input.dealId } : {}),
+      ...(input.caseId ? { caseId: input.caseId } : {}),
     };
     const authorization = input.source?.approvalId
       ? {
@@ -114,7 +114,7 @@ export async function createTask(input: CreateTaskInput) {
       assigneeName: member.displayName,
       dueAt,
       contactId: input.contactId || null,
-      dealId: input.dealId || null,
+      caseId: input.caseId || null,
       callId: input.callId || null,
       source,
       authorization,
@@ -152,7 +152,7 @@ export async function listTasks(input: {
   status?: TaskStatus;
   assigneeUid?: string;
   contactId?: string;
-  dealId?: string;
+  caseId?: string;
   limit?: number;
 }) {
   const snapshot = await db.collection(companyCollectionPath(input.companyId, "workItems"))
@@ -166,7 +166,7 @@ export async function listTasks(input: {
       if (input.status && data.status !== input.status) return false;
       if (input.assigneeUid && data.assigneeUid !== input.assigneeUid) return false;
       if (input.contactId && data.contactId !== input.contactId) return false;
-      if (input.dealId && data.dealId !== input.dealId) return false;
+      if (input.caseId && data.caseId !== input.caseId) return false;
       return true;
     })
     .map((document) => ({ id: document.id, ...document.data() })));

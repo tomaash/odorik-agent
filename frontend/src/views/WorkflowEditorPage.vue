@@ -12,24 +12,30 @@ import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import {
   cloneWorkflow,
+  createCaseBlock,
   createIfBlock,
+  createMoveCaseBlock,
   createTaskBlock,
   validateWorkflow,
+  type ActionBlock,
   type ConditionField,
   type ConditionOperator,
   type CreateTaskBlock,
   type IfBlock,
   type WorkflowSpec,
 } from '@agent-erik/workflow'
+import WorkflowCaseBlock from '../components/WorkflowCaseBlock.vue'
 import WorkflowTaskBlock from '../components/WorkflowTaskBlock.vue'
 import {
   dryRunWorkflow,
   enableWorkflow,
+  getPipeline,
   getTeamOverview,
   getWorkflow,
   pauseWorkflow,
   saveWorkflow,
   type DryRunResult,
+  type Pipeline,
   type TeamMember,
   type WorkflowDetails,
 } from '../api/client'
@@ -42,6 +48,7 @@ const workflowId = String(route.params.id)
 const workflow = ref<WorkflowDetails | null>(null)
 const spec = ref<WorkflowSpec | null>(null)
 const members = ref<TeamMember[]>([])
+const pipeline = ref<Pipeline | null>(null)
 const loading = ref(true)
 const saving = ref(false)
 const testing = ref(false)
@@ -51,6 +58,7 @@ const preview = ref<DryRunResult | null>(null)
 const validation = computed(() => validateWorkflow(spec.value))
 const status = computed(() => workflow.value?.status || 'draft')
 const isEnabled = computed(() => status.value === 'enabled')
+const activeStages = computed(() => pipeline.value?.stages.filter((stage) => !stage.archived) || [])
 const booleanOptions = computed(() => [
   { label: t('workflows.condition.yes'), value: true },
   { label: t('workflows.condition.no'), value: false },
@@ -71,13 +79,19 @@ function formatDate(value?: string | null) {
 function defaultAssignee() {
   if (spec.value) {
     for (const block of spec.value.blocks) {
-      const task = block.kind === 'action.task.create'
-        ? block
-        : block.then[0] || block.else[0]
-      if (task?.task.assigneeUid) {
+      const actions = block.kind === 'control.if'
+        ? [...block.then, ...block.else]
+        : [block]
+      for (const action of actions) {
+        const member = action.kind === 'action.task.create'
+          ? { uid: action.task.assigneeUid, name: action.task.assigneeName }
+          : action.kind === 'action.case.create'
+            ? { uid: action.case.ownerUid, name: action.case.ownerName }
+            : { uid: action.approval.approverUid, name: action.approval.approverName }
+        if (!member.uid) continue
         return {
-          uid: task.task.assigneeUid,
-          name: task.task.assigneeName,
+          uid: member.uid,
+          name: member.name,
         }
       }
     }
@@ -96,8 +110,44 @@ function newTask(): CreateTaskBlock {
   })
 }
 
-function addRootTask() {
-  spec.value?.blocks.push(newTask())
+function defaultStages() {
+  const stages = pipeline.value?.stages.filter((stage) => !stage.archived) || []
+  const initial = stages.find((stage) => stage.id === pipeline.value?.initialStageId) || stages[0]
+  const destination = stages.find((stage) => stage.id !== initial?.id) || initial
+  return { initial, destination }
+}
+
+function newCreateCase(): ActionBlock {
+  const owner = defaultAssignee()
+  const { initial } = defaultStages()
+  return createCaseBlock({
+    ownerUid: owner.uid,
+    ownerName: owner.name,
+    pipelineId: pipeline.value?.id || 'default',
+    stageId: initial?.id || '',
+    stageName: initial?.name || '',
+  })
+}
+
+function newMoveCase(): ActionBlock {
+  const approver = defaultAssignee()
+  const { initial, destination } = defaultStages()
+  return createMoveCaseBlock({
+    approverUid: approver.uid,
+    approverName: approver.name,
+    pipelineId: pipeline.value?.id || 'default',
+    fromStageId: initial?.id || '',
+    fromStageName: initial?.name || '',
+    toStageId: destination?.id || '',
+    toStageName: destination?.name || '',
+  })
+}
+
+function addRootAction(kind: 'task' | 'case.create' | 'case.move') {
+  if (!spec.value) return
+  spec.value.blocks.push(
+    kind === 'task' ? newTask() : kind === 'case.create' ? newCreateCase() : newMoveCase(),
+  )
 }
 
 function addIf() {
@@ -124,8 +174,14 @@ function branch(block: IfBlock, name: 'then' | 'else') {
   return block[name]
 }
 
-function addBranchTask(block: IfBlock, name: 'then' | 'else') {
-  branch(block, name).push(newTask())
+function addBranchAction(
+  block: IfBlock,
+  name: 'then' | 'else',
+  kind: 'task' | 'case.create' | 'case.move',
+) {
+  branch(block, name).push(
+    kind === 'task' ? newTask() : kind === 'case.create' ? newCreateCase() : newMoveCase(),
+  )
 }
 
 function removeBranchTask(block: IfBlock, name: 'then' | 'else', index: number) {
@@ -174,16 +230,29 @@ function conditionSummary(item: NonNullable<DryRunResult['results'][number]['con
   return `${field}: ${branchLabel}`
 }
 
+function actionTitle(action: NonNullable<DryRunResult['results'][number]['actions']>[number]) {
+  if (action.kind === 'case.move') return action.caseTitle
+  return action.title
+}
+
+function actionDetail(action: NonNullable<DryRunResult['results'][number]['actions']>[number]) {
+  if (action.kind === 'task.create') return `${action.assigneeName} · ${formatDate(action.dueAt)}`
+  if (action.kind === 'case.create') return `${action.ownerName} · ${action.stageName}`
+  return `${action.fromStageName} → ${action.toStageName}`
+}
+
 async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [details, team] = await Promise.all([
+    const [details, team, pipelineData] = await Promise.all([
       getWorkflow(workflowId),
       getTeamOverview(),
+      getPipeline(),
     ])
     workflow.value = details
     members.value = team.members
+    pipeline.value = pipelineData
     spec.value = details.draft ? cloneWorkflow(details.draft) : null
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -330,7 +399,19 @@ onMounted(load)
                 @remove="removeRoot(index)"
               />
 
-              <section v-else class="rounded-lg border-2 border-amber-300 bg-amber-50/80 shadow-sm overflow-hidden">
+              <WorkflowCaseBlock
+                v-else-if="pipeline && (block.kind === 'action.case.create' || block.kind === 'action.case.move')"
+                :block="block"
+                :members="members"
+                :pipeline="pipeline"
+                :canMoveUp="index > 0"
+                :canMoveDown="index < spec.blocks.length - 1"
+                @moveUp="moveItem(spec.blocks, index, -1)"
+                @moveDown="moveItem(spec.blocks, index, 1)"
+                @remove="removeRoot(index)"
+              />
+
+              <section v-else-if="block.kind === 'control.if'" class="rounded-lg border-2 border-amber-300 bg-amber-50/80 shadow-sm overflow-hidden">
                 <header class="px-3 py-2.5 flex items-center gap-2 border-b border-amber-300 bg-amber-100/60">
                   <span class="w-8 h-8 shrink-0 rounded-md bg-amber-700 text-white flex items-center justify-center"><i class="pi pi-code" /></span>
                   <div class="min-w-0 flex-1">
@@ -392,41 +473,75 @@ onMounted(load)
                   <section class="rounded-lg border border-emerald-200 bg-emerald-100/40 p-2.5 sm:p-3 grid gap-2.5">
                     <div class="flex items-center justify-between gap-2">
                       <strong class="text-xs uppercase tracking-[.16em] text-emerald-900">{{ t('workflows.then') }}</strong>
-                      <Button :label="t('workflows.addTaskBlock')" icon="pi pi-plus" size="small" severity="success" text @click="addBranchTask(block, 'then')" />
+                      <div class="flex flex-wrap justify-end">
+                        <Button :label="t('workflows.addTaskBlock')" icon="pi pi-plus" size="small" severity="success" text @click="addBranchAction(block, 'then', 'task')" />
+                        <Button :label="t('workflows.addCaseBlock')" icon="pi pi-plus" size="small" severity="success" text @click="addBranchAction(block, 'then', 'case.create')" />
+                        <Button :label="t('workflows.addMoveCaseBlock')" icon="pi pi-plus" size="small" severity="success" text @click="addBranchAction(block, 'then', 'case.move')" />
+                      </div>
                     </div>
                     <p v-if="block.then.length === 0" class="text-xs text-surface-500 m-0 px-1">{{ t('workflows.branchEmpty') }}</p>
-                    <WorkflowTaskBlock
-                      v-for="(task, taskIndex) in block.then"
-                      :key="task.id"
-                      compact
-                      :block="task"
-                      :members="members"
-                      :canMoveUp="taskIndex > 0"
-                      :canMoveDown="taskIndex < block.then.length - 1"
-                      @moveUp="moveBranchTask(block, 'then', taskIndex, -1)"
-                      @moveDown="moveBranchTask(block, 'then', taskIndex, 1)"
-                      @remove="removeBranchTask(block, 'then', taskIndex)"
-                    />
+                    <template v-for="(action, actionIndex) in block.then" :key="action.id">
+                      <WorkflowTaskBlock
+                        v-if="action.kind === 'action.task.create'"
+                        compact
+                        :block="action"
+                        :members="members"
+                        :canMoveUp="actionIndex > 0"
+                        :canMoveDown="actionIndex < block.then.length - 1"
+                        @moveUp="moveBranchTask(block, 'then', actionIndex, -1)"
+                        @moveDown="moveBranchTask(block, 'then', actionIndex, 1)"
+                        @remove="removeBranchTask(block, 'then', actionIndex)"
+                      />
+                      <WorkflowCaseBlock
+                        v-else-if="pipeline"
+                        compact
+                        :block="action"
+                        :members="members"
+                        :pipeline="pipeline"
+                        :canMoveUp="actionIndex > 0"
+                        :canMoveDown="actionIndex < block.then.length - 1"
+                        @moveUp="moveBranchTask(block, 'then', actionIndex, -1)"
+                        @moveDown="moveBranchTask(block, 'then', actionIndex, 1)"
+                        @remove="removeBranchTask(block, 'then', actionIndex)"
+                      />
+                    </template>
                   </section>
 
                   <section class="rounded-lg border border-surface-300 bg-surface-100/60 p-2.5 sm:p-3 grid gap-2.5">
                     <div class="flex items-center justify-between gap-2">
                       <strong class="text-xs uppercase tracking-[.16em] text-surface-700">{{ t('workflows.else') }}</strong>
-                      <Button :label="t('workflows.addTaskBlock')" icon="pi pi-plus" size="small" severity="secondary" text @click="addBranchTask(block, 'else')" />
+                      <div class="flex flex-wrap justify-end">
+                        <Button :label="t('workflows.addTaskBlock')" icon="pi pi-plus" size="small" severity="secondary" text @click="addBranchAction(block, 'else', 'task')" />
+                        <Button :label="t('workflows.addCaseBlock')" icon="pi pi-plus" size="small" severity="secondary" text @click="addBranchAction(block, 'else', 'case.create')" />
+                        <Button :label="t('workflows.addMoveCaseBlock')" icon="pi pi-plus" size="small" severity="secondary" text @click="addBranchAction(block, 'else', 'case.move')" />
+                      </div>
                     </div>
                     <p v-if="block.else.length === 0" class="text-xs text-surface-500 m-0 px-1">{{ t('workflows.branchEmpty') }}</p>
-                    <WorkflowTaskBlock
-                      v-for="(task, taskIndex) in block.else"
-                      :key="task.id"
-                      compact
-                      :block="task"
-                      :members="members"
-                      :canMoveUp="taskIndex > 0"
-                      :canMoveDown="taskIndex < block.else.length - 1"
-                      @moveUp="moveBranchTask(block, 'else', taskIndex, -1)"
-                      @moveDown="moveBranchTask(block, 'else', taskIndex, 1)"
-                      @remove="removeBranchTask(block, 'else', taskIndex)"
-                    />
+                    <template v-for="(action, actionIndex) in block.else" :key="action.id">
+                      <WorkflowTaskBlock
+                        v-if="action.kind === 'action.task.create'"
+                        compact
+                        :block="action"
+                        :members="members"
+                        :canMoveUp="actionIndex > 0"
+                        :canMoveDown="actionIndex < block.else.length - 1"
+                        @moveUp="moveBranchTask(block, 'else', actionIndex, -1)"
+                        @moveDown="moveBranchTask(block, 'else', actionIndex, 1)"
+                        @remove="removeBranchTask(block, 'else', actionIndex)"
+                      />
+                      <WorkflowCaseBlock
+                        v-else-if="pipeline"
+                        compact
+                        :block="action"
+                        :members="members"
+                        :pipeline="pipeline"
+                        :canMoveUp="actionIndex > 0"
+                        :canMoveDown="actionIndex < block.else.length - 1"
+                        @moveUp="moveBranchTask(block, 'else', actionIndex, -1)"
+                        @moveDown="moveBranchTask(block, 'else', actionIndex, 1)"
+                        @remove="removeBranchTask(block, 'else', actionIndex)"
+                      />
+                    </template>
                   </section>
                 </div>
               </section>
@@ -440,7 +555,9 @@ onMounted(load)
             <section class="rounded-lg border border-dashed border-indigo-300 bg-white/70 p-3">
               <div class="eyebrow !text-indigo-700 mb-2">{{ t('workflows.addBlock') }}</div>
               <div class="grid sm:grid-cols-2 gap-2">
-                <Button :label="t('workflows.addTaskBlock')" icon="pi pi-check-square" severity="success" outlined @click="addRootTask" />
+                <Button :label="t('workflows.addTaskBlock')" icon="pi pi-check-square" severity="success" outlined @click="addRootAction('task')" />
+                <Button :label="t('workflows.addCaseBlock')" icon="pi pi-folder-plus" severity="success" outlined :disabled="!pipeline" @click="addRootAction('case.create')" />
+                <Button :label="t('workflows.addMoveCaseBlock')" icon="pi pi-arrow-right-arrow-left" severity="success" outlined :disabled="!pipeline || activeStages?.length < 2" @click="addRootAction('case.move')" />
                 <Button :label="t('workflows.addIfBlock')" icon="pi pi-code" severity="warn" outlined @click="addIf" />
               </div>
             </section>
@@ -472,11 +589,11 @@ onMounted(load)
               <p v-if="preview.skipped" class="text-xs text-surface-500 mt-1 mb-0">{{ t('workflows.skippedCalls', { count: preview.skipped }) }}</p>
               <div class="grid gap-2 mt-3">
                 <article v-for="item in preview.results.slice(0, 4)" :key="item.callId" class="rounded border border-surface-200 p-2.5">
-                  <template v-if="item.tasks?.length">
-                    <div v-for="task in item.tasks" :key="task.blockId" class="not-last:mb-2">
-                      <strong class="block text-xs leading-snug">{{ task.title }}</strong>
-                      <span class="font-mono text-[.6rem] text-surface-500 mt-1 block">{{ task.assigneeName }} · {{ formatDate(task.dueAt) }}</span>
-                      <span class="font-mono text-[.6rem] text-violet-700 mt-1 block"><i class="pi pi-shield mr-1" />{{ task.approverName }}</span>
+                  <template v-if="item.actions?.length">
+                    <div v-for="action in item.actions" :key="action.blockId" class="not-last:mb-2">
+                      <strong class="block text-xs leading-snug">{{ actionTitle(action) }}</strong>
+                      <span class="font-mono text-[.6rem] text-surface-500 mt-1 block">{{ actionDetail(action) }}</span>
+                      <span class="font-mono text-[.6rem] text-violet-700 mt-1 block"><i class="pi pi-shield mr-1" />{{ action.approverName }}</span>
                     </div>
                   </template>
                   <span v-else class="text-xs text-surface-500">{{ item.error || t('workflows.noTaskForCall') }}</span>
@@ -499,3 +616,4 @@ onMounted(load)
     </div>
   </section>
 </template>
+  getPipeline,

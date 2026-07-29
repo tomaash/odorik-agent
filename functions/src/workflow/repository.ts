@@ -5,12 +5,13 @@ import {
   createCallTaskWorkflow,
   normalizeWorkflowSpec,
   validateWorkflow,
-  type CreateTaskBlock,
+  type ActionBlock,
   type WorkflowSpec,
 } from "@agent-erik/workflow";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
+import { defaultPipelineId, getPipeline } from "../pipeline/repository.js";
 
 function versionId(version: number): string {
   return String(version).padStart(6, "0");
@@ -28,10 +29,62 @@ function supportedSpec(value: unknown): WorkflowSpec | null {
   return normalizeWorkflowSpec(value);
 }
 
-function taskBlocks(spec: WorkflowSpec): CreateTaskBlock[] {
+function actionBlocks(spec: WorkflowSpec): ActionBlock[] {
   return spec.blocks.flatMap((block) => (
-    block.kind === "action.task.create" ? [block] : [...block.then, ...block.else]
+    block.kind === "control.if" ? [...block.then, ...block.else] : [block]
   ));
+}
+
+async function validateActionReferences(
+  companyId: string,
+  spec: WorkflowSpec,
+  refreshNames: boolean,
+) {
+  const blocks = actionBlocks(spec);
+  const needsPipeline = blocks.some((block) => block.kind !== "action.task.create");
+  const pipeline = needsPipeline ? await getPipeline(companyId) : null;
+  const stages = new Map(pipeline?.stages.map((stage) => [stage.id, stage]));
+  await Promise.all(blocks.map(async (block) => {
+    const approver = await activeMember(companyId, block.approval.approverUid);
+    if (refreshNames) block.approval.approverName = approver.displayName;
+    if (block.kind === "action.task.create") {
+      const assignee = await activeMember(companyId, block.task.assigneeUid);
+      if (refreshNames) block.task.assigneeName = assignee.displayName;
+      return;
+    }
+    if (block.case.pipelineId !== defaultPipelineId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Only the company’s current pipeline is supported.",
+      });
+    }
+    if (block.kind === "action.case.create") {
+      const [owner, stage] = await Promise.all([
+        activeMember(companyId, block.case.ownerUid),
+        Promise.resolve(stages.get(block.case.stageId)),
+      ]);
+      if (!stage || stage.archived) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active initial case stage." });
+      }
+      if (refreshNames) {
+        block.case.ownerName = owner.displayName;
+        block.case.stageName = stage.name;
+      }
+      return;
+    }
+    const from = stages.get(block.case.fromStageId);
+    const to = stages.get(block.case.toStageId);
+    if (!from || !to || from.archived || to.archived || from.id === to.id) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "Choose two different active stages for the case movement.",
+      });
+    }
+    if (refreshNames) {
+      block.case.fromStageName = from.name;
+      block.case.toStageName = to.name;
+    }
+  }));
 }
 
 function isUntouchedDemo(data: FirebaseFirestore.DocumentData): boolean {
@@ -198,14 +251,7 @@ export async function saveWorkflowDraft(input: {
     });
   }
   const spec = cloneWorkflow(input.spec);
-  await Promise.all(taskBlocks(spec).map(async (block) => {
-    const [assignee, approver] = await Promise.all([
-      activeMember(input.companyId, block.task.assigneeUid),
-      activeMember(input.companyId, block.approval.approverUid),
-    ]);
-    block.task.assigneeName = assignee.displayName;
-    block.approval.approverName = approver.displayName;
-  }));
+  await validateActionReferences(input.companyId, spec, true);
   const ref = db.doc(companyDocumentPath(input.companyId, "workflows", input.workflowId));
   const initial = await ref.get();
   const snapshot = initial.exists ? await upgradeSupportedDraft(input.companyId, initial) : initial;
@@ -243,21 +289,23 @@ export async function enableWorkflow(input: {
   if (!spec || !validation.valid) {
     throw new TRPCError({
       code: "BAD_REQUEST",
-      message: "Only a complete internal task recipe can be turned on.",
+      message: "Only a complete, approval-gated workflow can be turned on.",
       cause: validation,
     });
   }
-  await Promise.all(taskBlocks(spec).map((block) => (
-    Promise.all([
-      activeMember(input.companyId, block.task.assigneeUid),
-      activeMember(input.companyId, block.approval.approverUid),
-    ])
-  )));
+  await validateActionReferences(input.companyId, spec, false);
+  const validatedDraft = JSON.stringify(spec);
   return db.runTransaction(async (transaction) => {
     const current = await transaction.get(ref);
     const currentSpec = supportedSpec(current.data()?.draft);
     if (!currentSpec || !validateWorkflow(currentSpec).valid) {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Legacy workflow is disabled." });
+    }
+    if (JSON.stringify(currentSpec) !== validatedDraft) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "The workflow draft changed while it was being validated. Try turning it on again.",
+      });
     }
     const nextVersion = Number(current.data()?.versionCount || 0) + 1;
     const now = Timestamp.now();
@@ -287,7 +335,13 @@ export async function enableWorkflow(input: {
         actor: { kind: "user", id: input.actorUid },
         after: {
           version: nextVersion,
-          capabilities: ["approval.request", "task.create", "condition.evaluate"],
+          capabilities: [
+            "approval.request",
+            "task.create",
+            "case.create",
+            "case.move_exact",
+            "condition.evaluate",
+          ],
         },
         createdAt: now,
       },

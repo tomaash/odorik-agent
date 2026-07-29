@@ -1,6 +1,8 @@
 import { createTRPCClient, httpBatchLink, httpLink } from '@trpc/client'
 import type { AppRouter } from '@agent-erik/functions/router'
 import type {
+  ActionPreview,
+  ActionSkip,
   ValidationResult,
   WorkflowSpec,
 } from '@agent-erik/workflow'
@@ -108,7 +110,7 @@ export type ContactCall = {
 export type ContactDetails = {
   contact: ContactListItem
   calls: ContactCall[]
-  deals: DealItem[]
+  cases: CaseItem[]
   tasks: TaskItem[]
 }
 
@@ -124,7 +126,7 @@ export type TaskItem = {
   assigneeName: string
   dueAt?: string | null
   contactId?: string | null
-  dealId?: string | null
+  caseId?: string | null
   callId?: string | null
   context?: {
     contactName?: string | null
@@ -135,7 +137,7 @@ export type TaskItem = {
     transcriptExcerpt?: string | null
   } | null
   source?: {
-    kind?: 'manual' | 'call' | 'deal' | 'workflow'
+    kind?: 'manual' | 'call' | 'case' | 'workflow'
     workflowId?: string
     workflowVersion?: number
     approvalId?: string
@@ -151,30 +153,33 @@ export type TaskItem = {
 export type PipelineStage = {
   id: string
   name: string
-  category: 'open' | 'won' | 'lost'
   position: number
   color: string
+  terminal: boolean
+  archived: boolean
 }
 
 export type Pipeline = {
   id: string
   name: string
+  schemaVersion: 2
+  revision: number
+  initialStageId: string
   stages: PipelineStage[]
 }
 
-export type DealItem = {
+export type CaseItem = {
   id: string
-  objectType: 'deal'
+  objectType: 'case'
   title: string
   pipelineId: string
   stageId: string
-  stageName: string
-  stageCategory: 'open' | 'won' | 'lost'
   contactId: string
   contactName: string
   contactPhone?: string | null
   ownerUid: string
   ownerName: string
+  revision: number
   createdAt?: string | null
   updatedAt?: string | null
   stageChangedAt?: string | null
@@ -182,7 +187,7 @@ export type DealItem = {
 
 export type AssistantCitation = {
   citationId: string
-  kind: 'call' | 'interaction' | 'contact' | 'service_request' | 'task' | 'review' | 'audit_event' | 'context_item'
+  kind: 'call' | 'interaction' | 'contact' | 'case' | 'task' | 'review' | 'audit_event' | 'context_item'
   recordId: string
   sourcePath: string
   title: string
@@ -248,22 +253,8 @@ export type DryRunResult = {
     callId: string
     occurredAt?: string | null
     status: 'would_request' | 'would_skip' | 'failed'
-    tasks?: Array<{
-      blockId: string
-      title: string
-      instructions: string | null
-      assigneeUid: string
-      assigneeName: string
-      approverUid: string
-      approverName: string
-      dueAt: string | null
-      context: {
-        callerName?: string | null
-        callerPhone?: string | null
-        callSummary?: string | null
-        transcriptExcerpt?: string | null
-      }
-    }>
+    actions?: ActionPreview[]
+    skippedActions?: ActionSkip[]
     conditions?: Array<{
       blockId: string
       field: 'call.durationSeconds' | 'caller.hasContact' | 'transcript.text'
@@ -290,7 +281,9 @@ export type ActionApprovalItem = {
   status: ApprovalStatus
   approverUid: string
   approverName: string
-  action: {
+  decisionStatus?: 'pending' | 'approved' | 'rejected'
+  executionStatus?: 'not_started' | 'executing' | 'succeeded' | 'failed_safe_to_retry' | 'outcome_unknown'
+  action: ({
     kind: 'task.create'
     taskId: string
     title: string
@@ -300,6 +293,29 @@ export type ActionApprovalItem = {
     dueAt?: string | null
     contactId?: string | null
     callId?: string | null
+  } | {
+    kind: 'case.create'
+    caseId: string
+    title: string
+    stageId: string
+    stageName: string
+    ownerUid: string
+    ownerName: string
+    contactId: string
+    callId: string
+  } | {
+    kind: 'case.move'
+    movementId: string
+    caseId: string
+    caseTitle: string
+    fromStageId: string
+    fromStageName: string
+    toStageId: string
+    toStageName: string
+    expectedRevision: number
+    contactId: string
+    callId: string
+  }) & {
     context?: {
       callerName?: string | null
       callerPhone?: string | null
@@ -316,7 +332,7 @@ export type ActionApprovalItem = {
     blockId: string
   }
   effectDigest: string
-  taskId?: string | null
+  resultId?: string | null
   executionError?: string | null
   rejectionNote?: string | null
   createdAt?: string | null
@@ -449,7 +465,7 @@ export async function listTasks(input?: {
   status?: TaskStatus
   assigneeUid?: string
   contactId?: string
-  dealId?: string
+  caseId?: string
 }): Promise<TaskItem[]> {
   return trpc.tasks.list.query({ ...(input || {}), limit: 200 }) as Promise<TaskItem[]>
 }
@@ -460,7 +476,7 @@ export async function createTask(input: {
   assigneeUid: string
   dueAt?: string | null
   contactId?: string | null
-  dealId?: string | null
+  caseId?: string | null
   callId?: string | null
 }): Promise<TaskItem> {
   return trpc.tasks.create.mutate(input) as Promise<TaskItem>
@@ -506,25 +522,39 @@ export async function getPipeline(): Promise<Pipeline> {
   return trpc.pipeline.get.query() as Promise<Pipeline>
 }
 
-export async function listDeals(contactId?: string): Promise<DealItem[]> {
-  return trpc.deals.list.query({ ...(contactId ? { contactId } : {}), limit: 200 }) as Promise<DealItem[]>
+export async function updatePipeline(input: {
+  expectedRevision: number
+  name: string
+  initialStageId: string
+  stages: PipelineStage[]
+}): Promise<Pipeline> {
+  return trpc.pipeline.update.mutate(input) as Promise<Pipeline>
 }
 
-export async function createDeal(input: {
+export async function listCases(contactId?: string): Promise<CaseItem[]> {
+  return trpc.cases.list.query({ ...(contactId ? { contactId } : {}), limit: 200 }) as Promise<CaseItem[]>
+}
+
+export async function createCase(input: {
   title: string
   contactId: string
   ownerUid: string
   stageId?: string
-}): Promise<DealItem> {
-  return trpc.deals.create.mutate(input) as Promise<DealItem>
+}): Promise<CaseItem> {
+  return trpc.cases.create.mutate(input) as Promise<CaseItem>
 }
 
-export async function moveDeal(dealId: string, stageId: string) {
-  return trpc.deals.move.mutate({ dealId, stageId })
+export async function moveCase(input: {
+  caseId: string
+  stageId: string
+  expectedRevision: number
+  expectedStageId: string
+}) {
+  return trpc.cases.move.mutate(input)
 }
 
-export async function archiveDeal(dealId: string) {
-  return trpc.deals.archive.mutate({ dealId })
+export async function archiveCase(caseId: string) {
+  return trpc.cases.archive.mutate({ caseId })
 }
 
 export async function getAssistantStatus() {

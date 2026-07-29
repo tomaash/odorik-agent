@@ -2,13 +2,16 @@ import { createHash } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import {
   previewWorkflow,
+  type ActionPreview,
   type CallTaskContext,
   type WorkflowSpec,
 } from "@agent-erik/workflow";
 import { db, jsonSafe, timestampToIso } from "../firestore.js";
 import { normalizePhone } from "../phone.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
-import { requestWorkflowTaskApproval } from "../approvals/repository.js";
+import { requestWorkflowActionApproval } from "../approvals/repository.js";
+import { getPipeline } from "../pipeline/repository.js";
+import type { WorkflowAction } from "../actions/contracts.js";
 import { enabledWorkflows, workflowVersion } from "./repository.js";
 
 type CallRecord = {
@@ -80,6 +83,16 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
       .filter((text): text is string => Boolean(text))
       .join("\n")
     || null;
+  const [pipeline, relatedCases] = contact
+    ? await Promise.all([
+        getPipeline(companyId),
+        db.collection(companyCollectionPath(companyId, "cases"))
+          .where("contactId", "==", contact.id)
+          .limit(50)
+          .get(),
+      ])
+    : [null, null];
+  const stageNames = new Map(pipeline?.stages.map((stage) => [stage.id, stage.name]));
   return {
     callId,
     call,
@@ -94,7 +107,72 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
         : null,
       callerHasContact: Boolean(contact),
       transcriptText,
+      cases: relatedCases?.docs
+        .filter((document) => document.data().archived !== true)
+        .map((document) => ({
+          id: document.id,
+          title: String(document.data().title || "Untitled case"),
+          pipelineId: String(document.data().pipelineId || "default"),
+          stageId: String(document.data().stageId || ""),
+          stageName: stageNames.get(String(document.data().stageId || "")) || "Unknown stage",
+          revision: Number(document.data().revision || 0),
+        })) || [],
     },
+  };
+}
+
+function actionPayload(input: {
+  preview: ActionPreview;
+  objectId: string;
+  contactId: string | null;
+  callId: string;
+}): WorkflowAction {
+  if (input.preview.kind === "task.create") {
+    return {
+      kind: "task.create",
+      taskId: input.objectId,
+      title: input.preview.title,
+      instructions: input.preview.instructions,
+      assigneeUid: input.preview.assigneeUid,
+      assigneeName: input.preview.assigneeName,
+      dueAt: input.preview.dueAt,
+      contactId: input.contactId,
+      callId: input.callId,
+      context: input.preview.context,
+    };
+  }
+  if (!input.contactId) {
+    throw new Error("Case actions require a resolved contact.");
+  }
+  if (input.preview.kind === "case.create") {
+    return {
+      kind: "case.create",
+      caseId: input.objectId,
+      title: input.preview.title,
+      pipelineId: "default",
+      stageId: input.preview.stageId,
+      stageName: input.preview.stageName,
+      ownerUid: input.preview.ownerUid,
+      ownerName: input.preview.ownerName,
+      contactId: input.contactId,
+      callId: input.callId,
+      context: input.preview.context,
+    };
+  }
+  return {
+    kind: "case.move",
+    movementId: input.objectId,
+    caseId: input.preview.caseId,
+    caseTitle: input.preview.caseTitle,
+    pipelineId: "default",
+    fromStageId: input.preview.fromStageId,
+    fromStageName: input.preview.fromStageName,
+    toStageId: input.preview.toStageId,
+    toStageName: input.preview.toStageName,
+    expectedRevision: input.preview.expectedRevision,
+    contactId: input.contactId,
+    callId: input.callId,
+    context: input.preview.context,
   };
 }
 
@@ -115,36 +193,46 @@ export async function runWorkflowOnCall(input: {
     return jsonSafe({ id: runRef.id, ...existingRun.data(), duplicate: true });
   }
   const approvalResults = [];
-  for (const taskPreview of preview.tasks) {
-    const taskId = deterministicId("task", `${key}:${taskPreview.blockId}`);
-    const approvalId = deterministicId("approval", `${key}:${taskPreview.blockId}`);
-    const approval = await requestWorkflowTaskApproval({
+  for (const actionPreview of preview.actions) {
+    const objectPrefix = actionPreview.kind === "task.create"
+      ? "task"
+      : actionPreview.kind === "case.create"
+        ? "case"
+        : "movement";
+    const objectId = deterministicId(objectPrefix, `${key}:${actionPreview.blockId}`);
+    const approvalId = deterministicId("approval", `${key}:${actionPreview.blockId}`);
+    const action = actionPayload({
+      preview: actionPreview,
+      objectId,
+      contactId: resolved.contact?.id || null,
+      callId: input.callId,
+    });
+    const approval = await requestWorkflowActionApproval({
       companyId: input.companyId,
       actorUid: `workflow:${input.workflow.id}`,
       approvalId,
-      taskId,
-      preview: taskPreview,
-      contactId: resolved.contact?.id || null,
-      callId: input.callId,
+      approverUid: actionPreview.approverUid,
+      approverName: actionPreview.approverName,
+      action,
       source: {
         kind: "workflow",
         callId: input.callId,
         workflowId: input.workflow.id,
         workflowVersion: input.workflow.version,
         runId,
-        blockId: taskPreview.blockId,
+        blockId: actionPreview.blockId,
       },
     }) as Record<string, unknown>;
     approvalResults.push({
       approvalId,
-      taskId,
-      blockId: taskPreview.blockId,
-      title: taskPreview.title,
-      assigneeUid: taskPreview.assigneeUid,
-      assigneeName: taskPreview.assigneeName,
-      approverUid: taskPreview.approverUid,
-      approverName: taskPreview.approverName,
-      dueAt: taskPreview.dueAt,
+      actionKind: action.kind,
+      resultId: objectId,
+      blockId: actionPreview.blockId,
+      title: actionPreview.kind === "case.move"
+        ? `${actionPreview.caseTitle}: ${actionPreview.fromStageName} → ${actionPreview.toStageName}`
+        : actionPreview.title,
+      approverUid: actionPreview.approverUid,
+      approverName: actionPreview.approverName,
       duplicate: approval.duplicate === true,
     });
   }
@@ -172,7 +260,8 @@ export async function runWorkflowOnCall(input: {
     requestedCount,
     duplicateCount,
     conditions: preview.conditions,
-    context: preview.tasks[0]?.context || {
+    skippedActions: preview.skippedActions,
+    context: preview.actions[0]?.context || {
       callerName: resolved.context.callerName ?? null,
       callerPhone: resolved.context.callerPhone ?? null,
       callSummary: resolved.context.callSummary ?? null,
@@ -222,12 +311,13 @@ export async function dryRunHistory(input: {
     try {
       const resolved = await resolveCall(input.companyId, call.id);
       const preview = previewWorkflow(workflow.spec, resolved.context);
-      const status = preview.tasks.length > 0 ? "would_request" : "would_skip";
+      const status = preview.actions.length > 0 ? "would_request" : "would_skip";
       results.push({
         callId: call.id,
         occurredAt: call.data().odorikTime || timestampToIso(call.data().processedAt),
         status,
-        tasks: preview.tasks,
+        actions: preview.actions,
+        skippedActions: preview.skippedActions,
         conditions: preview.conditions,
       });
     } catch (error) {
@@ -242,7 +332,7 @@ export async function dryRunHistory(input: {
     workflowId: input.workflowId,
     sampleSize: results.length,
     wouldRequest: results.reduce(
-      (count, result) => count + ("tasks" in result ? result.tasks?.length || 0 : 0),
+      (count, result) => count + ("actions" in result ? result.actions?.length || 0 : 0),
       0,
     ),
     matchedCalls: results.filter((result) => result.status === "would_request").length,

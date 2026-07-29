@@ -4,7 +4,7 @@
 
 Each slice must prove one complete operating loop and leave a usable outcome.
 The streamlined redesign starts with objects the application can honestly own:
-internal tasks, contact-linked deals, and a small call-to-task block language.
+internal tasks, contact-linked cases, and a small approval-gated block language.
 Speculative workflow primitives and chat authoring remain deferred. See
 `REDESIGN_PLAN.md` and `INTERNAL_WORKFLOW.md`.
 
@@ -33,8 +33,8 @@ question
 ### Implemented scope
 
 - One shared company thread in the new mobile-first **Agent** screen.
-- Safe projections of calls, interactions, contacts, service requests, tasks,
-  reviews, and audit events.
+- Safe projections of calls, contacts, cases, tasks, normalized context items,
+  and audit events.
 - Four tools:
   - hybrid search;
   - exact record lookup;

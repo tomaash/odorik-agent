@@ -24,6 +24,39 @@ export type CreateTaskBlock = {
   approval: RequiredApproval;
 };
 
+export type CaseRecipe = {
+  title: string;
+  pipelineId: string;
+  stageId: string;
+  stageName: string;
+  ownerUid: string;
+  ownerName: string;
+};
+
+export type CreateCaseBlock = {
+  id: string;
+  kind: "action.case.create";
+  case: CaseRecipe;
+  approval: RequiredApproval;
+};
+
+export type MoveCaseRecipe = {
+  pipelineId: string;
+  fromStageId: string;
+  fromStageName: string;
+  toStageId: string;
+  toStageName: string;
+};
+
+export type MoveCaseBlock = {
+  id: string;
+  kind: "action.case.move";
+  case: MoveCaseRecipe;
+  approval: RequiredApproval;
+};
+
+export type ActionBlock = CreateTaskBlock | CreateCaseBlock | MoveCaseBlock;
+
 export type ConditionField =
   | "call.durationSeconds"
   | "caller.hasContact"
@@ -47,13 +80,13 @@ export type IfBlock = {
   id: string;
   kind: "control.if";
   condition: WorkflowCondition;
-  then: CreateTaskBlock[];
-  else: CreateTaskBlock[];
+  then: ActionBlock[];
+  else: ActionBlock[];
 };
 
 // This union is deliberately small. New block kinds belong here only after
 // their normal product behavior and runtime semantics exist.
-export type WorkflowBlock = CreateTaskBlock | IfBlock;
+export type WorkflowBlock = ActionBlock | IfBlock;
 
 export type WorkflowSpec = {
   schemaVersion: 4;
@@ -103,9 +136,20 @@ export type CallTaskContext = {
   callDurationSeconds?: number | null;
   callerHasContact?: boolean;
   transcriptText?: string | null;
+  cases?: CaseContext[];
+};
+
+export type CaseContext = {
+  id: string;
+  title: string;
+  pipelineId: string;
+  stageId: string;
+  stageName: string;
+  revision: number;
 };
 
 export type TaskRecipePreview = {
+  kind: "task.create";
   blockId: string;
   title: string;
   instructions: string | null;
@@ -115,6 +159,50 @@ export type TaskRecipePreview = {
   approverName: string;
   dueAt: string | null;
   context: CallTaskContext;
+};
+
+export type CreateCasePreview = {
+  kind: "case.create";
+  blockId: string;
+  title: string;
+  pipelineId: string;
+  stageId: string;
+  stageName: string;
+  ownerUid: string;
+  ownerName: string;
+  approverUid: string;
+  approverName: string;
+  context: CallTaskContext;
+};
+
+export type MoveCasePreview = {
+  kind: "case.move";
+  blockId: string;
+  caseId: string;
+  caseTitle: string;
+  pipelineId: string;
+  fromStageId: string;
+  fromStageName: string;
+  toStageId: string;
+  toStageName: string;
+  expectedRevision: number;
+  approverUid: string;
+  approverName: string;
+  context: CallTaskContext;
+};
+
+export type ActionPreview = TaskRecipePreview | CreateCasePreview | MoveCasePreview;
+
+export type ActionSkipReason =
+  | "contact_required"
+  | "no_matching_case"
+  | "ambiguous_case";
+
+export type ActionSkip = {
+  blockId: string;
+  kind: CreateCaseBlock["kind"] | MoveCaseBlock["kind"];
+  reason: ActionSkipReason;
+  matches: number;
 };
 
 export type ConditionTrace = {
@@ -128,7 +216,8 @@ export type ConditionTrace = {
 };
 
 export type WorkflowPreview = {
-  tasks: TaskRecipePreview[];
+  actions: ActionPreview[];
+  skippedActions: ActionSkip[];
   conditions: ConditionTrace[];
 };
 
@@ -156,6 +245,62 @@ export function createTaskBlock(input: {
       kind: "required",
       approverUid: input.assigneeUid,
       approverName: input.assigneeName,
+    },
+  };
+}
+
+export function createCaseBlock(input: {
+  ownerUid: string;
+  ownerName: string;
+  pipelineId: string;
+  stageId: string;
+  stageName: string;
+  id?: string;
+  title?: string;
+}): CreateCaseBlock {
+  return {
+    id: input.id || nextBlockId("case_create"),
+    kind: "action.case.create",
+    case: {
+      title: input.title || "Follow up with {caller.name}",
+      pipelineId: input.pipelineId,
+      stageId: input.stageId,
+      stageName: input.stageName,
+      ownerUid: input.ownerUid,
+      ownerName: input.ownerName,
+    },
+    approval: {
+      kind: "required",
+      approverUid: input.ownerUid,
+      approverName: input.ownerName,
+    },
+  };
+}
+
+export function createMoveCaseBlock(input: {
+  approverUid: string;
+  approverName: string;
+  pipelineId: string;
+  fromStageId: string;
+  fromStageName: string;
+  toStageId: string;
+  toStageName: string;
+  id?: string;
+}): MoveCaseBlock {
+  return {
+    id: input.id || nextBlockId("case_move"),
+    kind: "action.case.move",
+    case: {
+      pipelineId: input.pipelineId,
+      fromStageId: input.fromStageId,
+      fromStageName: input.fromStageName,
+      toStageId: input.toStageId,
+      toStageName: input.toStageName,
+    },
+    approval: {
+      kind: "required",
+      approverUid: input.approverUid,
+      approverName: input.approverName,
     },
   };
 }
@@ -428,7 +573,106 @@ function validateCondition(
   }
 }
 
-function validateTaskBlocks(
+function validateCaseRecipe(
+  recipe: Partial<CaseRecipe> | undefined,
+  path: string,
+  errors: SpecIssue[],
+  holes: SpecIssue[],
+) {
+  if (!recipe || typeof recipe !== "object") {
+    errors.push(issue("case.invalid", path, "Case settings are required."));
+    return;
+  }
+  if (typeof recipe.title !== "string" || !recipe.title.trim()) {
+    holes.push(issue("case.title_empty", `${path}.title`, "Case title is required."));
+  } else if (recipe.title.trim().length > 300) {
+    errors.push(issue("case.title_long", `${path}.title`, "Case title is too long."));
+  }
+  for (const [field, message] of [
+    ["pipelineId", "Choose a pipeline."],
+    ["stageId", "Choose an initial stage."],
+    ["stageName", "Stage name is required."],
+    ["ownerUid", "Choose a case owner."],
+    ["ownerName", "Owner name is required."],
+  ] as const) {
+    if (typeof recipe[field] !== "string" || !recipe[field]?.trim()) {
+      holes.push(issue(`case.${field}_empty`, `${path}.${field}`, message));
+    }
+  }
+}
+
+function validateMoveCaseRecipe(
+  recipe: Partial<MoveCaseRecipe> | undefined,
+  path: string,
+  errors: SpecIssue[],
+  holes: SpecIssue[],
+) {
+  if (!recipe || typeof recipe !== "object") {
+    errors.push(issue("case_move.invalid", path, "Case movement settings are required."));
+    return;
+  }
+  for (const [field, message] of [
+    ["pipelineId", "Choose a pipeline."],
+    ["fromStageId", "Choose the exact current stage."],
+    ["fromStageName", "Current stage name is required."],
+    ["toStageId", "Choose a destination stage."],
+    ["toStageName", "Destination stage name is required."],
+  ] as const) {
+    if (typeof recipe[field] !== "string" || !recipe[field]?.trim()) {
+      holes.push(issue(`case_move.${field}_empty`, `${path}.${field}`, message));
+    }
+  }
+  if (
+    typeof recipe.fromStageId === "string"
+    && recipe.fromStageId.trim()
+    && recipe.fromStageId === recipe.toStageId
+  ) {
+    errors.push(issue(
+      "case_move.same_stage",
+      `${path}.toStageId`,
+      "Current and destination stages must be different.",
+    ));
+  }
+}
+
+function validateActionBlock(
+  block: unknown,
+  path: string,
+  errors: SpecIssue[],
+  holes: SpecIssue[],
+  ids: Set<string>,
+) {
+  if (!block || typeof block !== "object") {
+    errors.push(issue("block.invalid", path, "Block must be an object."));
+    return;
+  }
+  const candidate = block as Partial<ActionBlock>;
+  if (typeof candidate.id !== "string" || !candidate.id.trim()) {
+    holes.push(issue("block.id_empty", `${path}.id`, "Block id is required."));
+  } else if (ids.has(candidate.id)) {
+    errors.push(issue("block.id_duplicate", `${path}.id`, "Block ids must be unique."));
+  } else {
+    ids.add(candidate.id);
+  }
+  if (candidate.kind === "action.task.create") {
+    validateTask(candidate.task, `${path}.task`, errors, holes);
+    validateApproval(candidate.approval, `${path}.approval`, errors, holes);
+    return;
+  }
+  if (candidate.kind === "action.case.create") {
+    validateCaseRecipe(candidate.case, `${path}.case`, errors, holes);
+    validateApproval(candidate.approval, `${path}.approval`, errors, holes);
+    return;
+  }
+  if (candidate.kind === "action.case.move") {
+    validateMoveCaseRecipe(candidate.case, `${path}.case`, errors, holes);
+    validateApproval(candidate.approval, `${path}.approval`, errors, holes);
+    return;
+  }
+  errors.push(issue("block.unsupported", `${path}.kind`, "This action type is not supported."));
+}
+
+function validateActionBlocks(
   blocks: unknown,
   path: string,
   errors: SpecIssue[],
@@ -440,32 +684,10 @@ function validateTaskBlocks(
     return;
   }
   if (blocks.length > 10) {
-    errors.push(issue("branch.limit", path, "A branch can contain at most 10 task blocks."));
+    errors.push(issue("branch.limit", path, "A branch can contain at most 10 action blocks."));
   }
   blocks.forEach((block, index) => {
-    const blockPath = `${path}[${index}]`;
-    if (!block || typeof block !== "object") {
-      errors.push(issue("block.invalid", blockPath, "Block must be an object."));
-      return;
-    }
-    const candidate = block as Partial<CreateTaskBlock>;
-    if (typeof candidate.id !== "string" || !candidate.id.trim()) {
-      holes.push(issue("block.id_empty", `${blockPath}.id`, "Block id is required."));
-    } else if (ids.has(candidate.id)) {
-      errors.push(issue("block.id_duplicate", `${blockPath}.id`, "Block ids must be unique."));
-    } else {
-      ids.add(candidate.id);
-    }
-    if (candidate.kind !== "action.task.create") {
-      errors.push(issue(
-        "branch.block_unsupported",
-        `${blockPath}.kind`,
-        "Branches can contain task blocks only.",
-      ));
-      return;
-    }
-    validateTask(candidate.task, `${blockPath}.task`, errors, holes);
-    validateApproval(candidate.approval, `${blockPath}.approval`, errors, holes);
+    validateActionBlock(block, `${path}[${index}]`, errors, holes, ids);
   });
 }
 
@@ -527,15 +749,25 @@ export function validateWorkflow(untrusted: unknown): ValidationResult {
     } else {
       ids.add(block.id);
     }
-    if (block.kind === "action.task.create") {
-      validateTask(block.task, `${path}.task`, errors, holes);
+    if (
+      block.kind === "action.task.create"
+      || block.kind === "action.case.create"
+      || block.kind === "action.case.move"
+    ) {
+      if (block.kind === "action.task.create") {
+        validateTask(block.task, `${path}.task`, errors, holes);
+      } else if (block.kind === "action.case.create") {
+        validateCaseRecipe(block.case, `${path}.case`, errors, holes);
+      } else {
+        validateMoveCaseRecipe(block.case, `${path}.case`, errors, holes);
+      }
       validateApproval(block.approval, `${path}.approval`, errors, holes);
       return;
     }
     if (block.kind === "control.if") {
       validateCondition(block.condition, `${path}.condition`, errors, holes);
-      validateTaskBlocks(block.then, `${path}.then`, errors, holes, ids);
-      validateTaskBlocks(block.else, `${path}.else`, errors, holes, ids);
+      validateActionBlocks(block.then, `${path}.then`, errors, holes, ids);
+      validateActionBlocks(block.else, `${path}.else`, errors, holes, ids);
       if (
         Array.isArray(block.then)
         && Array.isArray(block.else)
@@ -545,7 +777,7 @@ export function validateWorkflow(untrusted: unknown): ValidationResult {
         holes.push(issue(
           "condition.branches_empty",
           path,
-          "Add a task to at least one branch.",
+          "Add an action to at least one branch.",
         ));
       }
       return;
@@ -554,19 +786,18 @@ export function validateWorkflow(untrusted: unknown): ValidationResult {
       errors.push(issue("block.unsupported", `${path}.kind`, "This block type is not supported."));
     }
   });
-  const taskCount = spec.blocks.reduce((count, block) => {
+  const actionCount = spec.blocks.reduce((count, block) => {
     if (!block || typeof block !== "object") return count;
-    if (block.kind === "action.task.create") return count + 1;
-    if (block.kind !== "control.if") return count;
+    if (block.kind !== "control.if") return count + 1;
     return count
       + (Array.isArray(block.then) ? block.then.length : 0)
       + (Array.isArray(block.else) ? block.else.length : 0);
   }, 0);
-  if (taskCount > 20) {
+  if (actionCount > 20) {
     errors.push(issue(
-      "workflow.task_limit",
+      "workflow.action_limit",
       "blocks",
-      "A workflow can define at most 20 task blocks.",
+      "A workflow can define at most 20 action blocks.",
     ));
   }
   return { valid: errors.length === 0 && holes.length === 0, errors, holes };
@@ -643,6 +874,7 @@ function previewTaskBlock(
   now: Date,
 ): TaskRecipePreview {
   return {
+    kind: "task.create",
     blockId: block.id,
     title: renderTaskText(block.task.title, context),
     instructions: block.task.instructions
@@ -664,6 +896,84 @@ function previewTaskBlock(
   };
 }
 
+function compactContext(context: CallTaskContext): CallTaskContext {
+  return {
+    callerName: context.callerName ?? null,
+    callerPhone: context.callerPhone ?? null,
+    callSummary: context.callSummary ?? null,
+    transcriptExcerpt: context.transcriptExcerpt ?? null,
+  };
+}
+
+function previewActionBlock(
+  block: ActionBlock,
+  context: CallTaskContext,
+  now: Date,
+): { action?: ActionPreview; skipped?: ActionSkip } {
+  if (block.kind === "action.task.create") {
+    return { action: previewTaskBlock(block, context, now) };
+  }
+  if (!context.callerHasContact) {
+    return {
+      skipped: {
+        blockId: block.id,
+        kind: block.kind,
+        reason: "contact_required",
+        matches: 0,
+      },
+    };
+  }
+  if (block.kind === "action.case.create") {
+    return {
+      action: {
+        kind: "case.create",
+        blockId: block.id,
+        title: renderTaskText(block.case.title, context),
+        pipelineId: block.case.pipelineId,
+        stageId: block.case.stageId,
+        stageName: block.case.stageName,
+        ownerUid: block.case.ownerUid,
+        ownerName: block.case.ownerName,
+        approverUid: block.approval.approverUid,
+        approverName: block.approval.approverName,
+        context: compactContext(context),
+      },
+    };
+  }
+  const matches = (context.cases || []).filter((candidate) => (
+    candidate.pipelineId === block.case.pipelineId
+    && candidate.stageId === block.case.fromStageId
+  ));
+  if (matches.length !== 1) {
+    return {
+      skipped: {
+        blockId: block.id,
+        kind: block.kind,
+        reason: matches.length === 0 ? "no_matching_case" : "ambiguous_case",
+        matches: matches.length,
+      },
+    };
+  }
+  const match = matches[0]!;
+  return {
+    action: {
+      kind: "case.move",
+      blockId: block.id,
+      caseId: match.id,
+      caseTitle: match.title,
+      pipelineId: block.case.pipelineId,
+      fromStageId: block.case.fromStageId,
+      fromStageName: block.case.fromStageName,
+      toStageId: block.case.toStageId,
+      toStageName: block.case.toStageName,
+      expectedRevision: match.revision,
+      approverUid: block.approval.approverUid,
+      approverName: block.approval.approverName,
+      context: compactContext(context),
+    },
+  };
+}
+
 export function previewWorkflow(
   spec: WorkflowSpec,
   context: CallTaskContext,
@@ -676,11 +986,17 @@ export function previewWorkflow(
       .join("; ");
     throw new Error(`Workflow is not executable: ${summary}`);
   }
-  const tasks: TaskRecipePreview[] = [];
+  const actions: ActionPreview[] = [];
+  const skippedActions: ActionSkip[] = [];
   const conditions: ConditionTrace[] = [];
+  const collect = (block: ActionBlock) => {
+    const result = previewActionBlock(block, context, now);
+    if (result.action) actions.push(result.action);
+    if (result.skipped) skippedActions.push(result.skipped);
+  };
   for (const block of spec.blocks) {
-    if (block.kind === "action.task.create") {
-      tasks.push(previewTaskBlock(block, context, now));
+    if (block.kind !== "control.if") {
+      collect(block);
       continue;
     }
     const evaluated = evaluateCondition(block.condition, context);
@@ -698,9 +1014,9 @@ export function previewWorkflow(
       branch,
     });
     const selectedBlocks = evaluated.result ? block.then : block.else;
-    tasks.push(...selectedBlocks.map((taskBlock) => previewTaskBlock(taskBlock, context, now)));
+    selectedBlocks.forEach(collect);
   }
-  return { tasks, conditions };
+  return { actions, skippedActions, conditions };
 }
 
 export function previewWorkflowTasks(
@@ -708,5 +1024,7 @@ export function previewWorkflowTasks(
   context: CallTaskContext,
   now = new Date(),
 ): TaskRecipePreview[] {
-  return previewWorkflow(spec, context, now).tasks;
+  return previewWorkflow(spec, context, now).actions.filter(
+    (action): action is TaskRecipePreview => action.kind === "task.create",
+  );
 }

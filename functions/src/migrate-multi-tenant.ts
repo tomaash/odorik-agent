@@ -12,7 +12,6 @@ const legacyCollections = [
   "calls",
   "interactions",
   "contacts",
-  "serviceRequests",
   "processingRuns",
   "tasks",
   "reviews",

@@ -16,14 +16,14 @@ import {
   createTask,
   getTeamOverview,
   listActionApprovals,
+  listCases,
   listContacts,
-  listDeals,
   listTasks,
   rejectAction,
   transitionTask,
   type ActionApprovalItem,
   type ContactListItem,
-  type DealItem,
+  type CaseItem,
   type TaskItem,
   type TaskStatus,
   type TeamMember,
@@ -36,7 +36,7 @@ const tasks = ref<TaskItem[]>([])
 const approvals = ref<ActionApprovalItem[]>([])
 const members = ref<TeamMember[]>([])
 const contacts = ref<ContactListItem[]>([])
-const deals = ref<DealItem[]>([])
+const cases = ref<CaseItem[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
@@ -53,7 +53,7 @@ const form = ref({
   assigneeUid: '',
   dueAt: null as Date | null,
   contactId: null as string | null,
-  dealId: null as string | null,
+  caseId: null as string | null,
 })
 
 const visibleTasks = computed(() => sortedTasks(tasks.value, scope.value))
@@ -61,10 +61,10 @@ const counts = computed(() => taskStatusCounts(tasks.value))
 const pendingApprovalCount = computed(() => approvals.value.filter((approval) => (
   approval.status === 'pending' && approval.approverUid === authStore.user?.uid
 )).length)
-const availableDeals = computed(() => (
+const availableCases = computed(() => (
   form.value.contactId
-    ? deals.value.filter((deal) => deal.contactId === form.value.contactId)
-    : deals.value
+    ? cases.value.filter((item) => item.contactId === form.value.contactId)
+    : cases.value
 ))
 const contactOptions = computed(() => contacts.value.map((contact) => {
   const phone = contact.phoneE164 || contact.phoneRaw || ''
@@ -92,6 +92,34 @@ function approvalSeverity(status: ActionApprovalItem['status']) {
   return 'secondary'
 }
 
+function approvalTitle(approval: ActionApprovalItem) {
+  return approval.action.kind === 'case.move'
+    ? approval.action.caseTitle
+    : approval.action.title
+}
+
+function approvalActionLabel(approval: ActionApprovalItem) {
+  if (approval.action.kind === 'task.create') return t('approvals.taskAction')
+  if (approval.action.kind === 'case.create') return t('approvals.createCaseAction')
+  return t('approvals.moveCaseAction')
+}
+
+function approvalEffect(approval: ActionApprovalItem) {
+  if (approval.action.kind === 'task.create') {
+    return t('approvals.createTaskFor', { assignee: approval.action.assigneeName })
+  }
+  if (approval.action.kind === 'case.create') {
+    return t('approvals.createCaseFor', {
+      owner: approval.action.ownerName,
+      stage: approval.action.stageName,
+    })
+  }
+  return t('approvals.moveCaseFromTo', {
+    from: approval.action.fromStageName,
+    to: approval.action.toStageName,
+  })
+}
+
 function openCreate() {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
@@ -101,7 +129,7 @@ function openCreate() {
     assigneeUid: authStore.user?.uid || members.value[0]?.uid || '',
     dueAt: tomorrow,
     contactId: null,
-    dealId: null,
+    caseId: null,
   }
   dialog.value = 'create'
 }
@@ -117,7 +145,7 @@ async function submitCreate() {
       assigneeUid: form.value.assigneeUid,
       dueAt: form.value.dueAt?.toISOString() || null,
       contactId: form.value.contactId,
-      dealId: form.value.dealId,
+      caseId: form.value.caseId,
     })
     dialog.value = null
     await load()
@@ -197,18 +225,18 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [taskItems, approvalItems, team, contactItems, dealItems] = await Promise.all([
+    const [taskItems, approvalItems, team, contactItems, caseItems] = await Promise.all([
       listTasks(),
       listActionApprovals(),
       getTeamOverview(),
       listContacts(),
-      listDeals(),
+      listCases(),
     ])
     tasks.value = taskItems
     approvals.value = approvalItems
     members.value = team.members
     contacts.value = contactItems
-    deals.value = dealItems
+    cases.value = caseItems
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -294,14 +322,14 @@ onMounted(load)
         <div class="min-w-0">
           <div class="flex items-center gap-2 flex-wrap mb-1.5">
             <Tag :value="t(`approvals.status.${approval.status}`)" :severity="approvalSeverity(approval.status)" />
-            <span class="eyebrow !text-violet-700">{{ t('approvals.taskAction') }}</span>
+            <span class="eyebrow !text-violet-700">{{ approvalActionLabel(approval) }}</span>
           </div>
-          <h2 class="text-sm font-semibold leading-snug m-0 break-words">{{ approval.action.title }}</h2>
-          <p v-if="approval.action.instructions" class="text-sm text-surface-600 leading-relaxed mt-1.5 mb-0 break-words">{{ approval.action.instructions }}</p>
+          <h2 class="text-sm font-semibold leading-snug m-0 break-words">{{ approvalTitle(approval) }}</h2>
+          <p v-if="approval.action.kind === 'task.create' && approval.action.instructions" class="text-sm text-surface-600 leading-relaxed mt-1.5 mb-0 break-words">{{ approval.action.instructions }}</p>
           <div class="mt-3 rounded-md border border-violet-200 bg-white/80 p-3 grid gap-1.5 text-xs">
             <strong class="text-violet-950">{{ t('approvals.exactEffect') }}</strong>
-            <span>{{ t('approvals.createTaskFor', { assignee: approval.action.assigneeName }) }}</span>
-            <span><i class="pi pi-calendar mr-1" />{{ formatDate(approval.action.dueAt) }}</span>
+            <span>{{ approvalEffect(approval) }}</span>
+            <span v-if="approval.action.kind === 'task.create'"><i class="pi pi-calendar mr-1" />{{ formatDate(approval.action.dueAt) }}</span>
             <span><i class="pi pi-user-edit mr-1" />{{ t('approvals.approver', { approver: approval.approverName }) }}</span>
           </div>
           <details v-if="approval.action.context?.callSummary || approval.action.context?.transcriptExcerpt" class="mt-3">
@@ -469,8 +497,8 @@ onMounted(load)
             <Select v-model="form.contactId" :options="contactOptions" optionLabel="label" optionValue="id" showClear filter />
           </label>
           <label class="grid gap-1.5 text-sm font-medium">
-            {{ t('tasks.fields.deal') }}
-            <Select v-model="form.dealId" :options="availableDeals" optionLabel="title" optionValue="id" showClear />
+            {{ t('tasks.fields.case') }}
+            <Select v-model="form.caseId" :options="availableCases" optionLabel="title" optionValue="id" showClear />
           </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">

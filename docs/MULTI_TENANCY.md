@@ -35,7 +35,8 @@ companies/{companyId}
   calls/{callId}
   interactions/{interactionId}
   contacts/{contactId}
-  serviceRequests/{requestId}
+  cases/{caseId}
+  workItems/{taskId}
   processingRuns/{runId}
   tasks/{taskId}
   reviews/{reviewId}

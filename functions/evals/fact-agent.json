@@ -8,7 +8,7 @@
   {
     "id": "call_followup_fact",
     "question": "What furniture did Eva want transported, between which cities, and when?",
-    "expectedSourcePaths": ["interactions/odorik_call_1"],
+    "expectedSourcePaths": ["calls/odorik_call_1"],
     "expectedTerms": ["wardrobe", "Brno", "Prague", "Tuesday"]
   },
   {
@@ -19,10 +19,10 @@
     "retrieval": false
   },
   {
-    "id": "request_status_count",
-    "question": "How many service requests are there in each status?",
-    "expectedSourcePaths": ["aggregate/service_request/all/status"],
-    "expectedTerms": ["waiting", "completed", "1"],
+    "id": "case_stage_count",
+    "question": "How many cases are there in each pipeline stage?",
+    "expectedSourcePaths": ["aggregate/case/all/stageId"],
+    "expectedTerms": ["waiting", "done", "1"],
     "retrieval": false
   },
   {

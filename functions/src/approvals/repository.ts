@@ -1,10 +1,18 @@
-import { createHash } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
-import type { TaskRecipePreview } from "@agent-erik/workflow";
+import {
+  actionEffectDigest,
+  executeWorkflowAction,
+  legacyActionEffectDigest,
+  parseWorkflowAction,
+  type WorkflowAction,
+  type WorkflowActionSource,
+} from "../actions/contracts.js";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
-import { activeMember, createTask, type TaskSource } from "../tasks/repository.js";
+import { activeMember } from "../tasks/repository.js";
+import { pipelineStage } from "../pipeline/repository.js";
 
 export type ApprovalStatus =
   | "pending"
@@ -13,52 +21,79 @@ export type ApprovalStatus =
   | "rejected"
   | "execution_failed";
 
-type WorkflowApprovalSource = TaskSource & {
-  kind: "workflow";
-  callId: string;
-  workflowId: string;
-  workflowVersion: number;
-  runId: string;
-  blockId: string;
-};
+type DecisionStatus = "pending" | "approved" | "rejected";
+type ExecutionStatus =
+  | "not_started"
+  | "executing"
+  | "succeeded"
+  | "failed_safe_to_retry"
+  | "outcome_unknown";
 
-function effectDigest(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+const executionLeaseMs = 5 * 60 * 1_000;
+
+function inferredDecision(data: FirebaseFirestore.DocumentData): DecisionStatus {
+  if (data.decisionStatus === "approved" || data.decisionStatus === "rejected") {
+    return data.decisionStatus;
+  }
+  if (data.status === "rejected") return "rejected";
+  if (data.status === "executing" || data.status === "approved" || data.status === "execution_failed") {
+    return "approved";
+  }
+  return "pending";
 }
 
-export async function requestWorkflowTaskApproval(input: {
+function inferredExecution(data: FirebaseFirestore.DocumentData): ExecutionStatus {
+  if (
+    data.executionStatus === "not_started"
+    || data.executionStatus === "executing"
+    || data.executionStatus === "succeeded"
+    || data.executionStatus === "failed_safe_to_retry"
+    || data.executionStatus === "outcome_unknown"
+  ) return data.executionStatus;
+  if (data.status === "approved") return "succeeded";
+  if (data.status === "executing") return "executing";
+  if (data.status === "execution_failed") return "failed_safe_to_retry";
+  return "not_started";
+}
+
+export async function requestWorkflowActionApproval(input: {
   companyId: string;
   actorUid: string;
   approvalId: string;
-  taskId: string;
-  preview: TaskRecipePreview;
-  contactId?: string | null;
-  callId: string;
-  source: WorkflowApprovalSource;
+  approverUid: string;
+  approverName: string;
+  action: WorkflowAction;
+  source: WorkflowActionSource;
 }) {
-  const [approver, assignee] = await Promise.all([
-    activeMember(input.companyId, input.preview.approverUid),
-    activeMember(input.companyId, input.preview.assigneeUid),
-  ]);
+  const approver = await activeMember(input.companyId, input.approverUid);
+  let action = parseWorkflowAction(input.action);
+  if (action.kind === "task.create") {
+    const assignee = await activeMember(input.companyId, action.assigneeUid);
+    action = { ...action, assigneeName: assignee.displayName };
+  } else if (action.kind === "case.create") {
+    const [owner, stage] = await Promise.all([
+      activeMember(input.companyId, action.ownerUid),
+      pipelineStage(input.companyId, action.stageId),
+    ]);
+    action = { ...action, ownerName: owner.displayName, stageName: stage.name };
+  } else {
+    const [from, to] = await Promise.all([
+      pipelineStage(input.companyId, action.fromStageId),
+      pipelineStage(input.companyId, action.toStageId),
+    ]);
+    action = {
+      ...action,
+      fromStageName: from.name,
+      toStageName: to.name,
+    };
+  }
   const approvalRef = db.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
   );
   const auditRef = db.collection(
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
-  const action = {
-    kind: "task.create",
-    taskId: input.taskId,
-    title: input.preview.title,
-    instructions: input.preview.instructions,
-    assigneeUid: assignee.uid,
-    assigneeName: assignee.displayName,
-    dueAt: input.preview.dueAt,
-    contactId: input.contactId || null,
-    callId: input.callId,
-    context: input.preview.context,
-  };
-  const digest = effectDigest(action);
+  const digest = actionEffectDigest(action);
   return db.runTransaction(async (transaction) => {
     const existing = await transaction.get(approvalRef);
     if (existing.exists) {
@@ -68,10 +103,13 @@ export async function requestWorkflowTaskApproval(input: {
     const approval = {
       objectType: "action_approval",
       status: "pending" satisfies ApprovalStatus,
+      decisionStatus: "pending" satisfies DecisionStatus,
+      executionStatus: "not_started" satisfies ExecutionStatus,
       approverUid: approver.uid,
       approverName: approver.displayName,
       action,
       effectDigest: digest,
+      effectDigestVersion: "canonical-v1",
       source: input.source,
       createdBy: input.actorUid,
       createdAt: now,
@@ -84,7 +122,8 @@ export async function requestWorkflowTaskApproval(input: {
       type: "approval_requested",
       actor: { kind: "system", id: input.actorUid },
       after: {
-        status: "pending",
+        decisionStatus: "pending",
+        executionStatus: "not_started",
         approverUid: approver.uid,
         actionKind: action.kind,
         effectDigest: digest,
@@ -127,6 +166,7 @@ async function claimApproval(input: {
   const approvalRef = db.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
   );
+  const auditRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
   return db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(approvalRef);
     if (!snapshot.exists) {
@@ -139,40 +179,81 @@ async function claimApproval(input: {
         message: "Only the named approver can approve this action.",
       });
     }
-    if (data.status === "approved") {
-      return { ref: approvalRef, data, alreadyApproved: true };
-    }
-    if (data.status === "rejected") {
+    const decisionStatus = inferredDecision(data);
+    const executionStatus = inferredExecution(data);
+    if (decisionStatus === "rejected") {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
         message: "This action was rejected and cannot execute.",
       });
     }
-    if (
-      data.status !== "pending"
-      && data.status !== "executing"
-      && data.status !== "execution_failed"
-    ) {
+    if (decisionStatus === "approved" && executionStatus === "succeeded") {
+      return { ref: approvalRef, data, alreadyApproved: true, attemptId: null };
+    }
+    if (executionStatus === "outcome_unknown") {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
-        message: "This approval request cannot execute.",
+        message: "The prior execution outcome is unknown. Review the audit trail before retrying.",
       });
     }
-    if (data.status === "executing" && data.approvedBy !== input.actorUid) {
+    const leaseExpiresAt = data.executionLeaseExpiresAt?.toMillis?.() || 0;
+    if (executionStatus === "executing" && leaseExpiresAt > Date.now()) {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
-        message: "This approval request is already being executed.",
+        message: "This approved action is already being executed.",
       });
     }
+
+    const attemptId = randomUUID();
     const now = Timestamp.now();
     transaction.update(approvalRef, {
       status: "executing",
-      approvedBy: input.actorUid,
+      decisionStatus: "approved",
+      executionStatus: "executing",
+      approvedBy: data.approvedBy || input.actorUid,
       approvedAt: data.approvedAt || now,
+      executionAttemptId: attemptId,
+      executionLeaseExpiresAt: Timestamp.fromMillis(now.toMillis() + executionLeaseMs),
       executionError: null,
       updatedAt: now,
     });
-    return { ref: approvalRef, data, alreadyApproved: false };
+    transaction.create(auditRef, {
+      aggregateType: "action_approval",
+      aggregateId: input.approvalId,
+      type: decisionStatus === "pending" ? "approval_approved" : "approval_execution_retried",
+      actor: { kind: "user", id: input.actorUid },
+      before: { decisionStatus, executionStatus },
+      after: {
+        decisionStatus: "approved",
+        executionStatus: "executing",
+        attemptId,
+        effectDigest: data.effectDigest || null,
+      },
+      createdAt: now,
+    });
+    return { ref: approvalRef, data, alreadyApproved: false, attemptId };
+  });
+}
+
+async function markExecutionFailed(input: {
+  ref: FirebaseFirestore.DocumentReference;
+  attemptId: string | null;
+  error: unknown;
+}) {
+  if (!input.attemptId) return;
+  await db.runTransaction(async (transaction) => {
+    const latest = await transaction.get(input.ref);
+    if (latest.data()?.executionAttemptId !== input.attemptId) return;
+    transaction.update(input.ref, {
+      status: "execution_failed",
+      decisionStatus: "approved",
+      executionStatus: "failed_safe_to_retry",
+      executionError: input.error instanceof Error
+        ? input.error.message.slice(0, 500)
+        : "Action execution failed.",
+      executionLeaseExpiresAt: null,
+      updatedAt: Timestamp.now(),
+    });
   });
 }
 
@@ -183,61 +264,37 @@ export async function approveAction(input: {
 }) {
   const claimed = await claimApproval(input);
   if (claimed.alreadyApproved) {
-    return jsonSafe({
-      id: input.approvalId,
-      ...claimed.data,
-      duplicate: true,
-    });
+    return jsonSafe({ id: input.approvalId, ...claimed.data, duplicate: true });
   }
-  const action = claimed.data.action as {
-    kind?: unknown;
-    taskId?: unknown;
-    title?: unknown;
-    instructions?: unknown;
-    assigneeUid?: unknown;
-    dueAt?: unknown;
-    contactId?: unknown;
-    callId?: unknown;
-    context?: unknown;
-  };
-  const source = claimed.data.source as WorkflowApprovalSource;
-  if (
-    action.kind !== "task.create"
-    || typeof action.taskId !== "string"
-    || typeof action.title !== "string"
-    || typeof action.assigneeUid !== "string"
-  ) {
-    await claimed.ref.update({
-      status: "execution_failed",
-      executionError: "The approved action payload is invalid.",
-      updatedAt: Timestamp.now(),
+
+  let action: WorkflowAction;
+  try {
+    action = parseWorkflowAction(claimed.data.action);
+    const expectedDigest = claimed.data.effectDigestVersion === "canonical-v1"
+      ? actionEffectDigest(action)
+      : legacyActionEffectDigest(action);
+    if (expectedDigest !== claimed.data.effectDigest) {
+      throw new Error("The approved action no longer matches its recorded effect.");
+    }
+  } catch (error) {
+    await markExecutionFailed({
+      ref: claimed.ref,
+      attemptId: claimed.attemptId,
+      error: error instanceof Error ? error : new Error("Invalid action."),
     });
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: "The approved action payload is invalid.",
+      message: "The approved action payload failed integrity validation.",
     });
   }
+
   try {
-    const task = await createTask({
+    const execution = await executeWorkflowAction({
       companyId: input.companyId,
       actorUid: input.actorUid,
-      title: action.title,
-      instructions: typeof action.instructions === "string"
-        ? action.instructions
-        : undefined,
-      assigneeUid: action.assigneeUid,
-      dueAt: typeof action.dueAt === "string" ? action.dueAt : null,
-      contactId: typeof action.contactId === "string" ? action.contactId : null,
-      callId: typeof action.callId === "string" ? action.callId : null,
-      source: {
-        ...source,
-        approvalId: input.approvalId,
-        approvedBy: input.actorUid,
-      },
-      context: action.context && typeof action.context === "object"
-        ? action.context as Record<string, string | null>
-        : undefined,
-      deterministicId: action.taskId,
+      approvalId: input.approvalId,
+      action,
+      source: claimed.data.source as WorkflowActionSource,
     });
     const auditRef = db.collection(
       companyCollectionPath(input.companyId, "auditEvents"),
@@ -245,16 +302,19 @@ export async function approveAction(input: {
     const now = Timestamp.now();
     await db.runTransaction(async (transaction) => {
       const latest = await transaction.get(claimed.ref);
-      if (latest.data()?.status === "rejected") {
+      if (latest.data()?.executionAttemptId !== claimed.attemptId) {
         throw new TRPCError({
           code: "PRECONDITION_FAILED",
-          message: "This action was rejected before execution completed.",
+          message: "A newer execution attempt replaced this one.",
         });
       }
       transaction.update(claimed.ref, {
         status: "approved",
-        taskId: action.taskId,
+        decisionStatus: "approved",
+        executionStatus: "succeeded",
+        resultId: execution.resultId,
         executedAt: now,
+        executionLeaseExpiresAt: null,
         executionError: null,
         updatedAt: now,
       });
@@ -263,10 +323,12 @@ export async function approveAction(input: {
         aggregateId: input.approvalId,
         type: "approval_executed",
         actor: { kind: "user", id: input.actorUid },
-        before: { status: latest.data()?.status || "executing" },
+        before: { executionStatus: "executing" },
         after: {
-          status: "approved",
-          taskId: action.taskId,
+          decisionStatus: "approved",
+          executionStatus: "succeeded",
+          actionKind: action.kind,
+          resultId: execution.resultId,
           effectDigest: latest.data()?.effectDigest || null,
         },
         createdAt: now,
@@ -275,17 +337,19 @@ export async function approveAction(input: {
     return jsonSafe({
       id: input.approvalId,
       status: "approved",
-      task,
+      actionKind: action.kind,
+      resultId: execution.resultId,
+      result: execution.result,
       duplicate: false,
     });
   } catch (error) {
-    if (error instanceof TRPCError && error.code === "PRECONDITION_FAILED") throw error;
-    await claimed.ref.update({
-      status: "execution_failed",
-      executionError: error instanceof Error
-        ? error.message.slice(0, 500)
-        : "Action execution failed.",
-      updatedAt: Timestamp.now(),
+    if (error instanceof TRPCError && error.message === "A newer execution attempt replaced this one.") {
+      throw error;
+    }
+    await markExecutionFailed({
+      ref: claimed.ref,
+      attemptId: claimed.attemptId,
+      error,
     });
     throw error;
   }
@@ -315,19 +379,21 @@ export async function rejectAction(input: {
         message: "Only the named approver can reject this action.",
       });
     }
-    if (data.status === "rejected") {
+    if (inferredDecision(data) === "rejected") {
       return jsonSafe({ id: snapshot.id, ...data, duplicate: true });
     }
-    if (data.status !== "pending") {
+    if (inferredDecision(data) !== "pending") {
       throw new TRPCError({
         code: "PRECONDITION_FAILED",
-        message: "Only a pending action can be rejected.",
+        message: "An approved action can no longer be rejected.",
       });
     }
     const now = Timestamp.now();
     const note = String(input.note || "").trim().slice(0, 2_000) || null;
     transaction.update(approvalRef, {
       status: "rejected",
+      decisionStatus: "rejected",
+      executionStatus: "not_started",
       rejectedBy: input.actorUid,
       rejectedAt: now,
       rejectionNote: note,
@@ -338,9 +404,10 @@ export async function rejectAction(input: {
       aggregateId: input.approvalId,
       type: "approval_rejected",
       actor: { kind: "user", id: input.actorUid },
-      before: { status: "pending" },
+      before: { decisionStatus: "pending", executionStatus: "not_started" },
       after: {
-        status: "rejected",
+        decisionStatus: "rejected",
+        executionStatus: "not_started",
         effectDigest: data.effectDigest || null,
         note,
       },
@@ -350,6 +417,8 @@ export async function rejectAction(input: {
       id: input.approvalId,
       ...data,
       status: "rejected",
+      decisionStatus: "rejected",
+      executionStatus: "not_started",
       rejectionNote: note,
       rejectedAt: now,
       duplicate: false,

@@ -1,5 +1,4 @@
 import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/firestore";
-import { FieldValue } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { api } from "./api.js";
 import { projectCallContact, shouldProcessCallUpdate } from "./calls.js";
@@ -14,8 +13,6 @@ import {
 } from "./router.js";
 import { projectOdorikCallContext } from "./connectors/odorik.js";
 import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.js";
-import { db } from "./firestore.js";
-import { explorersCompanyId } from "./tenancy.js";
 import {
   runEnabledWorkflowsForCall,
   workflowRuntimeFlags,
@@ -99,37 +96,6 @@ export const projectCallContext = onDocumentWritten(
       event.params.callId,
       event.data?.after.data(),
     );
-  },
-);
-
-// Temporary cutover bridge: the currently deployed ingest/processor pair
-// writes legacy top-level call documents. Keeping this bridge during the
-// container rollout prevents a recording arriving between deployments from
-// being stranded outside the Explorers tenant.
-export const bridgeLegacyCallToExplorers = onDocumentWritten(
-  {
-    document: "calls/{callId}",
-    database: "odorik",
-    region: "europe-west3",
-    timeoutSeconds: 60,
-    memory: "256MiB",
-    maxInstances: 3,
-    retry: true,
-    serviceAccount: runtimeServiceAccount,
-  },
-  async (event) => {
-    const target = db.doc(
-      `companies/${explorersCompanyId}/calls/${event.params.callId}`,
-    );
-    if (!event.data?.after.exists) {
-      await target.delete();
-      return;
-    }
-    await target.set({
-      ...event.data.after.data(),
-      companyId: explorersCompanyId,
-      migratedFromLegacyAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
   },
 );
 
