@@ -1,30 +1,31 @@
-import { createHash, randomBytes } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
-import { decryptCredentials, encryptCredentials } from "./credentials.js";
+import { sha256Hex } from "../hash.js";
+import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import {
-  defaultGoogleRedirectUri,
-  googleOAuthRedirectUri,
-  googleOAuthReturnUrl,
-} from "./google-oauth-return.js";
+  authorizedGoogleConnection,
+  completeGoogleAuthorization,
+  connectionRef,
+  createGoogleAuthorization,
+  googleGet,
+  revokeGoogleAuthorization,
+  type GoogleConnector,
+} from "./google-oauth.js";
+import {
+  markConnectionAttention,
+  markConnectionSynced,
+  writeResourceSyncState,
+} from "./sync-state.js";
 
 export const calendarScopes = [
   "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
   "https://www.googleapis.com/auth/calendar.events.readonly",
 ] as const;
 
-// The consent warning for an unverified test app can require a manual handoff.
-// Keep the state short-lived, but leave enough time for the user to review it.
-export const calendarAuthorizationLifetimeMs = 60 * 60 * 1000;
-
-type GoogleTokens = {
-  access_token?: string;
-  expires_in?: number;
-  refresh_token?: string;
-  scope?: string;
-  token_type?: string;
-  error?: string;
-  error_description?: string;
+const calendarConnector: GoogleConnector = {
+  adapterId: "google_calendar",
+  displayName: "Google Calendar",
+  scopes: calendarScopes,
 };
 
 type CalendarListEntry = {
@@ -76,13 +77,6 @@ type EventsResponse = {
   nextSyncToken?: string;
 };
 
-type CalendarCredential = {
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: string;
-  scope: string;
-};
-
 export type SelectableCalendar = {
   id: string;
   displayName: string;
@@ -93,16 +87,8 @@ export type SelectableCalendar = {
   selected: boolean;
 };
 
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function connectionRef(companyId: string, connectionId: string) {
-  return db.doc(`companies/${companyId}/connections/${connectionId}`);
-}
-
 function calendarResourceId(calendarId: string): string {
-  return `calendar_${hash(calendarId).slice(0, 24)}`;
+  return `calendar_${sha256Hex(calendarId).slice(0, 24)}`;
 }
 
 function calendarContextItemId(
@@ -110,246 +96,11 @@ function calendarContextItemId(
   calendarId: string,
   eventId: string,
 ): string {
-  return `calendar_${hash(`${connectionId}:${calendarId}:${eventId}`).slice(0, 32)}`;
+  return `calendar_${sha256Hex(`${connectionId}:${calendarId}:${eventId}`).slice(0, 32)}`;
 }
 
-function requireGoogleSuccess<T>(response: Response, body: T & { error?: unknown }): T {
-  if (!response.ok) {
-    const message = typeof body.error === "string"
-      ? body.error
-      : JSON.stringify(body.error || body);
-    throw new Error(`Google API failed (${response.status}): ${message.slice(0, 1000)}`);
-  }
-  return body;
-}
-
-export async function revokeGoogleToken(token: string): Promise<boolean> {
-  const response = await fetch("https://oauth2.googleapis.com/revoke", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ token }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  if (response.ok) return true;
-  // Google returns 400 when the token is already invalid or revoked. Either
-  // way, it no longer grants this application access.
-  if (response.status === 400) return false;
-  throw new Error(`Google token revocation failed (${response.status})`);
-}
-
-export async function revokeGoogleCalendarAuthorization(input: {
-  companyId: string;
-  connectionId: string;
-  credentialKey: string;
-}): Promise<boolean> {
-  const connection = await connectionRef(input.companyId, input.connectionId).get();
-  const data = connection.data();
-  if (
-    !connection.exists
-    || data?.adapterId !== "google_calendar"
-    || typeof data.credentialCiphertext !== "string"
-  ) return false;
-  const credentials = decryptCredentials(
-    data.credentialCiphertext,
-    input.credentialKey,
-  ) as CalendarCredential;
-  const token = credentials.refreshToken || credentials.accessToken;
-  return token ? revokeGoogleToken(token) : false;
-}
-
-export async function createCalendarAuthorization(input: {
-  companyId: string;
-  uid: string;
-  email: string;
-  displayName: string;
-  clientId: string;
-  returnOrigin?: string;
-}): Promise<{ authorizationUrl: string }> {
-  const state = randomBytes(32).toString("base64url");
-  const stateHash = hash(state);
-  const now = Timestamp.now();
-  const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
-  await db.doc(`oauthStates/${stateHash}`).set({
-    companyId: input.companyId,
-    provider: "google_calendar",
-    uid: input.uid,
-    email: input.email,
-    displayName: input.displayName,
-    redirectUri,
-    returnUrl: googleOAuthReturnUrl(input.returnOrigin),
-    createdAt: now,
-    expiresAt: Timestamp.fromMillis(now.toMillis() + calendarAuthorizationLifetimeMs),
-  });
-  const query = new URLSearchParams({
-    client_id: input.clientId,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    access_type: "offline",
-    prompt: "consent select_account",
-    include_granted_scopes: "true",
-    scope: calendarScopes.join(" "),
-    state,
-  });
-  return {
-    authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${query.toString()}`,
-  };
-}
-
-export async function exchangeGoogleAuthorization(input: {
-  code: string;
-  state: string;
-  clientId: string;
-  clientSecret: string;
-  credentialKey: string;
-}): Promise<{ connectionId: string }> {
-  const stateRef = db.doc(`oauthStates/${hash(input.state)}`);
-  const stateSnapshot = await stateRef.get();
-  const stateData = stateSnapshot.data();
-  const expiresAt = stateData?.expiresAt instanceof Timestamp
-    ? stateData.expiresAt.toMillis()
-    : 0;
-  if (
-    !stateSnapshot.exists
-    || stateData?.provider !== "google_calendar"
-    || typeof stateData?.companyId !== "string"
-    || expiresAt < Date.now()
-  ) {
-    throw new Error("The Google authorization request is invalid or expired");
-  }
-
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code: input.code,
-      client_id: input.clientId,
-      client_secret: input.clientSecret,
-      redirect_uri: String(stateData.redirectUri || defaultGoogleRedirectUri),
-      grant_type: "authorization_code",
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const tokenBody = requireGoogleSuccess(
-    response,
-    await response.json() as GoogleTokens,
-  );
-  if (!tokenBody.access_token || !tokenBody.refresh_token) {
-    throw new Error("Google did not return the required offline refresh token");
-  }
-
-  const calendarEntries = await allCalendarEntries(tokenBody.access_token);
-  const providerAccountId = String(
-    calendarEntries.find((entry) => entry.primary)?.id
-    || stateData.email
-    || "unknown Google account",
-  );
-  const companyId = String(stateData.companyId);
-  const connections = db.collection(`companies/${companyId}/connections`);
-  const existingConnections = await connections
-    .where("adapterId", "==", "google_calendar")
-    .get();
-  const existingConnection = existingConnections.docs.find(
-    (document) => document.data().providerAccountId === providerAccountId,
-  );
-  const connection = existingConnection?.ref || connections.doc();
-  const now = Timestamp.now();
-  const credentials: CalendarCredential = {
-    accessToken: tokenBody.access_token,
-    refreshToken: tokenBody.refresh_token,
-    expiresAt: new Date(Date.now() + Number(tokenBody.expires_in || 3600) * 1000).toISOString(),
-    scope: tokenBody.scope || calendarScopes.join(" "),
-  };
-  const batch = db.batch();
-  batch.delete(stateRef);
-  batch.set(connection, {
-    companyId,
-    adapterId: "google_calendar",
-    displayName: "Google Calendar",
-    accountLabel: providerAccountId,
-    providerAccountId,
-    status: "active",
-    auth: {
-      kind: "oauth2",
-      credentialMode: "encrypted",
-      scopes: calendarScopes,
-    },
-    credentialCiphertext: encryptCredentials(credentials, input.credentialKey),
-    stats: { itemCount: 0, lastError: null },
-    createdBy: existingConnection?.data().createdBy || stateData.uid,
-    authorizedBy: {
-      email: stateData.email || null,
-      displayName: stateData.displayName || null,
-    },
-    ...(!existingConnection ? { createdAt: now } : { reauthorizedAt: now }),
-    updatedAt: now,
-  }, { merge: true });
-  await batch.commit();
-  return { connectionId: connection.id };
-}
-
-async function authorizedConnection(input: {
-  companyId: string;
-  connectionId: string;
-  clientId: string;
-  clientSecret: string;
-  credentialKey: string;
-}): Promise<{ accessToken: string; connection: FirebaseFirestore.DocumentSnapshot }> {
-  const connection = await connectionRef(input.companyId, input.connectionId).get();
-  const data = connection.data();
-  if (
-    !connection.exists
-    || data?.adapterId !== "google_calendar"
-    || !["active", "attention"].includes(String(data?.status))
-    || typeof data.credentialCiphertext !== "string"
-  ) {
-    throw new Error("Active Google Calendar connection not found");
-  }
-  const credentials = decryptCredentials(
-    data.credentialCiphertext,
-    input.credentialKey,
-  ) as CalendarCredential;
-  if (
-    credentials.accessToken
-    && new Date(credentials.expiresAt).getTime() > Date.now() + 60_000
-  ) {
-    return { accessToken: credentials.accessToken, connection };
-  }
-  if (!credentials.refreshToken) throw new Error("Google refresh token is missing");
-  const response = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      refresh_token: credentials.refreshToken,
-      client_id: input.clientId,
-      client_secret: input.clientSecret,
-      grant_type: "refresh_token",
-    }),
-    signal: AbortSignal.timeout(30_000),
-  });
-  const tokenBody = requireGoogleSuccess(
-    response,
-    await response.json() as GoogleTokens,
-  );
-  if (!tokenBody.access_token) throw new Error("Google access token refresh failed");
-  const updated: CalendarCredential = {
-    ...credentials,
-    accessToken: tokenBody.access_token,
-    expiresAt: new Date(Date.now() + Number(tokenBody.expires_in || 3600) * 1000).toISOString(),
-    scope: tokenBody.scope || credentials.scope,
-  };
-  await connection.ref.set({
-    credentialCiphertext: encryptCredentials(updated, input.credentialKey),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-  return { accessToken: updated.accessToken, connection };
-}
-
-async function googleGet<T>(url: URL, accessToken: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${accessToken}` },
-    signal: AbortSignal.timeout(60_000),
-  });
-  return requireGoogleSuccess(response, await response.json() as T & { error?: unknown });
+function contextItems(companyId: string) {
+  return db.collection(companyCollectionPath(companyId, "contextItems"));
 }
 
 async function allCalendarEntries(accessToken: string): Promise<CalendarListEntry[]> {
@@ -360,11 +111,60 @@ async function allCalendarEntries(accessToken: string): Promise<CalendarListEntr
     url.searchParams.set("maxResults", "250");
     url.searchParams.set("showDeleted", "false");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
-    const page = await googleGet<CalendarListResponse>(url, accessToken);
+    const page = await googleGet<CalendarListResponse>(
+      calendarConnector.displayName,
+      url,
+      accessToken,
+    );
     entries.push(...(page.items || []).filter((item) => !item.deleted && item.id));
     pageToken = page.nextPageToken || "";
   } while (pageToken);
   return entries;
+}
+
+export async function createCalendarAuthorization(input: {
+  companyId: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  clientId: string;
+  returnOrigin?: string;
+}): Promise<{ authorizationUrl: string }> {
+  return createGoogleAuthorization(calendarConnector, input);
+}
+
+export async function revokeGoogleCalendarAuthorization(input: {
+  companyId: string;
+  connectionId: string;
+  credentialKey: string;
+}): Promise<boolean> {
+  return revokeGoogleAuthorization(calendarConnector, input);
+}
+
+export async function exchangeGoogleAuthorization(input: {
+  code: string;
+  state: string;
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+}): Promise<{ connectionId: string }> {
+  return completeGoogleAuthorization(calendarConnector, {
+    ...input,
+    resolveAccountLabel: async (accessToken) => {
+      const entries = await allCalendarEntries(accessToken);
+      return entries.find((entry) => entry.primary)?.id || null;
+    },
+  });
+}
+
+async function authorizedConnection(input: {
+  companyId: string;
+  connectionId: string;
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+}) {
+  return authorizedGoogleConnection(calendarConnector, input);
 }
 
 export async function listGoogleCalendars(input: {
@@ -430,7 +230,7 @@ function eventContextItem(input: {
     input.event.description && `Description:\n${input.event.description}`,
     participantRefs.length && `Participants: ${participantRefs.join(", ")}`,
   ].filter(Boolean).join("\n");
-  const checksum = hash(JSON.stringify(input.event));
+  const checksum = sha256Hex(JSON.stringify(input.event));
   return {
     companyId: input.companyId,
     kind: "calendar.event",
@@ -509,7 +309,11 @@ async function syncCalendarResource(input: {
 
     let page: EventsResponse;
     try {
-      page = await googleGet<EventsResponse>(url, input.accessToken);
+      page = await googleGet<EventsResponse>(
+        calendarConnector.displayName,
+        url,
+        input.accessToken,
+      );
     } catch (error) {
       if (storedSyncToken && error instanceof Error && error.message.includes("(410)")) {
         await input.resource.ref.set({
@@ -524,13 +328,11 @@ async function syncCalendarResource(input: {
     const writes: Array<(batch: FirebaseFirestore.WriteBatch) => void> = [];
     for (const event of page.items || []) {
       if (!event.id) continue;
-      const itemRef = db.doc(
-        `companies/${input.companyId}/contextItems/${calendarContextItemId(
-          input.connectionId,
-          calendarId,
-          event.id,
-        )}`,
-      );
+      const itemRef = db.doc(companyDocumentPath(
+        input.companyId,
+        "contextItems",
+        calendarContextItemId(input.connectionId, calendarId, event.id),
+      ));
       const contextItem = eventContextItem({
         companyId: input.companyId,
         connectionId: input.connectionId,
@@ -552,19 +354,16 @@ async function syncCalendarResource(input: {
     nextSyncToken = page.nextSyncToken || nextSyncToken;
   } while (pageToken);
 
-  const itemCount = (await db.collection(
-    `companies/${input.companyId}/contextItems`,
-  ).where("source.connectionId", "==", input.connectionId)
+  const itemCount = (await contextItems(input.companyId)
+    .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resource.id)
     .count()
     .get()).data().count;
-  await input.resource.ref.set({
-    syncToken: nextSyncToken || data.syncToken || null,
-    lastSyncAt: FieldValue.serverTimestamp(),
+  await writeResourceSyncState({
+    resource: input.resource.ref,
     itemCount,
-    lastError: null,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+    extra: { syncToken: nextSyncToken || data.syncToken || null },
+  });
   return synced;
 }
 
@@ -589,44 +388,17 @@ export async function syncGoogleCalendarConnection(input: {
         accessToken,
       });
     }
-    const itemCount = (await db.collection(
-      `companies/${input.companyId}/contextItems`,
-    ).where("source.connectionId", "==", input.connectionId).count().get()).data().count;
-    const updated = await db.runTransaction(async (transaction) => {
-      const current = await transaction.get(connection.ref);
-      if (
-        !current.exists
-        || !["active", "attention"].includes(String(current.data()?.status))
-      ) return false;
-      transaction.set(connection.ref, {
-        status: "active",
-        stats: {
-          itemCount,
-          lastSyncAt: FieldValue.serverTimestamp(),
-          lastObservedAt: FieldValue.serverTimestamp(),
-          lastError: null,
-        },
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      return true;
-    });
-    if (!updated) throw new Error("Google Calendar connection was disconnected during synchronization");
+    const itemCount = (await contextItems(input.companyId)
+      .where("source.connectionId", "==", input.connectionId)
+      .count()
+      .get()).data().count;
+    const updated = await markConnectionSynced({ connection: connection.ref, itemCount });
+    if (!updated) {
+      throw new Error("Google Calendar connection was disconnected during synchronization");
+    }
     return { calendars: resources.size, changes };
   } catch (error) {
-    await db.runTransaction(async (transaction) => {
-      const current = await transaction.get(connection.ref);
-      if (
-        !current.exists
-        || !["active", "attention"].includes(String(current.data()?.status))
-      ) return;
-      transaction.set(connection.ref, {
-        status: "attention",
-        stats: {
-          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1500),
-        },
-        updatedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-    });
+    await markConnectionAttention({ connection: connection.ref, error });
     throw error;
   }
 }
@@ -677,7 +449,7 @@ export async function selectGoogleCalendars(input: {
     .filter((calendar) => !selectedIds.includes(calendar.id))
     .map((calendar) => calendarResourceId(calendar.id));
   for (const resourceId of disabledResources) {
-    const items = await db.collection(`companies/${input.companyId}/contextItems`)
+    const items = await contextItems(input.companyId)
       .where("source.connectionId", "==", input.connectionId)
       .where("source.resourceId", "==", resourceId)
       .get();

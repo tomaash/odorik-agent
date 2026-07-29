@@ -1,12 +1,9 @@
-import { createHash } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
+import { sha256Hex } from "../hash.js";
 
 export const legacyOdorikConnectionId = "odorik-primary";
 
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 export function odorikDestinationUrl(
   uploadUrl: string,
@@ -45,12 +42,12 @@ export function odorikResourceIdentity(call: Record<string, unknown>): {
   return {
     externalId,
     displayName: lineName || number || "Unassigned line",
-    resourceId: `phone_${hash(externalId).slice(0, 24)}`,
+    resourceId: `phone_${sha256Hex(externalId).slice(0, 24)}`,
   };
 }
 
 export function odorikContextItemId(connectionId: string, callId: string): string {
-  return `call_${hash(`${connectionId}:${callId}`).slice(0, 32)}`;
+  return `call_${sha256Hex(`${connectionId}:${callId}`).slice(0, 32)}`;
 }
 
 export function odorikContextItem(
@@ -78,7 +75,7 @@ export function odorikContextItem(
     || jsonTimestamp(call.processedAt);
   const sourceVersion = jsonTimestamp(call.updatedAt)
     || jsonTimestamp(call.processedAt)
-    || hash(transcript).slice(0, 16);
+    || sha256Hex(transcript).slice(0, 16);
   const contentForChecksum = JSON.stringify({
     connectionId,
     resourceId,
@@ -117,7 +114,7 @@ export function odorikContextItem(
     },
     provenance: {
       rawRef: `companies/${companyId}/calls/${callId}`,
-      checksum: hash(contentForChecksum),
+      checksum: sha256Hex(contentForChecksum),
       ingestionVersion: "odorik-v1",
     },
     updatedAt: FieldValue.serverTimestamp(),
