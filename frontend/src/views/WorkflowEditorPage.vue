@@ -56,6 +56,16 @@ const error = ref('')
 const preview = ref<DryRunResult | null>(null)
 
 const validation = computed(() => validateWorkflow(spec.value))
+const missingTaskSubjects = computed(() => {
+  if (!spec.value) return []
+  return spec.value.blocks.flatMap((block) => {
+    const actions = block.kind === 'control.if' ? [...block.then, ...block.else] : [block]
+    return actions.filter((action) => (
+      action.kind === 'action.task.create' && !action.task.subject
+    ))
+  })
+})
+const editorValid = computed(() => validation.value.valid && missingTaskSubjects.value.length === 0)
 const status = computed(() => workflow.value?.status || 'draft')
 const isEnabled = computed(() => status.value === 'enabled')
 const activeStages = computed(() => pipeline.value?.stages.filter((stage) => !stage.archived) || [])
@@ -236,9 +246,18 @@ function actionTitle(action: NonNullable<DryRunResult['results'][number]['action
 }
 
 function actionDetail(action: NonNullable<DryRunResult['results'][number]['actions']>[number]) {
-  if (action.kind === 'task.create') return `${action.assigneeName} · ${formatDate(action.dueAt)}`
+  if (action.kind === 'task.create') {
+    const subject = action.subject?.kind === 'matching_case'
+      ? action.caseTitle || action.subject.stageName
+      : t(`workflows.taskSubject.${action.subject?.kind || 'contact'}`)
+    return `${action.assigneeName} · ${subject} · ${formatDate(action.dueAt)}`
+  }
   if (action.kind === 'case.create') return `${action.ownerName} · ${action.stageName}`
   return `${action.fromStageName} → ${action.toStageName}`
+}
+
+function skipDetail(skip: NonNullable<DryRunResult['results'][number]['skippedActions']>[number]) {
+  return t(`workflows.skipReason.${skip.reason}`, { count: skip.matches })
 }
 
 async function load() {
@@ -262,7 +281,7 @@ async function load() {
 }
 
 async function save(showToast = true) {
-  if (!spec.value || !validation.value.valid) return false
+  if (!spec.value || !editorValid.value) return false
   saving.value = true
   error.value = ''
   try {
@@ -310,7 +329,7 @@ async function pause() {
 }
 
 async function tryHistory() {
-  if (!spec.value || !validation.value.valid) return
+  if (!spec.value || !editorValid.value) return
   testing.value = true
   error.value = ''
   try {
@@ -334,10 +353,10 @@ onMounted(load)
         <span class="font-mono text-[.62rem] text-surface-500">{{ t(`workflows.status.${status}`) }}</span>
       </div>
       <Tag v-if="workflow?.deployedVersion" :value="`v${workflow.deployedVersion}`" :severity="isEnabled ? 'success' : 'secondary'" />
-      <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined class="hidden sm:inline-flex" :loading="testing" :disabled="!validation.valid" @click="tryHistory" />
-      <Button :label="t('workflows.save')" severity="secondary" outlined class="hidden sm:inline-flex" :loading="saving" :disabled="!validation.valid" @click="save()" />
+      <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined class="hidden sm:inline-flex" :loading="testing" :disabled="!editorValid" @click="tryHistory" />
+      <Button :label="t('workflows.save')" severity="secondary" outlined class="hidden sm:inline-flex" :loading="saving" :disabled="!editorValid" @click="save()" />
       <Button v-if="isEnabled" :label="t('workflows.pause')" icon="pi pi-pause" severity="secondary" :loading="saving" @click="pause" />
-      <Button v-else :label="t('workflows.turnOn')" icon="pi pi-play" :disabled="!validation.valid || !spec" :loading="saving" @click="turnOn" />
+      <Button v-else :label="t('workflows.turnOn')" icon="pi pi-play" :disabled="!editorValid || !spec" :loading="saving" @click="turnOn" />
     </header>
 
     <Message v-if="error" severity="error" :closable="false" class="m-4 sm:m-6">{{ error }}</Message>
@@ -389,9 +408,10 @@ onMounted(load)
 
             <template v-for="(block, index) in spec.blocks" :key="block.id">
               <WorkflowTaskBlock
-                v-if="block.kind === 'action.task.create'"
+                v-if="block.kind === 'action.task.create' && pipeline"
                 :block="block"
                 :members="members"
+                :pipeline="pipeline"
                 :canMoveUp="index > 0"
                 :canMoveDown="index < spec.blocks.length - 1"
                 @moveUp="moveItem(spec.blocks, index, -1)"
@@ -482,10 +502,11 @@ onMounted(load)
                     <p v-if="block.then.length === 0" class="text-xs text-surface-500 m-0 px-1">{{ t('workflows.branchEmpty') }}</p>
                     <template v-for="(action, actionIndex) in block.then" :key="action.id">
                       <WorkflowTaskBlock
-                        v-if="action.kind === 'action.task.create'"
+                        v-if="action.kind === 'action.task.create' && pipeline"
                         compact
                         :block="action"
                         :members="members"
+                        :pipeline="pipeline"
                         :canMoveUp="actionIndex > 0"
                         :canMoveDown="actionIndex < block.then.length - 1"
                         @moveUp="moveBranchTask(block, 'then', actionIndex, -1)"
@@ -493,7 +514,7 @@ onMounted(load)
                         @remove="removeBranchTask(block, 'then', actionIndex)"
                       />
                       <WorkflowCaseBlock
-                        v-else-if="pipeline"
+                        v-else-if="pipeline && (action.kind === 'action.case.create' || action.kind === 'action.case.move')"
                         compact
                         :block="action"
                         :members="members"
@@ -519,10 +540,11 @@ onMounted(load)
                     <p v-if="block.else.length === 0" class="text-xs text-surface-500 m-0 px-1">{{ t('workflows.branchEmpty') }}</p>
                     <template v-for="(action, actionIndex) in block.else" :key="action.id">
                       <WorkflowTaskBlock
-                        v-if="action.kind === 'action.task.create'"
+                        v-if="action.kind === 'action.task.create' && pipeline"
                         compact
                         :block="action"
                         :members="members"
+                        :pipeline="pipeline"
                         :canMoveUp="actionIndex > 0"
                         :canMoveDown="actionIndex < block.else.length - 1"
                         @moveUp="moveBranchTask(block, 'else', actionIndex, -1)"
@@ -530,7 +552,7 @@ onMounted(load)
                         @remove="removeBranchTask(block, 'else', actionIndex)"
                       />
                       <WorkflowCaseBlock
-                        v-else-if="pipeline"
+                        v-else-if="pipeline && (action.kind === 'action.case.create' || action.kind === 'action.case.move')"
                         compact
                         :block="action"
                         :members="members"
@@ -572,9 +594,12 @@ onMounted(load)
           <section class="hairline-card bg-white/80 p-4">
             <div class="flex items-center justify-between gap-2 mb-3">
               <div class="eyebrow !text-surface-500">{{ t('workflows.validation') }}</div>
-              <Tag :value="validation.valid ? t('workflows.ready') : `${validation.errors.length + validation.holes.length}`" :severity="validation.valid ? 'success' : 'warn'" />
+              <Tag :value="editorValid ? t('workflows.ready') : `${validation.errors.length + validation.holes.length + missingTaskSubjects.length}`" :severity="editorValid ? 'success' : 'warn'" />
             </div>
-            <div v-if="!validation.valid" class="grid gap-2">
+            <div v-if="!editorValid" class="grid gap-2">
+              <p v-if="missingTaskSubjects.length" class="text-xs leading-relaxed rounded bg-amber-50 border border-amber-200 p-2 m-0">
+                {{ t('workflows.taskSubjectHelp.required') }}
+              </p>
               <p v-for="item in [...validation.holes, ...validation.errors]" :key="`${item.code}-${item.path}`" class="text-xs leading-relaxed rounded bg-amber-50 border border-amber-200 p-2 m-0">
                 {{ item.message }}
               </p>
@@ -596,7 +621,13 @@ onMounted(load)
                       <span class="font-mono text-[.6rem] text-violet-700 mt-1 block"><i class="pi pi-shield mr-1" />{{ action.approverName }}</span>
                     </div>
                   </template>
-                  <span v-else class="text-xs text-surface-500">{{ item.error || t('workflows.noTaskForCall') }}</span>
+                  <span v-else-if="item.error" class="text-xs text-rose-700">{{ item.error }}</span>
+                  <span v-else-if="!item.skippedActions?.length" class="text-xs text-surface-500">{{ t('workflows.noTaskForCall') }}</span>
+                  <div v-if="item.skippedActions?.length" class="grid gap-1.5 mt-2">
+                    <p v-for="skip in item.skippedActions" :key="skip.blockId" class="text-xs text-amber-800 bg-amber-50 rounded p-2 m-0">
+                      <i class="pi pi-info-circle mr-1" />{{ skipDetail(skip) }}
+                    </p>
+                  </div>
                   <div v-if="item.conditions?.length" class="flex flex-wrap gap-1 mt-2">
                     <Tag v-for="condition in item.conditions" :key="condition.blockId" :value="conditionSummary(condition)" :severity="condition.result ? 'success' : 'secondary'" />
                   </div>
@@ -604,15 +635,15 @@ onMounted(load)
               </div>
             </template>
             <p v-else class="text-sm text-surface-500 leading-relaxed mt-0">{{ t('workflows.historyBody') }}</p>
-            <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined size="small" class="mt-3 w-full" :loading="testing" :disabled="!validation.valid" @click="tryHistory" />
+            <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined size="small" class="mt-3 w-full" :loading="testing" :disabled="!editorValid" @click="tryHistory" />
           </section>
         </aside>
       </div>
     </main>
 
     <div v-if="spec && !workflow?.legacy" class="sm:hidden fixed left-3 right-3 bottom-[4.75rem] z-20 grid grid-cols-2 gap-2">
-      <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined class="bg-white" :loading="testing" :disabled="!validation.valid" @click="tryHistory" />
-      <Button :label="t('workflows.save')" severity="secondary" outlined class="bg-white" :loading="saving" :disabled="!validation.valid" @click="save()" />
+      <Button :label="t('workflows.dryRun')" icon="pi pi-history" severity="secondary" outlined class="bg-white" :loading="testing" :disabled="!editorValid" @click="tryHistory" />
+      <Button :label="t('workflows.save')" severity="secondary" outlined class="bg-white" :loading="saving" :disabled="!editorValid" @click="save()" />
     </div>
   </section>
 </template>

@@ -11,7 +11,8 @@ Agent Erik is useful today as a small internal operating system around calls:
 2. a workflow evaluates factual call data and proposes exact internal actions;
 3. every proposed action names one required human approver;
 4. only the approval executor may create a task, create a case, or move a case;
-5. team members work from the task queue and one configurable case pipeline;
+5. team members work from one personal Work queue and one configurable case
+   pipeline;
 6. every automatic result points back to its call, workflow version, block, and
    approval.
 
@@ -36,11 +37,11 @@ artifact and does not recursively need approval.
 
 ### The internal CRM is deliberately small
 
-Erik owns one shared, generically named case pipeline and contact-linked tasks.
-Admins can name, order, mark terminal, and archive stages because those
-properties are intrinsic to a useful pipeline outside sales. Multiple
-pipelines, custom fields, forecasting, email sequences, and reporting are out
-of scope.
+Erik owns one shared, generically named case pipeline. Tasks may be internal,
+linked to a contact, or linked to an active case. Admins can name, order, mark
+terminal, and archive stages because those properties are intrinsic to a
+useful pipeline outside sales. Multiple pipelines, custom fields, forecasting,
+email sequences, and reporting are out of scope.
 
 Legacy service requests are not automatically converted to cases because that
 would manufacture meaning and stage state. The old call-to-CRM mutation
@@ -52,7 +53,8 @@ migrated one-to-one, preserving IDs and links.
 
 Primary navigation:
 
-- **Tasks** — default destination, team work queue, and action approvals.
+- **Work** — default destination with separate personal Tasks and Approvals
+  queues. Team work and history are explicit opt-in views.
 - **Pipeline** — one board of cases in company-defined stages. Opening a card
   enters that case's workspace.
 - **Contacts** — customer identity, cases, tasks, calls, and transcripts.
@@ -72,8 +74,10 @@ Decisions, Operations, Intake, and Requests are not product destinations.
 
 A task has a title, optional instructions, one active team-member assignee,
 `open` / `completed` / `dismissed` status, optional due date, optional contact,
-case, and source call, and an optional closing note. It retains origin,
-authorization, attribution, and audit events. Closing is reversible.
+case, and source call, and an optional closing note. A case-linked task must
+reference the same contact as its active case; a contact-linked task need not
+belong to a case. It retains origin, authorization, attribution, and audit
+events. Closing is reversible.
 
 A manual task is authorized by the person pressing Create. A workflow task can
 only reference an executed approval.
@@ -111,7 +115,9 @@ supports drag and drop; mobile uses an explicit stage selector.
 ### Action approval
 
 An approval stores one typed action payload, its canonical SHA-256 effect
-digest, one active approver, workflow/run/block/call provenance, and separate:
+digest, one active approver, workflow/run/block/call provenance, an explicit
+scope over already-existing related objects, a result link after execution,
+and separate:
 
 - decision state: `pending`, `approved`, or `rejected`;
 - execution state: `not_started`, `executing`, `succeeded`,
@@ -119,8 +125,10 @@ digest, one active approver, workflow/run/block/call provenance, and separate:
 
 The executor records approval before the business effect, rechecks the payload
 against its digest, takes a bounded execution lease, and uses deterministic
-result/movement IDs. Rejection creates no effect. A stale exact case move does
-not execute.
+result/movement IDs. A pending create-case approval does not pretend its future
+case already exists; the case appears in `result` only after successful
+execution. Rejection creates no effect. A stale exact case move does not
+execute.
 
 ## First workflow language
 
@@ -133,8 +141,10 @@ When a completed call has a transcript
 
 Supported blocks:
 
-1. **Create internal task** — title template, optional instructions, assignee,
-   optional due offset, and required approver.
+1. **Create task** — title template, optional instructions, assignee, optional
+   due offset, required approver, and one explicit subject: internal, the
+   resolved contact, or exactly one active case in a selected stage. Missing or
+   ambiguous required context skips safely rather than changing the subject.
 2. **Create case** — title template, owner, initial stage, and required
    approver. It is skipped when the call has no resolved contact.
 3. **Move case** — exact current stage, destination stage, and required
@@ -153,8 +163,9 @@ Conditions may inspect only:
 Templates support only `{caller.name}` and `{caller.phone}`. “Try on history”
 uses the live evaluator without writes and shows exact actions, skips,
 conditions, and approvers. “Turn on” creates an immutable workflow version.
-Runs, approvals, result objects, and movements are deterministic. “Pause”
-stops future runs.
+Runs, approvals, result objects, and movements are deterministic. Separate
+action blocks are independent proposals; visual order does not create hidden
+data dependencies. “Pause” stops future runs.
 
 Schema-v2 and schema-v3 task workflows normalize to schema v4 and inherit the
 assignee as approver. Schema-v1 experiments remain visibly disabled and cannot
@@ -189,12 +200,15 @@ capability, not a workflow primitive.
    execution, tasks, cases, movements, and pipeline configuration.
 8. Connector ingestion remains company-scoped source observation, not a
    business approval.
+9. Cases can be archived only from a terminal stage and only when no open task
+   or unresolved case-scoped approval would be stranded.
 
 ## Acceptance
 
 The slice is complete when:
 
-- Tasks is the signed-in default on desktop and mobile.
+- Work is the signed-in default on desktop and mobile, with personal Tasks and
+  Approvals kept distinct.
 - Members can create, complete, dismiss, and reopen tasks.
 - Members can create and move contact-linked cases.
 - Admins can configure the single pipeline without changing stage identity.
@@ -206,6 +220,8 @@ The slice is complete when:
 - No workflow action mutates state before its approver accepts.
 - Approval executes only the disclosed effect; rejection executes nothing.
 - Retry cannot duplicate an approval, task, case, or movement.
+- Recent live skips explain why no approval or result was produced.
+- Case archival cannot strand open tasks or unresolved approvals.
 - Legacy workflow definitions remain disabled.
 - Czech and English layouts work at 390px and desktop widths.
 - shared, Functions, and frontend tests/builds pass before deployment.

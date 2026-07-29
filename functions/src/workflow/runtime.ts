@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
+import { TRPCError } from "@trpc/server";
 import {
   previewWorkflow,
+  type ActionSkip,
   type ActionPreview,
   type CallTaskContext,
   type WorkflowSpec,
@@ -128,6 +130,7 @@ function actionPayload(input: {
   callId: string;
 }): WorkflowAction {
   if (input.preview.kind === "task.create") {
+    const explicitInternal = input.preview.subject?.kind === "internal";
     return {
       kind: "task.create",
       taskId: input.objectId,
@@ -136,8 +139,11 @@ function actionPayload(input: {
       assigneeUid: input.preview.assigneeUid,
       assigneeName: input.preview.assigneeName,
       dueAt: input.preview.dueAt,
-      contactId: input.contactId,
+      contactId: explicitInternal ? null : input.contactId,
+      caseId: input.preview.caseId,
+      caseTitle: input.preview.caseTitle,
       callId: input.callId,
+      subject: input.preview.subject,
       context: input.preview.context,
     };
   }
@@ -193,6 +199,7 @@ export async function runWorkflowOnCall(input: {
     return jsonSafe({ id: runRef.id, ...existingRun.data(), duplicate: true });
   }
   const approvalResults = [];
+  const runtimeSkips: ActionSkip[] = [...preview.skippedActions];
   for (const actionPreview of preview.actions) {
     const objectPrefix = actionPreview.kind === "task.create"
       ? "task"
@@ -207,34 +214,53 @@ export async function runWorkflowOnCall(input: {
       contactId: resolved.contact?.id || null,
       callId: input.callId,
     });
-    const approval = await requestWorkflowActionApproval({
-      companyId: input.companyId,
-      actorUid: `workflow:${input.workflow.id}`,
-      approvalId,
-      approverUid: actionPreview.approverUid,
-      approverName: actionPreview.approverName,
-      action,
-      source: {
-        kind: "workflow",
-        callId: input.callId,
-        workflowId: input.workflow.id,
-        workflowVersion: input.workflow.version,
-        runId,
+    try {
+      const approval = await requestWorkflowActionApproval({
+        companyId: input.companyId,
+        actorUid: `workflow:${input.workflow.id}`,
+        approvalId,
+        approverUid: actionPreview.approverUid,
+        approverName: actionPreview.approverName,
+        action,
+        source: {
+          kind: "workflow",
+          callId: input.callId,
+          workflowId: input.workflow.id,
+          workflowVersion: input.workflow.version,
+          runId,
+          blockId: actionPreview.blockId,
+        },
+      }) as Record<string, unknown>;
+      approvalResults.push({
+        approvalId,
+        actionKind: action.kind,
+        resultId: objectId,
         blockId: actionPreview.blockId,
-      },
-    }) as Record<string, unknown>;
-    approvalResults.push({
-      approvalId,
-      actionKind: action.kind,
-      resultId: objectId,
-      blockId: actionPreview.blockId,
-      title: actionPreview.kind === "case.move"
-        ? `${actionPreview.caseTitle}: ${actionPreview.fromStageName} → ${actionPreview.toStageName}`
-        : actionPreview.title,
-      approverUid: actionPreview.approverUid,
-      approverName: actionPreview.approverName,
-      duplicate: approval.duplicate === true,
-    });
+        title: actionPreview.kind === "case.move"
+          ? `${actionPreview.caseTitle}: ${actionPreview.fromStageName} → ${actionPreview.toStageName}`
+          : actionPreview.title,
+        approverUid: actionPreview.approverUid,
+        approverName: actionPreview.approverName,
+        duplicate: approval.duplicate === true,
+      });
+    } catch (error) {
+      if (
+        !(error instanceof TRPCError)
+        || (error.code !== "PRECONDITION_FAILED" && error.code !== "BAD_REQUEST")
+      ) {
+        throw error;
+      }
+      runtimeSkips.push({
+        blockId: actionPreview.blockId,
+        kind: action.kind === "task.create"
+          ? "action.task.create"
+          : action.kind === "case.create"
+            ? "action.case.create"
+            : "action.case.move",
+        reason: "target_unavailable",
+        matches: 0,
+      });
+    }
   }
   const requestedCount = approvalResults.filter((approval) => !approval.duplicate).length;
   const duplicateCount = approvalResults.length - requestedCount;
@@ -260,7 +286,7 @@ export async function runWorkflowOnCall(input: {
     requestedCount,
     duplicateCount,
     conditions: preview.conditions,
-    skippedActions: preview.skippedActions,
+    skippedActions: runtimeSkips,
     context: preview.actions[0]?.context || {
       callerName: resolved.context.callerName ?? null,
       callerPhone: resolved.context.callerPhone ?? null,

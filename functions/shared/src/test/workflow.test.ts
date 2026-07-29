@@ -70,6 +70,7 @@ test("ordered blocks render caller fallback, context and due date", () => {
     assigneeName: "Josef",
   }));
   const preview = previewWorkflowTasks(spec, {
+    callerHasContact: true,
     callerName: null,
     callerPhone: "+420123456789",
     callSummary: "Customer asked for a follow-up.",
@@ -108,9 +109,11 @@ test("simple conditions select one task branch from persisted call data", () => 
   spec.blocks = [conditional];
 
   const matching = previewWorkflowTasks(spec, {
+    callerHasContact: true,
     transcriptText: "Please send a quote tomorrow.",
   });
   const notMatching = previewWorkflowTasks(spec, {
+    callerHasContact: true,
     transcriptText: "Just checking our appointment.",
   });
   assert.deepEqual(matching.map((task) => task.title), ["Prepare quote"]);
@@ -141,6 +144,10 @@ test("duration and contact conditions use only supplied factual call data", () =
     assigneeUid: "user-1",
     assigneeName: "Tomáš",
   }));
+  const unknownTask = conditional.else[0];
+  if (unknownTask?.kind === "action.task.create") {
+    unknownTask.task.subject = { kind: "internal" };
+  }
   spec.blocks = [conditional];
 
   const preview = previewWorkflow(spec, { callerHasContact: false });
@@ -160,6 +167,99 @@ test("duration and contact conditions use only supplied factual call data", () =
   };
   assert.equal(previewWorkflow(spec, { callDurationSeconds: null }).conditions[0]?.result, false);
   assert.equal(previewWorkflow(spec, { callDurationSeconds: 30 }).conditions[0]?.result, true);
+});
+
+test("task subjects distinguish internal, contact and exact case work", () => {
+  const internal = createTaskBlock({
+    id: "task_internal",
+    title: "Review the call routing",
+    assigneeUid: "user-1",
+    assigneeName: "Tomáš",
+  });
+  internal.task.subject = { kind: "internal" };
+  const contact = createTaskBlock({
+    id: "task_contact",
+    title: "Call the contact",
+    assigneeUid: "user-1",
+    assigneeName: "Tomáš",
+  });
+  contact.task.subject = { kind: "contact" };
+  const matchingCase = createTaskBlock({
+    id: "task_case",
+    title: "Prepare the case follow-up",
+    assigneeUid: "user-1",
+    assigneeName: "Tomáš",
+  });
+  matchingCase.task.subject = {
+    kind: "matching_case",
+    pipelineId: "default",
+    stageId: "new",
+    stageName: "New",
+  };
+  const spec = createCallTaskWorkflow({
+    assigneeUid: "user-1",
+    assigneeName: "Tomáš",
+  });
+  spec.blocks = [internal, contact, matchingCase];
+
+  const unresolved = previewWorkflow(spec, { callerHasContact: false });
+  assert.deepEqual(unresolved.actions.map((action) => action.blockId), ["task_internal"]);
+  assert.deepEqual(unresolved.skippedActions.map((skip) => skip.reason), [
+    "contact_required",
+    "contact_required",
+  ]);
+
+  const exact = previewWorkflow(spec, {
+    callerHasContact: true,
+    cases: [{
+      id: "case-1",
+      title: "Renewal",
+      pipelineId: "default",
+      stageId: "new",
+      stageName: "New",
+      revision: 2,
+    }],
+  });
+  assert.deepEqual(exact.actions.map((action) => action.blockId), [
+    "task_internal",
+    "task_contact",
+    "task_case",
+  ]);
+  const caseTask = exact.actions[2];
+  assert.equal(caseTask?.kind, "task.create");
+  if (caseTask?.kind === "task.create") {
+    assert.equal(caseTask.caseId, "case-1");
+    assert.equal(caseTask.caseTitle, "Renewal");
+  }
+
+  const ambiguous = previewWorkflow(spec, {
+    callerHasContact: true,
+    cases: [
+      {
+        id: "case-1",
+        title: "First",
+        pipelineId: "default",
+        stageId: "new",
+        stageName: "New",
+        revision: 0,
+      },
+      {
+        id: "case-2",
+        title: "Second",
+        pipelineId: "default",
+        stageId: "new",
+        stageName: "New",
+        revision: 0,
+      },
+    ],
+  });
+  assert.equal(ambiguous.actions.some((action) => action.blockId === "task_case"), false);
+  assert.deepEqual(ambiguous.skippedActions.at(-1), {
+    blockId: "task_case",
+    kind: "action.task.create",
+    reason: "ambiguous_case",
+    matches: 2,
+  });
 });
 
 test("case actions require a contact and exact unambiguous case movement", () => {

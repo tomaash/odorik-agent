@@ -75,33 +75,10 @@ export async function activeMember(
 export async function createTask(input: CreateTaskInput) {
   const title = clean(input.title, 300);
   if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Task title is required." });
-  const [member, linkedCase] = await Promise.all([
-    activeMember(input.companyId, input.assigneeUid),
-    input.caseId
-      ? db.doc(companyDocumentPath(input.companyId, "cases", input.caseId)).get()
-      : Promise.resolve(null),
-  ]);
-  if (linkedCase && (
-    !linkedCase.exists
-    || linkedCase.data()?.objectType !== "case"
-    || linkedCase.data()?.archived === true
-  )) {
-    throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active case." });
-  }
-  const caseContactId = linkedCase ? String(linkedCase.data()?.contactId || "") : null;
-  if (linkedCase && !caseContactId) {
-    throw new TRPCError({
-      code: "PRECONDITION_FAILED",
-      message: "The selected case does not have a valid contact.",
-    });
-  }
-  if (caseContactId && input.contactId && input.contactId !== caseContactId) {
-    throw new TRPCError({
-      code: "BAD_REQUEST",
-      message: "The selected task contact does not match its case.",
-    });
-  }
-  const contactId = caseContactId || input.contactId || null;
+  const member = await activeMember(input.companyId, input.assigneeUid);
+  const linkedCaseRef = input.caseId
+    ? db.doc(companyDocumentPath(input.companyId, "cases", input.caseId))
+    : null;
   const taskRef = input.deterministicId
     ? db.doc(companyDocumentPath(input.companyId, "workItems", input.deterministicId))
     : db.collection(companyCollectionPath(input.companyId, "workItems")).doc();
@@ -113,6 +90,28 @@ export async function createTask(input: CreateTaskInput) {
     if (existing.exists) {
       return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
     }
+    const linkedCase = linkedCaseRef ? await transaction.get(linkedCaseRef) : null;
+    if (linkedCase && (
+      !linkedCase.exists
+      || linkedCase.data()?.objectType !== "case"
+      || linkedCase.data()?.archived === true
+    )) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active case." });
+    }
+    const caseContactId = linkedCase ? String(linkedCase.data()?.contactId || "") : null;
+    if (linkedCase && !caseContactId) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "The selected case does not have a valid contact.",
+      });
+    }
+    if (caseContactId && input.contactId && input.contactId !== caseContactId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "The selected task contact does not match its case.",
+      });
+    }
+    const contactId = caseContactId || input.contactId || null;
     const now = Timestamp.now();
     const source = input.source || {
       kind: input.callId ? "call" : input.caseId ? "case" : "manual",
@@ -179,25 +178,27 @@ export async function createTask(input: CreateTaskInput) {
 export async function listTasks(input: {
   companyId: string;
   status?: TaskStatus;
+  statuses?: TaskStatus[];
   assigneeUid?: string;
   contactId?: string;
   caseId?: string;
   limit?: number;
 }) {
-  const snapshot = await db.collection(companyCollectionPath(input.companyId, "workItems"))
+  let query: FirebaseFirestore.Query = db.collection(
+    companyCollectionPath(input.companyId, "workItems"),
+  );
+  const statuses = [...new Set(input.statuses || (input.status ? [input.status] : []))];
+  if (statuses.length === 1) query = query.where("status", "==", statuses[0]);
+  if (statuses.length > 1) query = query.where("status", "in", statuses);
+  if (input.assigneeUid) query = query.where("assigneeUid", "==", input.assigneeUid);
+  if (input.contactId) query = query.where("contactId", "==", input.contactId);
+  if (input.caseId) query = query.where("caseId", "==", input.caseId);
+  const snapshot = await query
     .orderBy("createdAt", "desc")
     .limit(Math.min(input.limit || 100, 200))
     .get();
   return jsonSafe(snapshot.docs
-    .filter((document) => {
-      const data = document.data();
-      if (data.objectType !== "task") return false;
-      if (input.status && data.status !== input.status) return false;
-      if (input.assigneeUid && data.assigneeUid !== input.assigneeUid) return false;
-      if (input.contactId && data.contactId !== input.contactId) return false;
-      if (input.caseId && data.caseId !== input.caseId) return false;
-      return true;
-    })
+    .filter((document) => document.data().objectType === "task")
     .map((document) => ({ id: document.id, ...document.data() })));
 }
 
@@ -211,12 +212,8 @@ export async function updateTask(input: {
   dueAt?: string | null;
 }) {
   const ref = db.doc(companyDocumentPath(input.companyId, "workItems", input.taskId));
-  const snapshot = await ref.get();
-  if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
-  if (snapshot.data()?.status !== "open") {
-    throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Only open tasks can be edited." });
-  }
-  const update: Record<string, unknown> = { updatedAt: FieldValue.serverTimestamp() };
+  const auditRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
+  const update: Record<string, unknown> = {};
   if (input.title !== undefined) {
     const title = clean(input.title, 300);
     if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Task title is required." });
@@ -231,9 +228,35 @@ export async function updateTask(input: {
     update.assigneeName = member.displayName;
   }
   if (input.dueAt !== undefined) update.dueAt = dueTimestamp(input.dueAt);
-  await ref.update(update);
-  const current = await ref.get();
-  return jsonSafe({ id: current.id, ...current.data() });
+  return db.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+    if (snapshot.data()?.status !== "open") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Only open tasks can be edited." });
+    }
+    const now = Timestamp.now();
+    transaction.update(ref, { ...update, updatedAt: now });
+    transaction.create(auditRef, {
+      aggregateType: "task",
+      aggregateId: input.taskId,
+      ...(typeof snapshot.data()?.caseId === "string" ? { caseId: snapshot.data()?.caseId } : {}),
+      ...(typeof snapshot.data()?.contactId === "string"
+        ? { contactId: snapshot.data()?.contactId }
+        : {}),
+      ...(typeof snapshot.data()?.callId === "string" ? { callId: snapshot.data()?.callId } : {}),
+      type: "task_updated",
+      actor: { kind: "user", id: input.actorUid },
+      before: {
+        title: snapshot.data()?.title || null,
+        instructions: snapshot.data()?.instructions || null,
+        assigneeUid: snapshot.data()?.assigneeUid || null,
+        dueAt: snapshot.data()?.dueAt || null,
+      },
+      after: update,
+      createdAt: now,
+    });
+    return jsonSafe({ id: snapshot.id, ...snapshot.data(), ...update, updatedAt: now });
+  });
 }
 
 export async function transitionTask(input: {
@@ -255,6 +278,17 @@ export async function transitionTask(input: {
     }
     if (input.to !== "open" && before !== "open") {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Only open tasks can be closed." });
+    }
+    if (input.to === "open" && typeof task.data()?.caseId === "string") {
+      const linkedCase = await transaction.get(db.doc(
+        companyDocumentPath(input.companyId, "cases", task.data()!.caseId),
+      ));
+      if (!linkedCase.exists || linkedCase.data()?.archived === true) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Work in an archived case cannot be reopened.",
+        });
+      }
     }
     const now = Timestamp.now();
     transaction.update(taskRef, {

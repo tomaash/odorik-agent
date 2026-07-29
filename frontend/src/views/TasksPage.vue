@@ -11,6 +11,7 @@ import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
+import ApprovalCard from '../components/ApprovalCard.vue'
 import { useAuthStore } from '../stores/auth'
 import {
   approveAction,
@@ -26,10 +27,16 @@ import {
   type ContactListItem,
   type CaseItem,
   type TaskItem,
-  type TaskStatus,
   type TeamMember,
 } from '../api/client'
-import { isTaskOverdue, sortedTasks, taskStatusCounts } from '../task-model'
+import { isTaskOverdue } from '../task-model'
+import {
+  approvalNeedsAttention,
+  approvalsForScope,
+  tasksForScope,
+  type ApprovalWorkScope,
+  type TaskWorkScope,
+} from '../work-model'
 
 const { t, locale } = useI18n()
 const route = useRoute()
@@ -42,8 +49,10 @@ const cases = ref<CaseItem[]>([])
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
-const scope = ref<TaskStatus>('open')
 const view = ref<'tasks' | 'approvals'>(route.query.view === 'approvals' ? 'approvals' : 'tasks')
+const audience = ref<'mine' | 'team'>('mine')
+const taskScope = ref<TaskWorkScope>('todo')
+const approvalScope = ref<ApprovalWorkScope>('waiting')
 const processingApprovalId = ref('')
 const dialog = ref<'create' | 'outcome' | null>(null)
 const selectedTask = ref<TaskItem | null>(null)
@@ -58,10 +67,11 @@ const form = ref({
   caseId: null as string | null,
 })
 
-const visibleTasks = computed(() => sortedTasks(tasks.value, scope.value))
-const counts = computed(() => taskStatusCounts(tasks.value))
+const visibleTasks = computed(() => tasksForScope(tasks.value, taskScope.value))
+const visibleApprovals = computed(() => approvalsForScope(approvals.value, approvalScope.value))
 const pendingApprovalCount = computed(() => approvals.value.filter((approval) => (
-  approval.status === 'pending' && approval.approverUid === authStore.user?.uid
+  approvalNeedsAttention(approval)
+  && approval.approverUid === authStore.user?.uid
 )).length)
 const availableCases = computed(() => (
   form.value.contactId
@@ -86,48 +96,6 @@ function formatDate(value?: string | null) {
   }).format(date)
 }
 
-function approvalSeverity(status: ActionApprovalItem['status']) {
-  if (status === 'approved') return 'success'
-  if (status === 'rejected') return 'danger'
-  if (status === 'execution_failed') return 'warn'
-  if (status === 'executing') return 'info'
-  return 'secondary'
-}
-
-function approvalTitle(approval: ActionApprovalItem) {
-  return approval.action.kind === 'case.move'
-    ? approval.action.caseTitle
-    : approval.action.title
-}
-
-function approvalCaseId(approval: ActionApprovalItem) {
-  return approval.action.kind === 'case.create' || approval.action.kind === 'case.move'
-    ? approval.action.caseId
-    : null
-}
-
-function approvalActionLabel(approval: ActionApprovalItem) {
-  if (approval.action.kind === 'task.create') return t('approvals.taskAction')
-  if (approval.action.kind === 'case.create') return t('approvals.createCaseAction')
-  return t('approvals.moveCaseAction')
-}
-
-function approvalEffect(approval: ActionApprovalItem) {
-  if (approval.action.kind === 'task.create') {
-    return t('approvals.createTaskFor', { assignee: approval.action.assigneeName })
-  }
-  if (approval.action.kind === 'case.create') {
-    return t('approvals.createCaseFor', {
-      owner: approval.action.ownerName,
-      stage: approval.action.stageName,
-    })
-  }
-  return t('approvals.moveCaseFromTo', {
-    from: approval.action.fromStageName,
-    to: approval.action.toStageName,
-  })
-}
-
 function openCreate() {
   const tomorrow = new Date()
   tomorrow.setDate(tomorrow.getDate() + 1)
@@ -140,6 +108,18 @@ function openCreate() {
     caseId: null,
   }
   dialog.value = 'create'
+}
+
+function taskContactChanged(contactId: string | null) {
+  if (!form.value.caseId) return
+  const selectedCase = cases.value.find((item) => item.id === form.value.caseId)
+  if (selectedCase && selectedCase.contactId !== contactId) form.value.caseId = null
+}
+
+function taskCaseChanged(caseId: string | null) {
+  if (!caseId) return
+  const selectedCase = cases.value.find((item) => item.id === caseId)
+  if (selectedCase) form.value.contactId = selectedCase.contactId
 }
 
 async function submitCreate() {
@@ -195,7 +175,8 @@ async function reopen(task: TaskItem) {
   try {
     await transitionTask({ taskId: task.id, to: 'open' })
     task.status = 'open'
-    scope.value = 'open'
+    taskScope.value = 'todo'
+    await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   }
@@ -215,11 +196,11 @@ async function approve(approval: ActionApprovalItem) {
   }
 }
 
-async function reject(approval: ActionApprovalItem) {
+async function reject(approval: ActionApprovalItem, note?: string) {
   processingApprovalId.value = approval.id
   error.value = ''
   try {
-    await rejectAction(approval.id)
+    await rejectAction(approval.id, note)
     await load()
     view.value = 'approvals'
   } catch (cause) {
@@ -233,15 +214,44 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [taskItems, approvalItems, team, contactItems, caseItems] = await Promise.all([
-      listTasks(),
-      listActionApprovals(),
+    const personalUid = audience.value === 'mine' ? authStore.user?.uid : undefined
+    const taskStatuses: TaskItem['status'][] = taskScope.value === 'todo'
+      ? ['open']
+      : ['completed', 'dismissed']
+    const approvalStatuses: ActionApprovalItem['status'][] = approvalScope.value === 'waiting'
+      ? ['pending', 'executing', 'execution_failed']
+      : ['approved', 'rejected']
+    const personalWaitingPromise = approvalScope.value === 'history' && authStore.user?.uid
+      ? listActionApprovals({
+          statuses: ['pending', 'executing', 'execution_failed'],
+          approverUid: authStore.user.uid,
+        })
+      : Promise.resolve([] as ActionApprovalItem[])
+    const [
+      taskItems,
+      approvalItems,
+      personalWaitingItems,
+      team,
+      contactItems,
+      caseItems,
+    ] = await Promise.all([
+      listTasks({
+        statuses: taskStatuses,
+        ...(personalUid ? { assigneeUid: personalUid } : {}),
+      }),
+      listActionApprovals({
+        statuses: approvalStatuses,
+        ...(personalUid ? { approverUid: personalUid } : {}),
+      }),
+      personalWaitingPromise,
       getTeamOverview(),
       listContacts(),
       listCases(),
     ])
     tasks.value = taskItems
-    approvals.value = approvalItems
+    approvals.value = [...new Map(
+      [...approvalItems, ...personalWaitingItems].map((approval) => [approval.id, approval]),
+    ).values()]
     members.value = team.members
     contacts.value = contactItems
     cases.value = caseItems
@@ -252,6 +262,18 @@ async function load() {
   }
 }
 
+async function setAudience(value: 'mine' | 'team') {
+  if (audience.value === value) return
+  audience.value = value
+  await load()
+}
+
+async function selectScope(value: string) {
+  if (view.value === 'tasks') taskScope.value = value as TaskWorkScope
+  else approvalScope.value = value as ApprovalWorkScope
+  await load()
+}
+
 onMounted(load)
 </script>
 
@@ -259,8 +281,8 @@ onMounted(load)
   <section class="min-h-screen min-w-0">
     <header class="px-4 sm:px-6 h-16 flex items-center justify-between gap-4 border-b border-[var(--hairline)]">
       <div class="min-w-0">
-        <div class="eyebrow !text-surface-500">{{ t('tasks.eyebrow') }}</div>
-        <h1 class="m-0 text-base font-semibold">{{ t('tasks.title') }}</h1>
+        <div class="eyebrow !text-surface-500">{{ t('work.eyebrow') }}</div>
+        <h1 class="m-0 text-base font-semibold">{{ t('work.title') }}</h1>
       </div>
       <div class="flex items-center gap-1">
         <Button icon="pi pi-refresh" severity="secondary" text :loading="loading" :aria-label="t('common.refresh')" @click="load" />
@@ -277,7 +299,7 @@ onMounted(load)
         ]"
         @click="view = 'tasks'"
       >
-        {{ t('tasks.title') }}
+        {{ t('work.tasks') }}
       </button>
       <button
         type="button"
@@ -287,29 +309,48 @@ onMounted(load)
         ]"
         @click="view = 'approvals'"
       >
-        {{ t('approvals.title') }}
+        {{ t('work.approvals') }}
         <span v-if="pendingApprovalCount" class="ml-1 min-w-5 h-5 px-1 rounded-full bg-violet-700 text-white text-[.65rem] inline-flex items-center justify-center">
           {{ pendingApprovalCount }}
         </span>
       </button>
     </div>
 
-    <div v-if="view === 'tasks'" class="px-4 sm:px-6 py-3 flex items-center gap-2 overflow-x-auto border-b border-[var(--hairline)]">
+    <div class="px-4 sm:px-6 py-3 flex items-center justify-between gap-3 overflow-x-auto border-b border-[var(--hairline)]">
+      <div class="flex items-center gap-2">
       <button
-        v-for="status in (['open', 'completed', 'dismissed'] as TaskStatus[])"
-        :key="status"
+        v-for="item in (view === 'tasks'
+          ? [{ value: 'todo', label: t('work.todo') }, { value: 'done', label: t('work.done') }]
+          : [{ value: 'waiting', label: t('work.waiting') }, { value: 'history', label: t('work.history') }])"
+        :key="item.value"
         type="button"
         :class="[
           'shrink-0 h-8 rounded-md border px-3 text-xs font-medium cursor-pointer',
-          scope === status
+          (view === 'tasks' ? taskScope : approvalScope) === item.value
             ? 'bg-surface-950 border-surface-950 text-white'
             : 'bg-white border-surface-200 text-surface-600',
         ]"
-        @click="scope = status"
+        @click="selectScope(item.value)"
       >
-        {{ t(`tasks.status.${status}`) }}
-        <span class="ml-1 opacity-60">{{ counts[status] }}</span>
+        {{ item.label }}
       </button>
+      </div>
+      <div class="flex items-center gap-1 shrink-0">
+        <Button
+          :label="t('work.mine')"
+          size="small"
+          :severity="audience === 'mine' ? undefined : 'secondary'"
+          :outlined="audience !== 'mine'"
+          @click="setAudience('mine')"
+        />
+        <Button
+          :label="t('work.team')"
+          size="small"
+          :severity="audience === 'team' ? undefined : 'secondary'"
+          :outlined="audience !== 'team'"
+          @click="setAudience('team')"
+        />
+      </div>
     </div>
 
     <Message v-if="error" severity="error" :closable="false" class="m-4 sm:m-6">{{ error }}</Message>
@@ -318,78 +359,16 @@ onMounted(load)
       <Skeleton v-for="index in 7" :key="index" height="6.5rem" />
     </div>
 
-    <div v-else-if="view === 'approvals' && approvals.length" class="divide-y divide-[var(--hairline)]">
-      <article
-        v-for="approval in approvals"
+    <div v-else-if="view === 'approvals' && visibleApprovals.length" class="divide-y divide-[var(--hairline)]">
+      <ApprovalCard
+        v-for="approval in visibleApprovals"
         :key="approval.id"
-        class="min-w-0 grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 sm:gap-4 px-4 sm:px-6 py-4 bg-violet-50/20"
-      >
-        <span class="mt-0.5 w-8 h-8 rounded-md bg-violet-100 text-violet-800 flex items-center justify-center">
-          <i class="pi pi-shield" />
-        </span>
-        <div class="min-w-0">
-          <div class="flex items-center gap-2 flex-wrap mb-1.5">
-            <Tag :value="t(`approvals.status.${approval.status}`)" :severity="approvalSeverity(approval.status)" />
-            <span class="eyebrow !text-violet-700">{{ approvalActionLabel(approval) }}</span>
-          </div>
-          <h2 class="text-sm font-semibold leading-snug m-0 break-words">
-            <router-link
-              v-if="approvalCaseId(approval)"
-              :to="`/cases/${approvalCaseId(approval)}`"
-              class="text-[var(--ink)] no-underline hover:text-indigo-700"
-            >
-              {{ approvalTitle(approval) }}
-            </router-link>
-            <template v-else>{{ approvalTitle(approval) }}</template>
-          </h2>
-          <p v-if="approval.action.kind === 'task.create' && approval.action.instructions" class="text-sm text-surface-600 leading-relaxed mt-1.5 mb-0 break-words">{{ approval.action.instructions }}</p>
-          <div class="mt-3 rounded-md border border-violet-200 bg-white/80 p-3 grid gap-1.5 text-xs">
-            <strong class="text-violet-950">{{ t('approvals.exactEffect') }}</strong>
-            <span>{{ approvalEffect(approval) }}</span>
-            <span v-if="approval.action.kind === 'task.create'"><i class="pi pi-calendar mr-1" />{{ formatDate(approval.action.dueAt) }}</span>
-            <span><i class="pi pi-user-edit mr-1" />{{ t('approvals.approver', { approver: approval.approverName }) }}</span>
-          </div>
-          <details v-if="approval.action.context?.callSummary || approval.action.context?.transcriptExcerpt" class="mt-3">
-            <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('tasks.callContext') }}</summary>
-            <p v-if="approval.action.context.callSummary" class="text-sm leading-relaxed mt-2 mb-1">{{ approval.action.context.callSummary }}</p>
-            <p v-if="approval.action.context.transcriptExcerpt" class="text-xs leading-relaxed text-surface-500 mt-1 mb-0">“{{ approval.action.context.transcriptExcerpt }}”</p>
-          </details>
-          <p v-if="approval.executionError" class="text-xs text-amber-800 mt-2 mb-0">{{ approval.executionError }}</p>
-          <p class="font-mono text-[.58rem] text-surface-400 mt-2 mb-0">{{ t('approvals.effectId') }} {{ approval.effectDigest.slice(0, 12) }}</p>
-
-          <!-- Decision footer: disclose effects above, then decide. -->
-          <div
-            v-if="(approval.status === 'pending' || approval.status === 'execution_failed') && approval.approverUid === authStore.user?.uid"
-            class="mt-3 pt-3 border-t border-violet-200/80 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2"
-          >
-            <Button
-              v-if="approval.status === 'pending'"
-              :label="t('approvals.reject')"
-              icon="pi pi-times"
-              size="small"
-              severity="secondary"
-              outlined
-              class="w-full sm:w-auto"
-              :disabled="Boolean(processingApprovalId)"
-              @click="reject(approval)"
-            />
-            <Button
-              :label="approval.status === 'execution_failed' ? t('approvals.retry') : t('approvals.approve')"
-              icon="pi pi-check"
-              size="small"
-              class="w-full sm:w-auto"
-              :loading="processingApprovalId === approval.id"
-              @click="approve(approval)"
-            />
-          </div>
-          <p
-            v-else-if="approval.status === 'pending'"
-            class="mt-3 pt-3 border-t border-violet-200/80 text-xs text-surface-500 mb-0"
-          >
-            {{ t('approvals.waitingFor', { approver: approval.approverName }) }}
-          </p>
-        </div>
-      </article>
+        :approval="approval"
+        :currentUid="authStore.user?.uid"
+        :processing="processingApprovalId === approval.id"
+        @approve="approve"
+        @reject="reject"
+      />
     </div>
 
     <div v-else-if="view === 'tasks' && visibleTasks.length" class="divide-y divide-[var(--hairline)]">
@@ -480,7 +459,7 @@ onMounted(load)
         </span>
         <h2 class="text-xl mt-0 mb-2">{{ view === 'tasks' ? t('tasks.emptyTitle') : t('approvals.emptyTitle') }}</h2>
         <p class="text-surface-500 leading-relaxed mt-0 mb-5">{{ view === 'tasks' ? t('tasks.emptyBody') : t('approvals.emptyBody') }}</p>
-        <Button v-if="view === 'tasks' && scope === 'open'" :label="t('tasks.new')" icon="pi pi-plus" @click="openCreate" />
+        <Button v-if="view === 'tasks' && taskScope === 'todo'" :label="t('tasks.new')" icon="pi pi-plus" @click="openCreate" />
       </div>
     </div>
 
@@ -514,11 +493,11 @@ onMounted(load)
         <div class="grid sm:grid-cols-2 gap-4">
           <label class="grid gap-1.5 text-sm font-medium">
             {{ t('tasks.fields.contact') }}
-            <Select v-model="form.contactId" :options="contactOptions" optionLabel="label" optionValue="id" showClear filter />
+            <Select v-model="form.contactId" :options="contactOptions" optionLabel="label" optionValue="id" showClear filter @update:modelValue="taskContactChanged" />
           </label>
           <label class="grid gap-1.5 text-sm font-medium">
             {{ t('tasks.fields.case') }}
-            <Select v-model="form.caseId" :options="availableCases" optionLabel="title" optionValue="id" showClear />
+            <Select v-model="form.caseId" :options="availableCases" optionLabel="title" optionValue="id" showClear @update:modelValue="taskCaseChanged" />
           </label>
         </div>
         <div class="flex justify-end gap-2 pt-2">

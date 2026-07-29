@@ -281,6 +281,15 @@ export type WorkflowListItem = {
   warning?: string
   updatedAt: string | null
   recentRuns: Record<string, number>
+  recentExceptions?: Array<{
+    runId: string
+    callId: string
+    occurredAt?: string | null
+    blockId: string
+    actionKind: string
+    reason: string
+    matches: number
+  }>
 }
 
 export type WorkflowDetails = WorkflowListItem & {
@@ -328,6 +337,15 @@ export type ActionApprovalItem = {
   approverName: string
   decisionStatus?: 'pending' | 'approved' | 'rejected'
   executionStatus?: 'not_started' | 'executing' | 'succeeded' | 'failed_safe_to_retry' | 'outcome_unknown'
+  scope?: {
+    contactId?: string | null
+    callId?: string | null
+    caseId?: string | null
+  } | null
+  result?: {
+    kind: 'task' | 'case' | 'case_movement'
+    id: string
+  } | null
   action: ({
     kind: 'task.create'
     taskId: string
@@ -337,7 +355,15 @@ export type ActionApprovalItem = {
     assigneeName: string
     dueAt?: string | null
     contactId?: string | null
+    caseId?: string | null
+    caseTitle?: string | null
     callId?: string | null
+    subject?: {
+      kind: 'internal' | 'contact' | 'matching_case'
+      pipelineId?: string
+      stageId?: string
+      stageName?: string
+    } | null
   } | {
     kind: 'case.create'
     caseId: string
@@ -508,6 +534,7 @@ export async function getContact(contactId: string): Promise<ContactDetails> {
 
 export async function listTasks(input?: {
   status?: TaskStatus
+  statuses?: TaskStatus[]
   assigneeUid?: string
   contactId?: string
   caseId?: string
@@ -547,6 +574,7 @@ export async function transitionTask(input: {
 
 export async function listActionApprovals(input?: {
   status?: ApprovalStatus
+  statuses?: ApprovalStatus[]
   approverUid?: string
 }): Promise<ActionApprovalItem[]> {
   return trpc.approvals.list.query({ ...(input || {}), limit: 200 }) as Promise<ActionApprovalItem[]>

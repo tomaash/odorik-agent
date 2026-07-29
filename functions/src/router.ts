@@ -544,6 +544,7 @@ export const appRouter = router({
     list: enabledProcedure
       .input(z.object({
         status: z.enum(["open", "completed", "dismissed"]).optional(),
+        statuses: z.array(z.enum(["open", "completed", "dismissed"])).min(1).max(3).optional(),
         assigneeUid: z.string().min(1).max(128).optional(),
         contactId: z.string().min(1).max(200).optional(),
         caseId: z.string().min(1).max(200).optional(),
@@ -604,6 +605,13 @@ export const appRouter = router({
           "rejected",
           "execution_failed",
         ]).optional(),
+        statuses: z.array(z.enum([
+          "pending",
+          "executing",
+          "approved",
+          "rejected",
+          "execution_failed",
+        ])).min(1).max(5).optional(),
         approverUid: z.string().min(1).max(128).optional(),
         limit: z.number().int().min(1).max(200).default(100),
       }).optional())

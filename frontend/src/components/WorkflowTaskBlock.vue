@@ -6,12 +6,13 @@ import InputNumber from 'primevue/inputnumber'
 import InputText from 'primevue/inputtext'
 import Select from 'primevue/select'
 import Textarea from 'primevue/textarea'
-import type { CreateTaskBlock } from '@agent-erik/workflow'
-import type { TeamMember } from '../api/client'
+import type { CreateTaskBlock, TaskSubject } from '@agent-erik/workflow'
+import type { Pipeline, TeamMember } from '../api/client'
 
 const props = defineProps<{
   block: CreateTaskBlock
   members: TeamMember[]
+  pipeline: Pipeline
   canMoveUp: boolean
   canMoveDown: boolean
   compact?: boolean
@@ -39,6 +40,54 @@ const dueAfterDays = computed({
   get: () => props.block.task.dueAfterDays ?? null,
   set: (value: number | null) => { props.block.task.dueAfterDays = value },
 })
+
+const subjectKind = computed<TaskSubject['kind'] | null>({
+  get: () => props.block.task.subject?.kind || null,
+  set: (kind) => {
+    if (!kind) return
+    if (kind === 'matching_case') {
+      const stages = props.pipeline.stages
+        .filter((stage) => !stage.archived)
+        .sort((left, right) => left.position - right.position)
+      const stage = stages.find((candidate) => candidate.id === props.pipeline.initialStageId)
+        || stages[0]
+      props.block.task.subject = {
+        kind,
+        pipelineId: 'default',
+        stageId: stage?.id || '',
+        stageName: stage?.name || '',
+      }
+      return
+    }
+    props.block.task.subject = { kind }
+  },
+})
+
+const matchingStageId = computed({
+  get: () => props.block.task.subject?.kind === 'matching_case'
+    ? props.block.task.subject.stageId
+    : '',
+  set: (stageId: string) => {
+    const stage = props.pipeline.stages.find((candidate) => candidate.id === stageId)
+    if (!stage) return
+    props.block.task.subject = {
+      kind: 'matching_case',
+      pipelineId: 'default',
+      stageId: stage.id,
+      stageName: stage.name,
+    }
+  },
+})
+
+const subjectOptions = computed(() => [
+  { label: t('workflows.taskSubject.internal'), value: 'internal' },
+  { label: t('workflows.taskSubject.contact'), value: 'contact' },
+  { label: t('workflows.taskSubject.case'), value: 'matching_case' },
+])
+
+const activeStages = computed(() => props.pipeline.stages
+  .filter((stage) => !stage.archived)
+  .sort((left, right) => left.position - right.position))
 
 const assigneeUid = computed({
   get: () => props.block.task.assigneeUid,
@@ -116,6 +165,25 @@ const approverUid = computed({
         {{ t('workflows.fields.instructions') }}
         <Textarea v-model="instructions" rows="2" autoResize />
       </label>
+      <div class="grid sm:grid-cols-2 gap-3">
+        <label class="grid gap-1.5 text-sm font-medium">
+          {{ t('workflows.fields.taskSubject') }}
+          <Select
+            v-model="subjectKind"
+            :options="subjectOptions"
+            optionLabel="label"
+            optionValue="value"
+            :placeholder="t('workflows.taskSubject.choose')"
+            :invalid="!subjectKind"
+          />
+        </label>
+        <label v-if="subjectKind === 'matching_case'" class="grid gap-1.5 text-sm font-medium">
+          {{ t('workflows.fields.matchingStage') }}
+          <Select v-model="matchingStageId" :options="activeStages" optionLabel="name" optionValue="id" />
+        </label>
+      </div>
+      <small v-if="subjectKind" class="text-surface-500 leading-relaxed">{{ t(`workflows.taskSubjectHelp.${subjectKind}`) }}</small>
+      <small v-else class="text-amber-800 leading-relaxed">{{ t('workflows.taskSubjectHelp.required') }}</small>
       <div class="grid sm:grid-cols-2 gap-3">
         <label class="grid gap-1.5 text-sm font-medium">
           {{ t('workflows.fields.assignee') }}
