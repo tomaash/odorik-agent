@@ -1,7 +1,7 @@
 # Agent Erik
 
 Agent Erik is an internal operating interface for teams working from calls,
-contacts, tasks, and deals. This repository is evolving from a call-to-CRM
+contacts, tasks, and cases. This repository is evolving from a call-to-CRM
 application into that focused, accountable product.
 
 The intended product has two primary surfaces:
@@ -61,8 +61,7 @@ The existing vertical slice remains useful as a proving ground:
   in a named Firestore Enterprise database.
 - Enabled users sign in with Google and use a Vue 3 mobile-first application.
 - tRPC is the single authenticated application API.
-- A user can review evidence-backed extraction proposals and move approved
-  service requests through a simple lifecycle.
+- A user can manage contact-linked cases in a configurable shared pipeline.
 - Review and status mutations use revision checks and audit events.
 - A read-only factual agent uses Gemini tool calls to search, fetch, list, and
   aggregate the available company records. Answers retain source citations and
@@ -86,14 +85,14 @@ The existing vertical slice remains useful as a proving ground:
   without an invitation remains pending.
 - The MVP supports one team per user, `admin` and `member` roles, and no
   self-service team creation or team switcher.
-- The signed-in application opens on **Tasks**. **Pipeline** provides one simple
-  contact-linked deal board; **Contacts** joins calls, deals, tasks, and legacy
-  requests; **Ask** stays cited and read-only; and **Sources** manages
+- The signed-in application opens on **Tasks**. **Pipeline** provides one
+  configurable contact-linked case board; **Contacts** joins calls, cases, and
+  tasks; **Ask** stays cited and read-only; and **Sources** manages
   connectors.
 - A dependency-free shared block language validates and evaluates in both
-  browser and Node. Ordered task blocks and one-level factual IF/ELSE conditions
-  can preview completed calls and create deterministic approval requests.
-  Only each action block's named approver can create its disclosed task.
+  browser and Node. Ordered task, create-case, move-case, and one-level factual
+  IF/ELSE blocks can preview calls and create deterministic approval requests.
+  Only each action block's named approver can execute its disclosed result.
 - Approval is mandatory and attached to every action; it cannot be omitted or
   wired around. The palette exposes no speculative read, draft, or
   external-action blocks. External capabilities are added only after connector,
@@ -235,13 +234,11 @@ approver. The engine can be stopped independently:
 
 ```text
 WORKFLOW_ENGINE_ENABLED=false
-LEGACY_CRM_ENABLED=true
 ```
 
 Schema-v1 experiments are preserved as disabled legacy records. The exact
 untouched demo plus supported schema-v2 and schema-v3 drafts upgrade to the
-approval-gated language. The legacy CRM path remains independently controlled
-during the transition.
+approval-gated language. The legacy call-to-CRM mutation path is retired.
 
 The GCP project id, named Firestore database, legacy deployed function names,
 and `odorik-crm@...` service account are historical infrastructure identifiers.

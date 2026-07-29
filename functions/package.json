@@ -16,6 +16,7 @@
     "qdrant:reindex": "npm run build && node --env-file=../.env lib/reindex-qdrant.js",
     "migrate:sources": "npm run build && node lib/migrate-source-adapters.js",
     "migrate:multi-tenant": "npm run build && node lib/migrate-multi-tenant.js",
+    "migrate:cases": "npm run build && node lib/migrate-cases.js",
     "seed:local": "node scripts/seed-local.js",
     "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting --import=./.emulator-data --export-on-exit=./.emulator-data"
   },

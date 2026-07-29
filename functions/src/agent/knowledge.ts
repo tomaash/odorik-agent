@@ -11,7 +11,7 @@ export const collectionByKnowledgeKind: Record<KnowledgeKind, string> = {
   call: "calls",
   contact: "contacts",
   task: "workItems",
-  deal: "deals",
+  case: "cases",
   audit_event: "auditEvents",
   context_item: "contextItems",
 };
@@ -31,13 +31,13 @@ const safeFields: Record<KnowledgeKind, string[]> = {
   ],
   task: [
     "status", "title", "instructions", "assigneeUid", "assigneeName", "dueAt",
-    "contactId", "dealId", "callId", "source", "authorization", "outcomeNote",
+    "contactId", "caseId", "callId", "source", "authorization", "outcomeNote",
     "createdBy", "createdAt", "updatedAt", "closedAt",
   ],
-  deal: [
-    "title", "pipelineId", "stageId", "stageName", "stageCategory", "contactId",
+  case: [
+    "title", "pipelineId", "stageId", "contactId",
     "contactName", "contactPhone", "ownerUid", "ownerName", "createdAt",
-    "updatedAt", "stageChangedAt",
+    "updatedAt", "stageChangedAt", "revision", "source", "authorization",
   ],
   audit_event: [
     "aggregateType", "aggregateId", "type", "actor", "before", "after", "createdAt",
@@ -52,8 +52,8 @@ const safeFields: Record<KnowledgeKind, string[]> = {
 const filterFields: Record<KnowledgeKind, string[]> = {
   call: ["status", "language", "from", "to", "contactId"],
   contact: ["displayName", "phoneE164", "phoneRaw", "email", "origin"],
-  task: ["status", "assigneeUid", "contactId", "dealId", "callId"],
-  deal: ["stageId", "stageCategory", "stageName", "contactId", "ownerUid"],
+  task: ["status", "assigneeUid", "contactId", "caseId", "callId"],
+  case: ["stageId", "contactId", "ownerUid"],
   audit_event: ["aggregateType", "aggregateId", "type"],
   context_item: ["kind", "source.adapterId", "source.connectionId", "source.resourceId"],
 };
@@ -100,7 +100,7 @@ function titleFor(kind: KnowledgeKind, id: string, data: Record<string, unknown>
   if (kind === "call") return `Call ${String(data.from || "unknown")} → ${String(data.to || "unknown")}`;
   if (kind === "contact") return String(data.displayName || data.phoneE164 || data.phoneRaw || `Contact ${id}`);
   if (kind === "task") return `${String(data.title || "Task")} · ${String(data.status || "unknown")}`;
-  if (kind === "deal") return `${String(data.title || `Deal ${id}`)} · ${String(data.stageName || "unknown stage")}`;
+  if (kind === "case") return `${String(data.title || `Case ${id}`)} · ${String(data.stageId || "unknown stage")}`;
   if (kind === "context_item") return String(data.title || `Context item ${id}`);
   return `${String(data.type || "Audit event")} · ${String(data.aggregateId || id)}`;
 }
@@ -174,10 +174,10 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
   } else if (record.kind === "contact") {
     adapterId = "crm";
     internalRoute = `/contacts/${record.recordId}`;
-  } else if (record.kind === "task" || record.kind === "deal" || record.kind === "audit_event") {
+  } else if (record.kind === "task" || record.kind === "case" || record.kind === "audit_event") {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
-    if (record.kind === "deal") internalRoute = "/pipeline";
+    if (record.kind === "case") internalRoute = "/pipeline";
   }
 
   if (!externalUrl && artifactRefs[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {

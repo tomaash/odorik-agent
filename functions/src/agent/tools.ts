@@ -44,7 +44,7 @@ export const factToolDeclarations = [
   {
     name: "search_company_data",
     description:
-      "Hybrid semantic and full-text search across calls, transcripts, contacts, service requests, tasks, reviews, and audit events. Use this first for names, topics, phrases, and broad factual questions.",
+      "Hybrid semantic and full-text search across calls, transcripts, contacts, cases, tasks, context items, and audit events. Use this first for names, topics, phrases, and broad factual questions.",
     parameters: {
       type: "OBJECT",
       properties: {
@@ -75,7 +75,7 @@ export const factToolDeclarations = [
   {
     name: "list_company_records",
     description:
-      "List recent records of one kind with exact equality filters. Use for questions such as which requests have a status or which interactions belong to a contact.",
+      "List recent records of one kind with exact equality filters. Use for questions such as which cases occupy a stage or which calls belong to a contact.",
     parameters: {
       type: "OBJECT",
       properties: {
@@ -219,10 +219,10 @@ function extractCitationInfo(record: CompanyRecord): {
   } else if (record.kind === "contact") {
     adapterId = "crm";
     internalRoute = `/contacts/${record.recordId}`;
-  } else if (record.kind === "task" || record.kind === "deal" || record.kind === "audit_event") {
+  } else if (record.kind === "task" || record.kind === "case" || record.kind === "audit_event") {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
-    if (record.kind === "deal") internalRoute = "/pipeline";
+    if (record.kind === "case") internalRoute = "/pipeline";
   }
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
@@ -236,8 +236,8 @@ function extractCitationInfo(record: CompanyRecord): {
     excerptText = excerpt(data.summary);
   } else if (record.kind === "contact") {
     excerptText = excerpt([data.displayName, data.phoneE164, data.email].filter(Boolean).join(" · "));
-  } else if (record.kind === "deal") {
-    excerptText = excerpt([data.title, data.stageName, data.contactName].filter(Boolean).join(" · "));
+  } else if (record.kind === "case") {
+    excerptText = excerpt([data.title, data.stageId, data.contactName].filter(Boolean).join(" · "));
   } else if (record.kind === "task") {
     excerptText = excerpt(`${data.title || "Task"} · Status: ${data.status || "unknown"}`);
   } else {
@@ -344,7 +344,7 @@ export class CompanyFactTools implements AgentToolExecutor {
           if (externalUrl?.includes("drive.google.com") || hit.sourcePath.includes("drive")) adapterId = "google_drive";
           else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) adapterId = "google_calendar";
           else if (hit.kind === "call") adapterId = "odorik";
-          else if (hit.kind === "contact" || hit.kind === "deal") adapterId = "crm";
+          else if (hit.kind === "contact" || hit.kind === "case") adapterId = "crm";
         }
 
         const citation = this.citations.add({

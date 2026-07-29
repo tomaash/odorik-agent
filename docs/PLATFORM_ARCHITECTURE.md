@@ -365,8 +365,9 @@ On mobile, a proposal opens as one focused card with persistent explicit
 actions. On larger screens, conversation, card, and evidence/history can appear
 side by side. The same APIs and records power both layouts.
 
-The current Intake, Requests, and Contacts screens remain available as the
-legacy call-to-CRM workflow until an explicit migration decision.
+The current product surfaces are Tasks, a configurable case Pipeline, Contacts,
+Ask, Workflows, Sources, and Team. The legacy call-to-CRM mutation workflow is
+not a supported fallback.
 
 ## Security and correctness invariants
 

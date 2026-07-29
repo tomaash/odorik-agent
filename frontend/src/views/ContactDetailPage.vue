@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
@@ -8,11 +8,13 @@ import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import { useContactsStore } from '../stores/contacts'
+import { getPipeline, type Pipeline } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
 const store = useContactsStore()
+const pipeline = ref<Pipeline | null>(null)
 const details = computed(() => store.current)
 const calls = computed(() => [...(details.value?.calls || [])].sort((a, b) => {
   const aTime = new Date(String(a.odorikTime || a.uploadedAt || 0)).getTime()
@@ -42,7 +44,20 @@ function formatDuration(value?: number | null) {
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 }
 
-store.load(String(route.params.id))
+function stageName(stageId: string) {
+  return pipeline.value?.stages.find((stage) => stage.id === stageId)?.name || stageId
+}
+
+function stageSeverity(stageId: string) {
+  return pipeline.value?.stages.find((stage) => stage.id === stageId)?.terminal
+    ? 'success'
+    : 'secondary'
+}
+
+void Promise.all([
+  store.load(String(route.params.id)),
+  getPipeline().then((result) => { pipeline.value = result }),
+])
 </script>
 
 <template>
@@ -64,23 +79,23 @@ store.load(String(route.params.id))
 
       <div class="grid lg:grid-cols-2 gap-5 items-start mb-8">
         <section class="min-w-0">
-          <h2 class="text-base font-semibold mb-3">{{ t('contacts.deals') }} <span class="text-surface-400">{{ details.deals.length }}</span></h2>
+          <h2 class="text-base font-semibold mb-3">{{ t('contacts.cases') }} <span class="text-surface-400">{{ details.cases.length }}</span></h2>
           <div class="hairline-card overflow-hidden divide-y divide-[var(--hairline)]">
             <router-link
-              v-for="deal in details.deals"
-              :key="deal.id"
+              v-for="item in details.cases"
+              :key="item.id"
               to="/pipeline"
               class="block p-4 no-underline text-[var(--ink)] hover:bg-white"
             >
               <div class="flex items-start justify-between gap-3">
                 <div class="min-w-0">
-                  <strong class="block text-sm break-words">{{ deal.title }}</strong>
-                  <span class="text-xs text-surface-500 mt-1 block">{{ deal.ownerName }}</span>
+                  <strong class="block text-sm break-words">{{ item.title }}</strong>
+                  <span class="text-xs text-surface-500 mt-1 block">{{ item.ownerName }}</span>
                 </div>
-                <Tag :value="t(`pipeline.stages.${deal.stageId}`)" :severity="deal.stageCategory === 'won' ? 'success' : deal.stageCategory === 'lost' ? 'danger' : 'secondary'" />
+                <Tag :value="stageName(item.stageId)" :severity="stageSeverity(item.stageId)" />
               </div>
             </router-link>
-            <p v-if="details.deals.length === 0" class="text-sm text-surface-500 text-center py-8 px-4 m-0">{{ t('contacts.noDeals') }}</p>
+            <p v-if="details.cases.length === 0" class="text-sm text-surface-500 text-center py-8 px-4 m-0">{{ t('contacts.noCases') }}</p>
           </div>
         </section>
 

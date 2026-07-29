@@ -1,250 +1,202 @@
 # Agent Erik: streamlined product plan
 
-This file is the authority for the current product. The PDF is visual direction,
-not a mandate to reproduce unsupported concepts.
+This file is the authority for the current product. The redesign PDF is visual
+direction, not a mandate to reproduce unsupported concepts.
 
 ## Product decision
 
 Agent Erik is useful today as a small internal operating system around calls:
 
 1. a call becomes durable company context;
-2. a workflow proposes exact internal actions to a named approver;
-3. only an approved action creates an internal task;
-4. a team member owns and closes that task;
-5. a contact can have deals in one simple pipeline; and
-6. every automatic result points back to its call, workflow, and approval.
+2. a workflow evaluates factual call data and proposes exact internal actions;
+3. every proposed action names one required human approver;
+4. only the approval executor may create a task, create a case, or move a case;
+5. team members work from the task queue and one configurable case pipeline;
+6. every automatic result points back to its call, workflow version, block, and
+   approval.
 
-This is more honest and more useful than showing generic “read”, “draft”,
-“decision”, or external-action blocks that have no connector, execution contract,
-or clear user outcome.
+This is more honest and useful than generic read, evidence, draft, or external
+action blocks with no connector, execution contract, or inspectable result.
 
-## Assumptions challenged
+## Product boundaries
 
-### “A large workflow palette proves flexibility”
+### The block palette proves implemented behavior, not hypothetical flexibility
 
-No. The block language is a useful product surface, but every available block
-must have implemented runtime semantics. The first language therefore has one
-trigger, one result type, and one-level conditions over factual call data. It is
-deliberately a small executable language rather than a gallery of hypothetical
-reads, drafts, or external actions.
+Every available block must have runtime semantics, validation, preview,
+approval, idempotent execution, and audit behavior. The first language has one
+trigger, three internal action types, and one-level conditions over factual call
+data. Nested logic, inferred fields, and generic sockets are deferred.
 
-### “A low-risk internal action can skip approval”
+### Approval is structurally mandatory
 
-No. The governing invariant is stronger than risk-based convenience: no
-workflow action executes without a named human approver. An internal task is
-still a mutation of the team's operating state. A workflow may determine that
-the action applies and prepare its exact payload, but it may only create an
-immutable approval request.
+No workflow action executes without its named approver. Approval is embedded in
+every action block and cannot be wired around. A workflow may evaluate data and
+persist an immutable approval request; the approval request itself is a control
+artifact and does not recursively need approval.
 
-Approval is attached structurally to every action block rather than offered as a
-separate optional block. This prevents authors from accidentally wiring around
-it. The approval request itself is a control artifact, not an action effect, so
-it does not recursively require another approval.
+### The internal CRM is deliberately small
 
-### “The CRM should replace a full CRM”
+Erik owns one shared, generically named case pipeline and contact-linked tasks.
+Admins can name, order, mark terminal, and archive stages because those
+properties are intrinsic to a useful pipeline outside sales. Multiple
+pipelines, custom fields, forecasting, email sequences, and reporting are out
+of scope.
 
-No. The useful interim is one shared pipeline and a contact-linked task list.
-Custom pipelines, custom fields, forecasting, email sequences, and reporting
-would recreate mature products without evidence that Erik should own them.
+Legacy service requests are not automatically converted to cases because that
+would manufacture meaning and stage state. The old call-to-CRM mutation
+workflow is retired rather than presented as a product primitive. Existing
+deal-shaped board records are a mechanical predecessor of cases and are
+migrated one-to-one, preserving IDs and links.
 
-### “Legacy service requests should become deals”
-
-No automatic migration. Their semantics differ and a lossy conversion would
-manufacture pipeline state. Existing requests remain readable as legacy records
-on contact pages and at their existing URLs, but are not primary navigation.
-
-## Current information architecture
+## Information architecture
 
 Primary navigation:
 
-- **Tasks** — default destination, team work queue, and concrete action approvals.
-- **Pipeline** — one board for open, won, and lost deals.
-- **Contacts** — customer identity, calls, deals, tasks, and legacy requests.
+- **Tasks** — default destination, team work queue, and action approvals.
+- **Pipeline** — one board of cases in company-defined stages.
+- **Contacts** — customer identity, cases, tasks, calls, and transcripts.
 - **Ask** — cited, read-only questions over company data.
 
 Secondary navigation:
 
-- **Workflows** — executable internal-task programs built from supported blocks.
+- **Workflows** — executable programs built only from supported blocks.
 - **Sources** — connector management.
 - **Team** — membership and invitations.
 
-The old Decisions and Operations destinations are removed. Their historical
-backend records may remain readable for compatibility, but they are not part of
-the product contract.
+Decisions, Operations, Intake, and Requests are not product destinations.
 
 ## Internal objects
 
 ### Task
 
-A task has:
+A task has a title, optional instructions, one active team-member assignee,
+`open` / `completed` / `dismissed` status, optional due date, optional contact,
+case, and source call, and an optional closing note. It retains origin,
+authorization, attribution, and audit events. Closing is reversible.
 
-- title and optional instructions;
-- exactly one active team-member assignee;
-- `open`, `completed`, or `dismissed` status;
-- optional due date, contact, deal, and source call;
-- optional outcome note when closed;
-- origin (`manual`, `call`, `deal`, or `workflow`);
-- authorization (`direct_user_action` or an executed approval id);
-- created/updated/closed attribution and audit events.
+A manual task is authorized by the person pressing Create. A workflow task can
+only reference an executed approval.
 
-Closing is reversible through “reopen”. Automatic tasks expose the call summary
-and transcript excerpt; they never pretend that an external follow-up happened.
-A manually submitted task is approved by the person pressing Create. A workflow
-task can only reference an executed approval request.
+### Case and pipeline
+
+A case has a title, exactly one contact, one active owner, one stable pipeline
+and stage, a monotonic revision, origin and authorization, and stage-change
+audit history.
+
+The single pipeline starts as:
+
+`New → Follow-up → In progress → Waiting → Done`
+
+An admin may rename, reorder, add, mark terminal, or archive stages. Stage IDs
+remain stable so workflows and history cannot silently change meaning. Desktop
+supports drag and drop; mobile uses an explicit stage selector.
 
 ### Action approval
 
-An action approval has:
+An approval stores one typed action payload, its canonical SHA-256 effect
+digest, one active approver, workflow/run/block/call provenance, and separate:
 
-- one exact action payload and immutable effect digest;
-- exactly one active team-member approver;
-- `pending`, `executing`, `approved`, `rejected`, or `execution_failed` status;
-- workflow version, run, block, call, and intended task ids;
-- timestamps and actor attribution for request, decision, and execution.
+- decision state: `pending`, `approved`, or `rejected`;
+- execution state: `not_started`, `executing`, `succeeded`,
+  `failed_safe_to_retry`, or `outcome_unknown`.
 
-Only the named approver can approve or reject. Approval executes the disclosed
-payload using its deterministic task id. Rejection creates no task.
-
-### Deal
-
-A deal has:
-
-- title;
-- exactly one contact and one active team-member owner;
-- one stage in the shared pipeline;
-- stage-change attribution and audit events.
-
-The only pipeline is:
-
-`New → Follow-up → In progress → Waiting → Won / Lost`
-
-Desktop supports drag-and-drop. Mobile uses an explicit stage selector so the
-same action remains accessible and predictable.
-
-### Contact
-
-A contact is the customer spine. Its detail page shows, in order:
-
-1. deals;
-2. internal tasks;
-3. call history and transcripts; and
-4. collapsed legacy service requests.
+The executor records approval before the business effect, rechecks the payload
+against its digest, takes a bounded execution lease, and uses deterministic
+result/movement IDs. Rejection creates no effect. A stale exact case move does
+not execute.
 
 ## First workflow language
 
-The supported trigger is:
+Trigger:
 
 ```text
 When a completed call has a transcript
-→ run ordered blocks from top to bottom
+→ evaluate ordered blocks from top to bottom
 ```
 
-Two block kinds are executable:
+Supported blocks:
 
-1. **Create internal task** — title template, instructions, active-team-member
-   assignee, optional due offset, and mandatory active-team-member approver.
-   `{caller.name}` and `{caller.phone}` are the only template tokens. The
-   approver is an inseparable part of the action block.
-2. **If / else** — choose task blocks using exactly one stored-data comparison.
-   Branches contain task blocks only and cannot nest.
+1. **Create internal task** — title template, optional instructions, assignee,
+   optional due offset, and required approver.
+2. **Create case** — title template, owner, initial stage, and required
+   approver. It is skipped when the call has no resolved contact.
+3. **Move case** — exact current stage, destination stage, and required
+   approver. The evaluator proceeds only if the contact has exactly one
+   non-archived case in that pipeline and current stage. Zero or multiple
+   matches are shown as skipped; Erik never guesses.
+4. **If / else** — choose any supported action blocks using one stored-data
+   comparison. Branches cannot nest.
 
 Conditions may inspect only:
 
 - call duration in seconds;
-- whether the caller resolved to a stored contact; and
-- the actual transcript text (`contains` or exact text match).
+- whether the caller resolved to a contact;
+- actual transcript text (`contains` or exact comparison).
 
-An empty branch honestly means “request no action.” A workflow may request
-approval for multiple actions when multiple ordered blocks select them.
+Templates support only `{caller.name}` and `{caller.phone}`. “Try on history”
+uses the live evaluator without writes and shows exact actions, skips,
+conditions, and approvers. “Turn on” creates an immutable workflow version.
+Runs, approvals, result objects, and movements are deterministic. “Pause”
+stops future runs.
 
-“Try on history” is read-only and shows the exact actions and approvers that
-would be requested. It uses the same evaluator as live execution and explains
-each selected branch. “Turn on” creates an immutable workflow version. Future
-matching calls create deterministic approval requests per block. Only approval
-creates the equally deterministic task, so retries cannot duplicate either
-object.
-“Pause” stops future runs.
+Schema-v2 and schema-v3 task workflows normalize to schema v4 and inherit the
+assignee as approver. Schema-v1 experiments remain visibly disabled and cannot
+be saved, enabled, or executed.
 
-See [INTERNAL_WORKFLOW.md](INTERNAL_WORKFLOW.md) for the executable contract.
+## Explicitly removed or deferred
 
-## Removed concepts
-
-These are intentionally absent until a concrete connector and execution plan
-justify them:
-
-- generic read/evidence blocks;
-- AI drafting blocks;
-- generic action blocks;
-- nested conditions, arbitrary expressions, inferred fields, and sockets;
-- free-floating or optional approval blocks;
-- “send”, “move in external CRM”, and similar simulated exits;
+- generic read/evidence and AI draft blocks;
+- generic or externally simulated actions;
+- optional or free-floating approval blocks;
+- nested conditions and arbitrary expressions;
 - arbitrary assignee text;
-- agent-generated workflow code.
+- model-generated workflow code;
+- external writes without a connector-specific authorization, preview,
+  idempotency, retry, uncertainty, compensation, and audit contract.
 
-The read-only Ask agent may still cite evidence. That is a different, already
-implemented capability and is not presented as a workflow primitive.
+The read-only Ask agent may cite evidence. That is a separate implemented
+capability, not a workflow primitive.
 
-## Legacy workflow handling
+## Safety invariants
 
-- The exact untouched demo draft is upgraded to the internal call-to-task recipe.
-- Supported schema-v2 and schema-v3 drafts upgrade in place to a schema-v4
-  approval-gated program without changing status or deployed version. The
-  existing assignee becomes the initial approver and can be changed in draft.
-- Immutable schema-v2 and schema-v3 versions are never rewritten. Runtime
-  normalization attaches the existing assignee as approver, so even old enabled
-  versions can only request approval and can no longer create a task directly.
-- Edited or deployed schema-v1 experiments are preserved, labelled legacy, and
-  disabled.
-- No schema-v1 definition can be saved, enabled, or executed.
-- Existing legacy CRM call processing stays enabled independently during this
-  transition.
+1. The workflow runtime can create approval requests but cannot directly mutate
+   tasks or cases.
+2. Only the named approver can approve or reject.
+3. The registered typed executor is the only workflow mutation path.
+4. Save, enable, request, and execution revalidate members and referenced
+   stages server-side.
+5. Case moves bind the exact case ID, current stage, and revision seen at
+   proposal time.
+6. Zero, ambiguous, stale, or archived case matches fail closed.
+7. Audit records accompany workflow enablement, approval decisions and
+   execution, tasks, cases, movements, and pipeline configuration.
+8. Connector ingestion remains company-scoped source observation, not a
+   business approval.
 
-## Safety boundary
-
-The workflow engine can only create an internal `action_approval` request. It
-cannot create a task, send messages, update external systems, create generic
-proposals, or invoke arbitrary registered capabilities. Only the approval
-executor can create the disclosed internal task after the named approver acts.
-
-Server-side checks revalidate the block program and require active assignee and
-approver members for every action on save, enable, request, and execution.
-Workflow runs are deterministic per company/workflow-version/call; approval and
-task ids additionally include the selected block id. Audit records accompany
-approval requests and decisions, task creation and transitions, deal creation
-and moves, and workflow enablement.
-
-## Delivery and acceptance
+## Acceptance
 
 The slice is complete when:
 
 - Tasks is the signed-in default on desktop and mobile.
-- A member can create, complete, dismiss, and reopen a task.
-- A member can create a contact-linked deal and move it through every stage.
-- Contact detail shows its deals and tasks.
-- A workflow preview shows concrete action title, assignee, approver, due date,
-  and call context without writing data.
-- A member can add, remove, and reorder task and IF/ELSE blocks on desktop and
-  mobile.
-- Preview and live execution choose the same branches for duration, contact,
-  and transcript conditions.
-- Turning on a workflow causes a future completed call to create exactly the
-  selected approval requests, including zero when an empty branch is selected.
-- No workflow action creates a task before its named approver accepts it.
-- Approving creates the exact disclosed task; rejecting creates no task.
-- Retrying cannot duplicate either an approval request or its task.
-- Legacy workflow definitions are visibly disabled.
-- Decisions and Operations are not reachable.
+- Members can create, complete, dismiss, and reopen tasks.
+- Members can create and move contact-linked cases.
+- Admins can configure the single pipeline without changing stage identity.
+- Contact detail shows cases, tasks, and calls.
+- Authors can add, remove, reorder, and configure all supported action blocks
+  and one-level IF/ELSE on mobile and desktop.
+- Preview and live execution use the same evaluator and explain safe skips.
+- A future matching call creates exactly the selected approval requests.
+- No workflow action mutates state before its approver accepts.
+- Approval executes only the disclosed effect; rejection executes nothing.
+- Retry cannot duplicate an approval, task, case, or movement.
+- Legacy workflow definitions remain disabled.
 - Czech and English layouts work at 390px and desktop widths.
-- shared, Functions, and frontend tests/builds pass before production deploy.
+- shared, Functions, and frontend tests/builds pass before deployment.
 
-## Criteria for the next primitive
+## Criteria for another primitive
 
-Add a trigger, condition field, or result block only when its data and effect
-are already implemented as normal product behavior, the result is inspectable
-and attributable, retries are idempotent, and failure can be explained to a
-user. Never add a block solely to make the canvas look more capable.
-
-Add an external connector action only after its authorization scope, preview,
-execution record, retry behavior, and compensation story are implemented.
-Every future action remains approval-gated regardless of its risk. Higher-risk
-actions may additionally require stronger authorization or multiple approvers.
+Add a trigger, field, or action only when the data and effect already exist as
+normal product behavior; the result is inspectable and attributable; retries
+are idempotent; and failure or uncertainty can be explained to a user. Never
+add a block solely to make the canvas look more capable. Every future action
+remains approval-gated.

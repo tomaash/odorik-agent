@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createCallTaskWorkflow,
+  createCaseBlock,
   createIfBlock,
+  createMoveCaseBlock,
   createTaskBlock,
   normalizeWorkflowSpec,
   previewWorkflow,
@@ -94,7 +96,9 @@ test("simple conditions select one task branch from persisted call data", () => 
     operator: "contains",
     value: "quote",
   };
-  conditional.then[0]!.task.title = "Prepare quote";
+  const matchingTask = conditional.then[0]!;
+  if (matchingTask.kind !== "action.task.create") return;
+  matchingTask.task.title = "Prepare quote";
   conditional.else.push(createTaskBlock({
     id: "task_no_quote",
     title: "No quote requested",
@@ -128,7 +132,9 @@ test("duration and contact conditions use only supplied factual call data", () =
     operator: "eq",
     value: true,
   };
-  conditional.then[0]!.task.title = "Known customer";
+  const knownCustomerTask = conditional.then[0]!;
+  if (knownCustomerTask.kind !== "action.task.create") return;
+  knownCustomerTask.task.title = "Known customer";
   conditional.else.push(createTaskBlock({
     id: "task_unknown",
     title: "Unknown caller",
@@ -138,7 +144,9 @@ test("duration and contact conditions use only supplied factual call data", () =
   spec.blocks = [conditional];
 
   const preview = previewWorkflow(spec, { callerHasContact: false });
-  assert.deepEqual(preview.tasks.map((task) => task.title), ["Unknown caller"]);
+  assert.deepEqual(preview.actions.map((action) => (
+    action.kind === "task.create" ? action.title : null
+  )), ["Unknown caller"]);
   assert.deepEqual(preview.conditions.map((condition) => ({
     result: condition.result,
     branch: condition.branch,
@@ -152,6 +160,88 @@ test("duration and contact conditions use only supplied factual call data", () =
   };
   assert.equal(previewWorkflow(spec, { callDurationSeconds: null }).conditions[0]?.result, false);
   assert.equal(previewWorkflow(spec, { callDurationSeconds: 30 }).conditions[0]?.result, true);
+});
+
+test("case actions require a contact and exact unambiguous case movement", () => {
+  const spec = createCallTaskWorkflow({
+    assigneeUid: "user-1",
+    assigneeName: "Tomáš",
+  });
+  spec.blocks = [
+    createCaseBlock({
+      ownerUid: "user-1",
+      ownerName: "Tomáš",
+      pipelineId: "default",
+      stageId: "new",
+      stageName: "New",
+    }),
+    createMoveCaseBlock({
+      approverUid: "user-2",
+      approverName: "Josef",
+      pipelineId: "default",
+      fromStageId: "new",
+      fromStageName: "New",
+      toStageId: "in_progress",
+      toStageName: "In progress",
+    }),
+  ];
+
+  const noContact = previewWorkflow(spec, { callerHasContact: false });
+  assert.equal(noContact.actions.length, 0);
+  assert.deepEqual(noContact.skippedActions.map((item) => item.reason), [
+    "contact_required",
+    "contact_required",
+  ]);
+
+  const exact = previewWorkflow(spec, {
+    callerHasContact: true,
+    callerName: "ACME",
+    cases: [{
+      id: "case-1",
+      title: "ACME renewal",
+      pipelineId: "default",
+      stageId: "new",
+      stageName: "New",
+      revision: 3,
+    }],
+  });
+  assert.deepEqual(exact.actions.map((action) => action.kind), ["case.create", "case.move"]);
+  const movement = exact.actions[1];
+  assert.equal(movement?.kind, "case.move");
+  if (movement?.kind === "case.move") {
+    assert.equal(movement.caseId, "case-1");
+    assert.equal(movement.expectedRevision, 3);
+    assert.equal(movement.approverUid, "user-2");
+  }
+
+  const ambiguous = previewWorkflow(spec, {
+    callerHasContact: true,
+    cases: [
+      {
+        id: "case-1",
+        title: "First",
+        pipelineId: "default",
+        stageId: "new",
+        stageName: "New",
+        revision: 0,
+      },
+      {
+        id: "case-2",
+        title: "Second",
+        pipelineId: "default",
+        stageId: "new",
+        stageName: "New",
+        revision: 0,
+      },
+    ],
+  });
+  assert.equal(ambiguous.actions.filter((action) => action.kind === "case.move").length, 0);
+  assert.deepEqual(ambiguous.skippedActions, [{
+    blockId: spec.blocks[1]?.id,
+    kind: "action.case.move",
+    reason: "ambiguous_case",
+    matches: 2,
+  }]);
 });
 
 test("validator rejects malformed branches without throwing", () => {

@@ -2,7 +2,7 @@ export const knowledgeKinds = [
   "call",
   "contact",
   "task",
-  "deal",
+  "case",
   "audit_event",
   "context_item",
 ] as const;
