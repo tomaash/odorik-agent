@@ -23,6 +23,8 @@ export type ConnectionPublicView = {
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;
   lastError?: string | null;
+  /** Google revoked or expired the grant; only a fresh consent restores it. */
+  reauthorizationRequired: boolean;
   itemCount: number;
   resourceCount: number;
   createdAt?: string | null;

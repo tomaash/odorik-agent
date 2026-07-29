@@ -9,11 +9,9 @@ import {
 
 export const collectionByKnowledgeKind: Record<KnowledgeKind, string> = {
   call: "calls",
-  interaction: "interactions",
   contact: "contacts",
-  service_request: "serviceRequests",
-  task: "tasks",
-  review: "reviews",
+  task: "workItems",
+  deal: "deals",
   audit_event: "auditEvents",
   context_item: "contextItems",
 };
@@ -27,27 +25,19 @@ const safeFields: Record<KnowledgeKind, string[]> = {
     "status", "from", "to", "duration", "odorikTime", "lineName", "language",
     "summary", "transcript", "segments", "actionItems", "uploadedAt", "processedAt",
   ],
-  interaction: [
-    "kind", "source", "sourceCallId", "contactId", "serviceRequestId", "from", "to",
-    "occurredAt", "durationSeconds", "summary", "transcript", "segments", "language",
-    "createdAt",
-  ],
   contact: [
-    "displayName", "phoneE164", "phoneRaw", "email", "createdFromInteractionId",
-    "createdAt", "updatedAt",
-  ],
-  service_request: [
-    "contactId", "status", "title", "serviceType", "description", "address",
-    "requestedTiming", "urgency", "notes", "missingInformation", "interactionIds",
-    "reviewedAt", "reviewedBy", "createdAt", "updatedAt",
+    "displayName", "phoneE164", "phoneRaw", "email", "origin", "createdFromCallId",
+    "lastCallAt", "createdAt", "updatedAt",
   ],
   task: [
-    "type", "status", "interactionId", "serviceRequestId", "processingRunId",
-    "createdAt", "updatedAt", "completedAt",
+    "status", "title", "instructions", "assigneeUid", "assigneeName", "dueAt",
+    "contactId", "dealId", "callId", "source", "authorization", "outcomeNote",
+    "createdBy", "createdAt", "updatedAt", "closedAt",
   ],
-  review: [
-    "serviceRequestId", "actorUid", "decisions", "requestAfter", "contactAfter",
-    "createdAt",
+  deal: [
+    "title", "pipelineId", "stageId", "stageName", "stageCategory", "contactId",
+    "contactName", "contactPhone", "ownerUid", "ownerName", "createdAt",
+    "updatedAt", "stageChangedAt",
   ],
   audit_event: [
     "aggregateType", "aggregateId", "type", "actor", "before", "after", "createdAt",
@@ -60,12 +50,10 @@ const safeFields: Record<KnowledgeKind, string[]> = {
 };
 
 const filterFields: Record<KnowledgeKind, string[]> = {
-  call: ["status", "language", "from", "to"],
-  interaction: ["kind", "source", "contactId", "serviceRequestId", "language", "from", "to"],
-  contact: ["displayName", "phoneE164", "phoneRaw", "email"],
-  service_request: ["status", "urgency", "serviceType", "contactId"],
-  task: ["type", "status", "serviceRequestId", "interactionId"],
-  review: ["serviceRequestId", "actorUid"],
+  call: ["status", "language", "from", "to", "contactId"],
+  contact: ["displayName", "phoneE164", "phoneRaw", "email", "origin"],
+  task: ["status", "assigneeUid", "contactId", "dealId", "callId"],
+  deal: ["stageId", "stageCategory", "stageName", "contactId", "ownerUid"],
   audit_event: ["aggregateType", "aggregateId", "type"],
   context_item: ["kind", "source.adapterId", "source.connectionId", "source.resourceId"],
 };
@@ -110,11 +98,9 @@ export function knowledgeKindForCollection(collection: string): KnowledgeKind | 
 
 function titleFor(kind: KnowledgeKind, id: string, data: Record<string, unknown>): string {
   if (kind === "call") return `Call ${String(data.from || "unknown")} → ${String(data.to || "unknown")}`;
-  if (kind === "interaction") return `Call interaction ${String(data.from || id)}`;
   if (kind === "contact") return String(data.displayName || data.phoneE164 || data.phoneRaw || `Contact ${id}`);
-  if (kind === "service_request") return String(data.title || `Service request ${id}`);
-  if (kind === "task") return `${String(data.type || "Task")} · ${String(data.status || "unknown")}`;
-  if (kind === "review") return `Review of ${String(data.serviceRequestId || id)}`;
+  if (kind === "task") return `${String(data.title || "Task")} · ${String(data.status || "unknown")}`;
+  if (kind === "deal") return `${String(data.title || `Deal ${id}`)} · ${String(data.stageName || "unknown stage")}`;
   if (kind === "context_item") return String(data.title || `Context item ${id}`);
   return `${String(data.type || "Audit event")} · ${String(data.aggregateId || id)}`;
 }
@@ -180,18 +166,18 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
     } else if (adapterId === "odorik") {
       internalRoute = "/contacts";
     }
-  } else if (record.kind === "call" || record.kind === "interaction") {
+  } else if (record.kind === "call") {
     adapterId = "odorik";
-    internalRoute = "/contacts";
+    internalRoute = typeof data.contactId === "string"
+      ? `/contacts/${data.contactId}`
+      : "/contacts";
   } else if (record.kind === "contact") {
     adapterId = "crm";
     internalRoute = `/contacts/${record.recordId}`;
-  } else if (record.kind === "service_request") {
-    adapterId = "crm";
-    internalRoute = `/requests/${record.recordId}`;
-  } else if (record.kind === "task" || record.kind === "review" || record.kind === "audit_event") {
+  } else if (record.kind === "task" || record.kind === "deal" || record.kind === "audit_event") {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
+    if (record.kind === "deal") internalRoute = "/pipeline";
   }
 
   if (!externalUrl && artifactRefs[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {

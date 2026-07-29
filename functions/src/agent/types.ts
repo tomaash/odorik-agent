@@ -1,10 +1,8 @@
 export const knowledgeKinds = [
   "call",
-  "interaction",
   "contact",
-  "service_request",
   "task",
-  "review",
+  "deal",
   "audit_event",
   "context_item",
 ] as const;

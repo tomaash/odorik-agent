@@ -82,75 +82,6 @@ export type InvitationPreview = {
   email: string
 }
 
-export type IntakeListItem = {
-  id: string
-  status: 'open' | 'completed' | 'dismissed'
-  createdAt: string | null
-  requestId: string
-  requestStatus: string
-  revision: number
-  title: string
-  missingInformation: string[]
-  contactName: string | null
-  phone: string | null
-  occurredAt: string | null
-  summary: string | null
-}
-
-export type FieldProposal = {
-  field: 'contactName' | 'requestTitle' | 'serviceType' | 'description' | 'address' | 'requestedTiming' | 'urgency' | 'notes'
-  value: string
-  support: 'explicit' | 'inferred'
-  evidence: Array<{ segmentIndex: number; quote: string }>
-}
-
-export type IntakeDetails = {
-  request: Record<string, unknown> & { id: string; revision: number; missingInformation?: string[] }
-  contact: (Record<string, unknown> & { id: string }) | null
-  interaction: (Record<string, unknown> & {
-    id: string
-    transcript?: string
-    summary?: string
-    from?: string
-    segments?: Array<{
-      speaker?: string
-      text?: string
-      startSeconds?: number
-      endSeconds?: number
-    }>
-  }) | null
-  processingRun: (Record<string, unknown> & { id: string; proposals?: FieldProposal[] }) | null
-  task: (Record<string, unknown> & { id: string; status?: string }) | null
-}
-
-export type RequestStatus = 'new' | 'in_progress' | 'waiting_customer' | 'completed' | 'cancelled'
-
-export type ServiceRequestListItem = {
-  id: string
-  title?: string | null
-  status: RequestStatus
-  revision: number
-  urgency?: 'normal' | 'urgent'
-  serviceType?: string | null
-  description?: string | null
-  requestedTiming?: string | null
-  missingInformation?: string[]
-  createdAt?: string | null
-  updatedAt?: string | null
-  statusChangedAt?: string | null
-  contact: {
-    id: string
-    displayName: string | null
-    phone: string | null
-    email: string | null
-  }
-}
-
-export type ServiceRequestListResponse = {
-  items: ServiceRequestListItem[]
-  counts: Record<RequestStatus, number>
-}
-
 export type ContactListItem = {
   id: string
   displayName?: string | null
@@ -160,19 +91,25 @@ export type ContactListItem = {
   updatedAt?: string | null
 }
 
+export type ContactCall = {
+  id: string
+  from?: string | null
+  to?: string | null
+  status?: string | null
+  summary?: string | null
+  transcript?: string | null
+  language?: string | null
+  durationSeconds?: number | null
+  duration?: number | null
+  odorikTime?: string | null
+  uploadedAt?: string | null
+}
+
 export type ContactDetails = {
   contact: ContactListItem
-  requests: ServiceRequestListItem[]
+  calls: ContactCall[]
   deals: DealItem[]
   tasks: TaskItem[]
-  interactions: Array<Record<string, unknown> & {
-    id: string
-    summary?: string | null
-    transcript?: string | null
-    occurredAt?: string | null
-    createdAt?: string | null
-    durationSeconds?: number | null
-  }>
 }
 
 export type TaskStatus = 'open' | 'completed' | 'dismissed'
@@ -425,6 +362,7 @@ export type SourceConnection = {
   lastSyncAt?: string | null
   lastObservedAt?: string | null
   lastError?: string | null
+  reauthorizationRequired?: boolean
   itemCount: number
   resourceCount: number
   resources: SourceResource[]
@@ -497,34 +435,6 @@ export async function revokeTeamMemberInvitation(invitationId: string) {
 
 export async function removeTeamMember(uid: string) {
   return teamTrpc.team.removeMember.mutate({ uid })
-}
-
-export async function listIntakes(): Promise<IntakeListItem[]> {
-  return trpc.intake.list.query({ limit: 30 }) as Promise<IntakeListItem[]>
-}
-
-export async function getIntake(requestId: string): Promise<IntakeDetails> {
-  return trpc.intake.get.query({ requestId }) as Promise<IntakeDetails>
-}
-
-export async function listServiceRequests(): Promise<ServiceRequestListResponse> {
-  return trpc.serviceRequests.list.query({
-    statuses: ['new', 'in_progress', 'waiting_customer', 'completed', 'cancelled'],
-    limit: 100,
-  }) as Promise<ServiceRequestListResponse>
-}
-
-export async function getServiceRequest(requestId: string): Promise<IntakeDetails> {
-  return trpc.serviceRequests.get.query({ requestId }) as Promise<IntakeDetails>
-}
-
-export async function transitionServiceRequest(input: {
-  requestId: string
-  expectedRevision: number
-  to: RequestStatus
-  note?: string
-}) {
-  return trpc.serviceRequests.transition.mutate(input)
 }
 
 export async function listContacts(): Promise<ContactListItem[]> {

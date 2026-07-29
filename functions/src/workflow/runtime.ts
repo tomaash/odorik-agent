@@ -6,7 +6,7 @@ import {
   type WorkflowSpec,
 } from "@agent-erik/workflow";
 import { db, jsonSafe, timestampToIso } from "../firestore.js";
-import { normalizePhone } from "../crm/process.js";
+import { normalizePhone } from "../phone.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { requestWorkflowTaskApproval } from "../approvals/repository.js";
 import { enabledWorkflows, workflowVersion } from "./repository.js";
@@ -255,7 +255,6 @@ export async function dryRunHistory(input: {
 export function workflowRuntimeFlags(environment = process.env) {
   return {
     enabled: environment.WORKFLOW_ENGINE_ENABLED !== "false",
-    legacyCrmEnabled: environment.LEGACY_CRM_ENABLED !== "false",
   };
 }
 
