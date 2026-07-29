@@ -14,10 +14,10 @@ import {
 } from "../crm/lifecycle.js";
 import { decryptCredentials, encryptCredentials } from "../connectors/credentials.js";
 import {
-  calendarAuthorizationLifetimeMs,
+  googleAuthorizationLifetimeMs,
   revokeGoogleToken,
-} from "../connectors/google-calendar.js";
-import { driveAuthorizationLifetimeMs, driveScopes } from "../connectors/google-drive.js";
+} from "../connectors/google-oauth.js";
+import { driveScopes } from "../connectors/google-drive.js";
 import {
   isThrottled,
   partnerFormSchema,
@@ -163,7 +163,7 @@ test("encrypts connector credentials with authenticated encryption", () => {
 });
 
 test("keeps Google authorization state alive for a manual consent handoff", () => {
-  assert.equal(calendarAuthorizationLifetimeMs, 60 * 60 * 1000);
+  assert.equal(googleAuthorizationLifetimeMs, 60 * 60 * 1000);
 });
 
 test("revokes Google OAuth access with the provider revocation endpoint", async () => {
@@ -224,7 +224,7 @@ test("builds the exact paste-ready Odorik recording destination", () => {
 });
 
 test("keeps Google Drive authorization state alive and defines drive readonly scope", () => {
-  assert.equal(driveAuthorizationLifetimeMs, 60 * 60 * 1000);
+  assert.equal(googleAuthorizationLifetimeMs, 60 * 60 * 1000);
   assert.deepEqual(driveScopes, ["https://www.googleapis.com/auth/drive.readonly"]);
 });
 

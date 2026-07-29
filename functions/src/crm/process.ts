@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
+import { sha256Hex } from "../hash.js";
 import {
   crmModel,
   extractIntake,
@@ -63,9 +63,6 @@ export function canStartProcessingRun(
   return updatedAt !== null && updatedAt < nowMs - processingLeaseMs;
 }
 
-function hash(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
 
 export function normalizePhone(value: string | null | undefined): string | null {
   if (!value) return null;
@@ -93,15 +90,15 @@ export async function processCompletedCall(input: {
   }
 
   const interactionId = `odorik_${input.callId}`;
-  const requestId = `request_${hash(interactionId).slice(0, 24)}`;
-  const taskId = `review_${hash(interactionId).slice(0, 24)}`;
-  const inputDigest = hash(JSON.stringify({
+  const requestId = `request_${sha256Hex(interactionId).slice(0, 24)}`;
+  const taskId = `review_${sha256Hex(interactionId).slice(0, 24)}`;
+  const inputDigest = sha256Hex(JSON.stringify({
     transcript: call.transcript,
     segments: call.segments || [],
     from: call.from || null,
     to: call.to || null,
   }));
-  const runId = `${hash(`${interactionId}:${intakePromptVersion}:${inputDigest}`).slice(0, 32)}`;
+  const runId = `${sha256Hex(`${interactionId}:${intakePromptVersion}:${inputDigest}`).slice(0, 32)}`;
   const runRef = db.doc(companyDocumentPath(input.companyId, "processingRuns", runId));
 
   const shouldProcess = await db.runTransaction(async (transaction) => {
@@ -142,8 +139,8 @@ export async function processCompletedCall(input: {
     });
     const normalizedPhone = normalizePhone(call.from);
     const contactId = normalizedPhone
-      ? `phone_${hash(normalizedPhone).slice(0, 24)}`
-      : `interaction_${hash(interactionId).slice(0, 24)}`;
+      ? `phone_${sha256Hex(normalizedPhone).slice(0, 24)}`
+      : `interaction_${sha256Hex(interactionId).slice(0, 24)}`;
     const now = Timestamp.now();
     const evidenceExpiresAt = Timestamp.fromMillis(now.toMillis() + 90 * 24 * 60 * 60 * 1000);
     const interactionRef = db.doc(

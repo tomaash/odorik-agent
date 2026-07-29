@@ -286,7 +286,7 @@ onMounted(load)
       <article
         v-for="approval in approvals"
         :key="approval.id"
-        class="min-w-0 grid grid-cols-[2.5rem_minmax(0,1fr)] sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-3 sm:gap-4 px-4 sm:px-6 py-4 bg-violet-50/20"
+        class="min-w-0 grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 sm:gap-4 px-4 sm:px-6 py-4 bg-violet-50/20"
       >
         <span class="mt-0.5 w-8 h-8 rounded-md bg-violet-100 text-violet-800 flex items-center justify-center">
           <i class="pi pi-shield" />
@@ -311,29 +311,38 @@ onMounted(load)
           </details>
           <p v-if="approval.executionError" class="text-xs text-amber-800 mt-2 mb-0">{{ approval.executionError }}</p>
           <p class="font-mono text-[.58rem] text-surface-400 mt-2 mb-0">{{ t('approvals.effectId') }} {{ approval.effectDigest.slice(0, 12) }}</p>
-        </div>
-        <div class="col-start-2 sm:col-start-auto flex items-center gap-1 self-center">
-          <template v-if="(approval.status === 'pending' || approval.status === 'execution_failed') && approval.approverUid === authStore.user?.uid">
-            <Button
-              :label="approval.status === 'execution_failed' ? t('approvals.retry') : t('approvals.approve')"
-              icon="pi pi-check"
-              size="small"
-              severity="success"
-              :loading="processingApprovalId === approval.id"
-              @click="approve(approval)"
-            />
+
+          <!-- Decision footer: disclose effects above, then decide. -->
+          <div
+            v-if="(approval.status === 'pending' || approval.status === 'execution_failed') && approval.approverUid === authStore.user?.uid"
+            class="mt-3 pt-3 border-t border-violet-200/80 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2"
+          >
             <Button
               v-if="approval.status === 'pending'"
               :label="t('approvals.reject')"
               icon="pi pi-times"
               size="small"
-              severity="danger"
+              severity="secondary"
               outlined
+              class="w-full sm:w-auto"
               :disabled="Boolean(processingApprovalId)"
               @click="reject(approval)"
             />
-          </template>
-          <span v-else-if="approval.status === 'pending'" class="text-xs text-surface-500">{{ t('approvals.waitingFor', { approver: approval.approverName }) }}</span>
+            <Button
+              :label="approval.status === 'execution_failed' ? t('approvals.retry') : t('approvals.approve')"
+              icon="pi pi-check"
+              size="small"
+              class="w-full sm:w-auto"
+              :loading="processingApprovalId === approval.id"
+              @click="approve(approval)"
+            />
+          </div>
+          <p
+            v-else-if="approval.status === 'pending'"
+            class="mt-3 pt-3 border-t border-violet-200/80 text-xs text-surface-500 mb-0"
+          >
+            {{ t('approvals.waitingFor', { approver: approval.approverName }) }}
+          </p>
         </div>
       </article>
     </div>
@@ -342,7 +351,7 @@ onMounted(load)
       <article
         v-for="task in visibleTasks"
         :key="task.id"
-        class="min-w-0 grid grid-cols-[2.5rem_minmax(0,1fr)] sm:grid-cols-[2.5rem_minmax(0,1fr)_auto] gap-3 sm:gap-4 px-4 sm:px-6 py-4 bg-white/20 hover:bg-white/60 transition"
+        class="min-w-0 grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3 sm:gap-4 px-4 sm:px-6 py-4 bg-white/20 hover:bg-white/60 transition"
       >
         <span :class="[
           'mt-0.5 w-8 h-8 rounded-md flex items-center justify-center',
@@ -376,13 +385,42 @@ onMounted(load)
             <p v-if="task.context.transcriptExcerpt" class="text-xs leading-relaxed text-surface-500 mt-1 mb-0">“{{ task.context.transcriptExcerpt }}”</p>
           </details>
           <p v-if="task.outcomeNote" class="text-xs text-surface-500 mt-2 mb-0">{{ task.outcomeNote }}</p>
-        </div>
-        <div class="col-start-2 sm:col-start-auto flex items-center gap-1 self-center">
-          <template v-if="task.status === 'open'">
-            <Button :label="t('tasks.done')" icon="pi pi-check" size="small" severity="success" outlined @click="openOutcome(task, 'completed')" />
-            <Button icon="pi pi-minus" size="small" severity="secondary" text :aria-label="t('tasks.dismiss')" @click="openOutcome(task, 'dismissed')" />
-          </template>
-          <Button v-else :label="t('tasks.reopen')" icon="pi pi-undo" size="small" severity="secondary" text @click="reopen(task)" />
+
+          <div
+            v-if="task.status === 'open'"
+            class="mt-3 pt-3 border-t border-[var(--hairline)] flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2"
+          >
+            <Button
+              :label="t('tasks.dismiss')"
+              icon="pi pi-minus"
+              size="small"
+              severity="secondary"
+              outlined
+              class="w-full sm:w-auto"
+              @click="openOutcome(task, 'dismissed')"
+            />
+            <Button
+              :label="t('tasks.done')"
+              icon="pi pi-check"
+              size="small"
+              class="w-full sm:w-auto"
+              @click="openOutcome(task, 'completed')"
+            />
+          </div>
+          <div
+            v-else
+            class="mt-3 pt-3 border-t border-[var(--hairline)] flex sm:justify-end"
+          >
+            <Button
+              :label="t('tasks.reopen')"
+              icon="pi pi-undo"
+              size="small"
+              severity="secondary"
+              text
+              class="w-full sm:w-auto"
+              @click="reopen(task)"
+            />
+          </div>
         </div>
       </article>
     </div>
@@ -403,6 +441,7 @@ onMounted(load)
       modal
       :header="dialog === 'create' ? t('tasks.new') : outcome === 'completed' ? t('tasks.completeTitle') : t('tasks.dismissTitle')"
       class="w-[min(34rem,calc(100vw-2rem))]"
+      :close-button-props="{ severity: 'secondary', text: true, rounded: false }"
       @update:visible="(visible) => { if (!visible) dialog = null }"
     >
       <form v-if="dialog === 'create'" class="grid gap-4" @submit.prevent="submitCreate">
@@ -445,9 +484,14 @@ onMounted(load)
           {{ t('tasks.fields.outcome') }}
           <Textarea v-model="outcomeNote" rows="3" autoResize :placeholder="t('tasks.outcomePlaceholder')" />
         </label>
-        <div class="flex justify-end gap-2">
+        <div class="flex justify-end gap-2 pt-2">
           <Button :label="t('common.cancel')" severity="secondary" text type="button" @click="dialog = null" />
-          <Button :label="outcome === 'completed' ? t('tasks.done') : t('tasks.dismiss')" type="submit" :severity="outcome === 'completed' ? 'success' : 'secondary'" :loading="saving" />
+          <Button
+            :label="outcome === 'completed' ? t('tasks.done') : t('tasks.dismiss')"
+            type="submit"
+            :severity="outcome === 'completed' ? undefined : 'secondary'"
+            :loading="saving"
+          />
         </div>
       </form>
     </Dialog>
