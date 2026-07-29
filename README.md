@@ -86,9 +86,11 @@ The existing vertical slice remains useful as a proving ground:
 - The MVP supports one team per user, `admin` and `member` roles, and no
   self-service team creation or team switcher.
 - The signed-in application opens on **Tasks**. **Pipeline** provides one
-  configurable contact-linked case board; **Contacts** joins calls, cases, and
-  tasks; **Ask** stays cited and read-only; and **Sources** manages
-  connectors.
+  configurable contact-linked case board. Every card opens a dedicated case
+  workspace with exact stage movement, linked task controls, case-targeted
+  approvals, explicitly linked source calls, and activity history.
+  **Contacts** joins calls, cases, and tasks; **Ask** stays cited and
+  read-only; and **Sources** manages connectors.
 - A dependency-free shared block language validates and evaluates in both
   browser and Node. Ordered task, create-case, move-case, and one-level factual
   IF/ELSE blocks can preview calls and create deterministic approval requests.

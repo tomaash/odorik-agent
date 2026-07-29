@@ -25,6 +25,7 @@ const router = createRouter({
         { path: '', redirect: '/tasks' },
         { path: 'tasks', name: 'tasks', component: () => import('./views/TasksPage.vue') },
         { path: 'pipeline', name: 'pipeline', component: () => import('./views/PipelinePage.vue') },
+        { path: 'cases/:id', name: 'case', component: () => import('./views/CaseDetailPage.vue') },
         { path: 'operations', redirect: '/tasks' },
         { path: 'decisions/:pathMatch(.*)*', redirect: '/tasks' },
         { path: 'ask', name: 'ask', component: () => import('./views/AssistantPage.vue') },

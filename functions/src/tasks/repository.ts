@@ -75,7 +75,33 @@ export async function activeMember(
 export async function createTask(input: CreateTaskInput) {
   const title = clean(input.title, 300);
   if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Task title is required." });
-  const member = await activeMember(input.companyId, input.assigneeUid);
+  const [member, linkedCase] = await Promise.all([
+    activeMember(input.companyId, input.assigneeUid),
+    input.caseId
+      ? db.doc(companyDocumentPath(input.companyId, "cases", input.caseId)).get()
+      : Promise.resolve(null),
+  ]);
+  if (linkedCase && (
+    !linkedCase.exists
+    || linkedCase.data()?.objectType !== "case"
+    || linkedCase.data()?.archived === true
+  )) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active case." });
+  }
+  const caseContactId = linkedCase ? String(linkedCase.data()?.contactId || "") : null;
+  if (linkedCase && !caseContactId) {
+    throw new TRPCError({
+      code: "PRECONDITION_FAILED",
+      message: "The selected case does not have a valid contact.",
+    });
+  }
+  if (caseContactId && input.contactId && input.contactId !== caseContactId) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "The selected task contact does not match its case.",
+    });
+  }
+  const contactId = caseContactId || input.contactId || null;
   const taskRef = input.deterministicId
     ? db.doc(companyDocumentPath(input.companyId, "workItems", input.deterministicId))
     : db.collection(companyCollectionPath(input.companyId, "workItems")).doc();
@@ -113,7 +139,7 @@ export async function createTask(input: CreateTaskInput) {
       assigneeUid: member.uid,
       assigneeName: member.displayName,
       dueAt,
-      contactId: input.contactId || null,
+      contactId,
       caseId: input.caseId || null,
       callId: input.callId || null,
       source,
@@ -127,6 +153,9 @@ export async function createTask(input: CreateTaskInput) {
     transaction.create(activityRef, {
       aggregateType: "task",
       aggregateId: taskRef.id,
+      ...(input.caseId ? { caseId: input.caseId } : {}),
+      ...(contactId ? { contactId } : {}),
+      ...(input.callId ? { callId: input.callId } : {}),
       type: "task_created",
       actor: {
         kind: input.source?.kind === "workflow" && !input.source.approvalId
@@ -242,6 +271,9 @@ export async function transitionTask(input: {
     transaction.create(activityRef, {
       aggregateType: "task",
       aggregateId: input.taskId,
+      ...(typeof task.data()?.caseId === "string" ? { caseId: task.data()?.caseId } : {}),
+      ...(typeof task.data()?.contactId === "string" ? { contactId: task.data()?.contactId } : {}),
+      ...(typeof task.data()?.callId === "string" ? { callId: task.data()?.callId } : {}),
       type: input.to === "open" ? "task_reopened" : `task_${input.to}`,
       actor: { kind: "user", id: input.actorUid },
       before: { status: before },

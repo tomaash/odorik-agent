@@ -277,7 +277,11 @@ onMounted(load)
             >
               <div class="flex items-start justify-between gap-2">
                 <div class="min-w-0">
-                  <h3 class="text-sm font-semibold leading-snug m-0 break-words">{{ item.title }}</h3>
+                  <h3 class="text-sm font-semibold leading-snug m-0 break-words">
+                    <router-link :to="`/cases/${item.id}`" class="text-[var(--ink)] no-underline hover:text-indigo-700">
+                      {{ item.title }}
+                    </router-link>
+                  </h3>
                   <router-link :to="`/contacts/${item.contactId}`" class="text-xs text-indigo-700 no-underline mt-1 inline-block">
                     {{ item.contactName }}
                   </router-link>

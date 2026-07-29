@@ -188,11 +188,12 @@ was authorized and what the provider actually did.
 ## Small executable language before a universal builder
 
 The current product experiment is a deliberately small block language. A
-completed transcribed call runs ordered internal-task blocks and one-level
-IF/ELSE blocks over stored call duration, contact match, or transcript text.
-Each action has an inseparable named approver and can only create its exact task
-after approval. There are no generic reads, AI drafts, nested expressions,
-free-form decisions, or external writes.
+completed transcribed call runs ordered create-task, create-case, or exact
+move-case blocks and one-level IF/ELSE blocks over stored call duration,
+contact match, or transcript text. Each action has an inseparable named
+approver and can only execute its typed effect after approval. There are no
+generic reads, AI drafts, nested expressions, free-form decisions, or external
+writes.
 
 Conversational workflow authoring becomes worth testing when:
 

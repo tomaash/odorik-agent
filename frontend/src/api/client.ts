@@ -180,9 +180,54 @@ export type CaseItem = {
   ownerUid: string
   ownerName: string
   revision: number
+  callId?: string | null
+  source?: {
+    kind?: 'manual' | 'call' | 'workflow'
+    callId?: string
+    workflowId?: string
+    workflowVersion?: number
+    runId?: string
+    blockId?: string
+    approvalId?: string
+    approvedBy?: string
+  } | null
+  authorization?: {
+    kind?: 'direct_user_action' | 'approval'
+    approvalId?: string
+    approvedBy?: string
+    approvedAt?: string | null
+  } | null
+  archived?: boolean
+  archivedAt?: string | null
+  closedAt?: string | null
   createdAt?: string | null
   updatedAt?: string | null
   stageChangedAt?: string | null
+}
+
+export type CaseActivity = {
+  id: string
+  aggregateType: 'case' | 'task' | 'action_approval' | string
+  aggregateId: string
+  caseId?: string
+  type: string
+  actor?: {
+    kind?: 'user' | 'system'
+    id?: string
+  } | null
+  before?: Record<string, unknown> | null
+  after?: Record<string, unknown> | null
+  createdAt?: string | null
+}
+
+export type CaseDetails = {
+  case: CaseItem
+  pipeline: Pipeline
+  contact: ContactListItem & { missing?: boolean }
+  tasks: TaskItem[]
+  approvals: ActionApprovalItem[]
+  calls: ContactCall[]
+  activity: CaseActivity[]
 }
 
 export type AssistantCitation = {
@@ -533,6 +578,10 @@ export async function updatePipeline(input: {
 
 export async function listCases(contactId?: string): Promise<CaseItem[]> {
   return trpc.cases.list.query({ ...(contactId ? { contactId } : {}), limit: 200 }) as Promise<CaseItem[]>
+}
+
+export async function getCaseDetails(caseId: string): Promise<CaseDetails> {
+  return trpc.cases.get.query({ caseId }) as Promise<CaseDetails>
 }
 
 export async function createCase(input: {
