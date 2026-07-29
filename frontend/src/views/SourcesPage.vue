@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
@@ -58,10 +58,27 @@ const synchronizingId = ref('')
 const pendingDeleteId = ref('')
 const deletingId = ref('')
 const isAdmin = computed(() => auth.access?.admin === true)
+// Every choice that belongs to a source card opens as a modal over that card.
+// Nothing configuration-related renders alongside or above the card grid.
 const drivePickerVisible = computed({
   get: () => driveConnection.value !== null,
   set: (visible: boolean) => {
     if (!visible) closeDrivePicker()
+  },
+})
+const calendarPickerVisible = computed({
+  get: () => calendarConnection.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) closeCalendarPicker()
+  },
+})
+const pendingDeleteConnection = computed(() => (
+  data.value?.connections.find((connection) => connection.id === pendingDeleteId.value) || null
+))
+const deleteConfirmVisible = computed({
+  get: () => pendingDeleteConnection.value !== null,
+  set: (visible: boolean) => {
+    if (!visible && !deletingId.value) pendingDeleteId.value = ''
   },
 })
 const connectionsByAdapter = computed(() => {
@@ -284,8 +301,7 @@ async function openCalendarPicker(connection: SourceConnection) {
   error.value = ''
   calendarConnection.value = connection
   calendars.value = []
-  await nextTick()
-  document.getElementById('calendar-picker')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  selectedCalendarIds.value = []
   try {
     calendars.value = await getGoogleCalendars(connection.id)
     selectedCalendarIds.value = calendars.value
@@ -361,6 +377,13 @@ async function openDrivePicker(connection: SourceConnection) {
   } finally {
     loadingFolders.value = false
   }
+}
+
+function closeCalendarPicker() {
+  if (saving.value) return
+  calendarConnection.value = null
+  calendars.value = []
+  selectedCalendarIds.value = []
 }
 
 function closeDrivePicker() {
@@ -484,12 +507,28 @@ onUnmounted(() => {
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
 
-    <Card id="calendar-picker" v-if="calendarConnection && isAdmin" class="scroll-mt-4 rounded-lg border border-indigo-200 mb-6 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6">
-      <template #title>{{ t('sources.calendarPicker.title') }}</template>
-      <template #subtitle>{{ t('sources.calendarPicker.description') }}</template>
-      <template #content>
-        <div v-if="loadingCalendars" class="flex justify-center py-10"><ProgressSpinner /></div>
-        <form v-else class="grid gap-3" @submit.prevent="saveCalendarSelection">
+    <Dialog
+      v-model:visible="calendarPickerVisible"
+      modal
+      blockScroll
+      dismissableMask
+      :draggable="false"
+      :header="t('sources.calendarPicker.title')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(40rem,calc(100vw-4rem))] max-h-[calc(100dvh-4rem)] my-auto"
+      contentClass="!p-0 flex flex-col min-h-0 min-w-0 overflow-hidden"
+    >
+      <div v-if="loadingCalendars" class="flex flex-col items-center justify-center gap-3 px-4 py-14">
+        <ProgressSpinner />
+      </div>
+
+      <form v-else class="flex flex-col min-h-0 min-w-0 overflow-hidden" @submit.prevent="saveCalendarSelection">
+        <div class="flex-1 min-h-0 grid content-start gap-3 overflow-y-auto px-4 py-4 sm:px-6">
+          <div>
+            <p class="m-0 text-sm leading-relaxed text-surface-500">{{ t('sources.calendarPicker.description') }}</p>
+            <p v-if="calendarConnection?.accountLabel" class="m-0 mt-1 text-sm font-medium text-surface-700 break-all">
+              {{ calendarConnection.accountLabel }}
+            </p>
+          </div>
           <label
             v-for="calendar in calendars"
             :key="calendar.id"
@@ -512,13 +551,26 @@ onUnmounted(() => {
           </label>
           <p v-if="calendars.length === 0" class="text-sm text-surface-500">{{ t('sources.calendarPicker.none') }}</p>
           <Message severity="warn" :closable="false">{{ t('sources.calendarPicker.privacy') }}</Message>
-          <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 mt-1">
-            <Button :label="t('common.cancel')" severity="secondary" text type="button" @click="calendarConnection = null" />
-            <Button :label="t('sources.calendarPicker.submit')" icon="pi pi-check" type="submit" :loading="saving" />
-          </div>
-        </form>
-      </template>
-    </Card>
+        </div>
+
+        <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+          <Button
+            :label="t('common.cancel')"
+            severity="secondary"
+            text
+            type="button"
+            :disabled="saving"
+            @click="closeCalendarPicker"
+          />
+          <Button
+            :label="t('sources.calendarPicker.submit')"
+            icon="pi pi-check"
+            type="submit"
+            :loading="saving"
+          />
+        </div>
+      </form>
+    </Dialog>
 
     <Dialog
       v-model:visible="drivePickerVisible"
@@ -727,6 +779,44 @@ onUnmounted(() => {
       </form>
     </Dialog>
 
+    <Dialog
+      v-model:visible="deleteConfirmVisible"
+      modal
+      blockScroll
+      :dismissableMask="!deletingId"
+      :closable="!deletingId"
+      :draggable="false"
+      :header="t('sources.deleteConnection')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(32rem,calc(100vw-4rem))] my-auto"
+      contentClass="!p-0 flex flex-col min-w-0 overflow-hidden"
+    >
+      <div v-if="pendingDeleteConnection" class="grid gap-2 px-4 py-4 sm:px-6">
+        <div class="font-semibold text-red-950">
+          {{ t('sources.deleteConfirmTitle', {
+            name: pendingDeleteConnection.accountLabel || pendingDeleteConnection.displayName,
+          }) }}
+        </div>
+        <p class="m-0 text-sm text-red-900/80 leading-relaxed">{{ t('sources.deleteConfirmDescription') }}</p>
+      </div>
+      <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+        <Button
+          :label="t('common.cancel')"
+          severity="secondary"
+          text
+          type="button"
+          :disabled="Boolean(deletingId)"
+          @click="pendingDeleteId = ''"
+        />
+        <Button
+          :label="t('sources.deletePermanently')"
+          icon="pi pi-trash"
+          severity="danger"
+          :loading="Boolean(deletingId)"
+          @click="pendingDeleteConnection && deleteConnection(pendingDeleteConnection)"
+        />
+      </div>
+    </Dialog>
+
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <div v-else class="grid gap-5 lg:grid-cols-2">
@@ -849,6 +939,29 @@ onUnmounted(() => {
                   :value="connectionStatusLabel(connection)"
                   :severity="connectionStatusSeverity(connection)"
                   rounded
+                />
+              </div>
+
+              <div
+                v-if="connection.reauthorizationRequired"
+                class="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3"
+              >
+                <div class="flex items-start gap-2">
+                  <i class="pi pi-exclamation-triangle mt-0.5 text-amber-700" />
+                  <div class="min-w-0">
+                    <div class="text-sm font-semibold text-amber-950">{{ t('sources.reauthorize.title') }}</div>
+                    <p class="m-0 mt-1 text-xs leading-relaxed text-amber-900/80">
+                      {{ t('sources.reauthorize.description') }}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  v-if="isAdmin"
+                  :label="t('sources.reauthorize.action')"
+                  icon="pi pi-refresh"
+                  size="small"
+                  class="mt-3 w-full sm:w-auto"
+                  @click="addConnection(adapter)"
                 />
               </div>
 
@@ -990,32 +1103,6 @@ onUnmounted(() => {
                 />
               </div>
 
-              <div
-                v-if="pendingDeleteId === connection.id"
-                role="alert"
-                class="mt-3 rounded-2xl border border-red-200 bg-red-50 p-3.5 sm:p-4"
-              >
-                <div class="font-semibold text-red-950">
-                  {{ t('sources.deleteConfirmTitle', { name: connection.accountLabel || connection.displayName }) }}
-                </div>
-                <p class="text-sm text-red-900/80 leading-relaxed my-2">{{ t('sources.deleteConfirmDescription') }}</p>
-                <div class="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-                  <Button
-                    :label="t('common.cancel')"
-                    severity="secondary"
-                    text
-                    :disabled="deletingId === connection.id"
-                    @click="pendingDeleteId = ''"
-                  />
-                  <Button
-                    :label="t('sources.deletePermanently')"
-                    icon="pi pi-trash"
-                    severity="danger"
-                    :loading="deletingId === connection.id"
-                    @click="deleteConnection(connection)"
-                  />
-                </div>
-              </div>
             </article>
           </div>
           <div v-else-if="adapter.availability !== 'available'" class="rounded-2xl bg-surface-50 border border-dashed border-surface-300 p-4 text-sm text-surface-500">

@@ -2,7 +2,7 @@ import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/fire
 import { FieldValue } from "firebase-admin/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { api } from "./api.js";
-import { processCompletedCall, shouldProcessCallUpdate } from "./crm/process.js";
+import { projectCallContact, shouldProcessCallUpdate } from "./calls.js";
 import { synchronizeKnowledgeRecord } from "./sync-qdrant.js";
 import {
   connectorCredentialKey,
@@ -27,31 +27,6 @@ export { api };
 
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
 
-export const processCallCrm = onDocumentUpdated(
-  {
-    document: "companies/{companyId}/calls/{callId}",
-    database: "odorik",
-    region: "europe-west3",
-    timeoutSeconds: 300,
-    memory: "512MiB",
-    maxInstances: 3,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [geminiApiKey],
-  },
-  async (event) => {
-    const before = event.data?.before.data();
-    const after = event.data?.after.data();
-    if (!shouldProcessCallUpdate(before, after)) return;
-    const flags = workflowRuntimeFlags();
-    if (!flags.legacyCrmEnabled) return;
-    await processCompletedCall({
-      companyId: event.params.companyId,
-      callId: event.params.callId,
-      apiKey: geminiApiKey.value(),
-    });
-  },
-);
-
 export const processCallWorkflows = onDocumentUpdated(
   {
     document: "companies/{companyId}/calls/{callId}",
@@ -66,6 +41,16 @@ export const processCallWorkflows = onDocumentUpdated(
     const before = event.data?.before.data();
     const after = event.data?.after.data();
     if (!shouldProcessCallUpdate(before, after)) return;
+
+    // The caller reaches the internal CRM whether or not a workflow matches,
+    // and always before a workflow evaluates `caller.hasContact`. Running both
+    // in one trigger keeps that ordering deterministic.
+    await projectCallContact({
+      companyId: event.params.companyId,
+      callId: event.params.callId,
+      call: after,
+    });
+
     const flags = workflowRuntimeFlags();
     if (!flags.enabled) return;
     await runEnabledWorkflowsForCall({

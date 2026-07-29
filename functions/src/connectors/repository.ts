@@ -81,6 +81,7 @@ export async function listSources(companyId: string) {
           ? stats.lastSyncAt
           : null,
       lastError: typeof stats.lastError === "string" ? stats.lastError : null,
+      reauthorizationRequired: data.reauthorizationRequired === true,
       itemCount: Number(stats.itemCount || resources.reduce((sum, item) => sum + item.itemCount, 0)),
       resourceCount: resources.length,
       createdAt: typeof data.createdAt === "string" ? data.createdAt : null,

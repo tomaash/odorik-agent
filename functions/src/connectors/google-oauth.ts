@@ -53,6 +53,24 @@ export const googleAuthorizationLifetimeMs = 60 * 60 * 1000;
 /** Refresh this long before expiry so an in-flight request cannot race it. */
 const refreshSkewMs = 60_000;
 
+/**
+ * The grant itself is gone — the user revoked access, or the refresh token
+ * expired. No retry can fix this; only a fresh consent can. Google reports it
+ * as `invalid_grant`, and an unverified app in testing mode hits it every
+ * seven days, so it needs to be a first-class state rather than a stray 400.
+ */
+export class GoogleReauthorizationRequiredError extends Error {
+  readonly code = "GOOGLE_REAUTHORIZATION_REQUIRED";
+  constructor(public readonly displayName: string) {
+    super(`${displayName} access has expired. Reconnect the account to continue.`);
+    this.name = "GoogleReauthorizationRequiredError";
+  }
+}
+
+function isInvalidGrant(body: GoogleTokens): boolean {
+  return body.error === "invalid_grant";
+}
+
 export function connectionRef(companyId: string, connectionId: string) {
   return db.doc(companyDocumentPath(companyId, "connections", connectionId));
 }
@@ -226,6 +244,7 @@ export async function completeGoogleAuthorization(
     accountLabel: providerAccountId,
     providerAccountId,
     status: "active",
+    reauthorizationRequired: false,
     auth: {
       kind: "oauth2",
       credentialMode: "encrypted",
@@ -316,11 +335,21 @@ export async function authorizedGoogleConnection(
     }),
     signal: AbortSignal.timeout(30_000),
   });
-  const tokenBody = requireGoogleSuccess(
-    connector.displayName,
-    response,
-    await response.json() as GoogleTokens,
-  );
+  const refreshBody = await response.json() as GoogleTokens;
+  if (!response.ok && isInvalidGrant(refreshBody)) {
+    const error = new GoogleReauthorizationRequiredError(connector.displayName);
+    // Park the connection in a state the Sources screen can act on, instead of
+    // leaving a generic 400 that looks like a transient provider fault.
+    await connection.ref.set({
+      status: "attention",
+      reauthorizationRequired: true,
+      stats: { lastError: error.message },
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    throw error;
+  }
+
+  const tokenBody = requireGoogleSuccess(connector.displayName, response, refreshBody);
   if (!tokenBody.access_token) throw new Error("Google access token refresh failed");
   const updated: GoogleCredential = {
     ...credentials,
@@ -330,6 +359,7 @@ export async function authorizedGoogleConnection(
   };
   await connection.ref.set({
     credentialCiphertext: encryptCredentials(updated, input.credentialKey),
+    reauthorizationRequired: false,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   return { accessToken: updated.accessToken, connection };

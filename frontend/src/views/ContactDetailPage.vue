@@ -7,7 +7,6 @@ import Card from 'primevue/card'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
-import RequestCard from '../components/RequestCard.vue'
 import { useContactsStore } from '../stores/contacts'
 
 const route = useRoute()
@@ -15,9 +14,9 @@ const router = useRouter()
 const { t, locale } = useI18n()
 const store = useContactsStore()
 const details = computed(() => store.current)
-const interactions = computed(() => [...(details.value?.interactions || [])].sort((a, b) => {
-  const aTime = new Date(String(a.occurredAt || a.createdAt || 0)).getTime()
-  const bTime = new Date(String(b.occurredAt || b.createdAt || 0)).getTime()
+const calls = computed(() => [...(details.value?.calls || [])].sort((a, b) => {
+  const aTime = new Date(String(a.odorikTime || a.uploadedAt || 0)).getTime()
+  const bTime = new Date(String(b.odorikTime || b.uploadedAt || 0)).getTime()
   return bTime - aTime
 }))
 const tasks = computed(() => [...(details.value?.tasks || [])].sort((a, b) => {
@@ -108,29 +107,22 @@ store.load(String(route.params.id))
       </div>
 
       <section class="min-w-0 mb-8">
-        <h2 class="text-base font-semibold mb-3">{{ t('contacts.calls') }} <span class="text-surface-400">{{ interactions.length }}</span></h2>
+        <h2 class="text-base font-semibold mb-3">{{ t('contacts.calls') }} <span class="text-surface-400">{{ calls.length }}</span></h2>
         <div class="grid lg:grid-cols-2 gap-4">
-          <Card v-for="interaction in interactions" :key="interaction.id" class="min-w-0 overflow-hidden border border-surface-200 shadow-none rounded-lg [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-5">
-            <template #title><div class="flex items-center gap-2 text-sm"><i class="pi pi-phone text-indigo-700" />{{ formatDate(interaction.occurredAt || interaction.createdAt) }}</div></template>
-            <template #subtitle><span v-if="interaction.durationSeconds">{{ formatDuration(interaction.durationSeconds) }}</span></template>
+          <Card v-for="call in calls" :key="call.id" class="min-w-0 overflow-hidden border border-surface-200 shadow-none rounded-lg [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-5">
+            <template #title><div class="flex items-center gap-2 text-sm"><i class="pi pi-phone text-indigo-700" />{{ formatDate(call.odorikTime || call.uploadedAt) }}</div></template>
+            <template #subtitle><span v-if="call.durationSeconds || call.duration">{{ formatDuration(call.durationSeconds || call.duration || 0) }}</span></template>
             <template #content>
-              <p class="m-0 leading-relaxed break-words text-sm">{{ interaction.summary || t('contacts.noSummary') }}</p>
-              <details v-if="interaction.transcript" class="mt-3">
-                <summary class="cursor-pointer text-xs font-medium text-indigo-800">{{ t('requests.showTranscript') }}</summary>
-                <p class="whitespace-pre-wrap break-words leading-relaxed text-sm mt-3 mb-0">{{ interaction.transcript }}</p>
+              <p class="m-0 leading-relaxed break-words text-sm">{{ call.summary || t('contacts.noSummary') }}</p>
+              <details v-if="call.transcript" class="mt-3">
+                <summary class="cursor-pointer text-xs font-medium text-indigo-800">{{ t('contacts.showTranscript') }}</summary>
+                <p class="whitespace-pre-wrap break-words leading-relaxed text-sm mt-3 mb-0">{{ call.transcript }}</p>
               </details>
             </template>
           </Card>
-          <Card v-if="interactions.length === 0" class="border border-surface-200 shadow-none rounded-lg lg:col-span-2"><template #content><p class="text-surface-500 text-center py-8 m-0">{{ t('contacts.noCalls') }}</p></template></Card>
+          <Card v-if="calls.length === 0" class="border border-surface-200 shadow-none rounded-lg lg:col-span-2"><template #content><p class="text-surface-500 text-center py-8 m-0">{{ t('contacts.noCalls') }}</p></template></Card>
         </div>
       </section>
-
-      <details v-if="details.requests.length" class="hairline-card p-4">
-        <summary class="cursor-pointer text-sm font-semibold">{{ t('contacts.requests') }} <span class="text-surface-400">{{ details.requests.length }}</span></summary>
-        <div class="grid sm:grid-cols-2 gap-4 mt-4">
-          <RequestCard v-for="request in details.requests" :key="request.id" :item="request" />
-        </div>
-      </details>
     </template>
   </section>
 </template>

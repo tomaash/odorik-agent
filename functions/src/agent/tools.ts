@@ -211,18 +211,18 @@ function extractCitationInfo(record: CompanyRecord): {
     } else if (adapterId === "odorik") {
       internalRoute = "/contacts";
     }
-  } else if (record.kind === "call" || record.kind === "interaction") {
+  } else if (record.kind === "call") {
     adapterId = "odorik";
-    internalRoute = "/contacts";
+    internalRoute = typeof data.contactId === "string"
+      ? `/contacts/${data.contactId}`
+      : "/contacts";
   } else if (record.kind === "contact") {
     adapterId = "crm";
     internalRoute = `/contacts/${record.recordId}`;
-  } else if (record.kind === "service_request") {
-    adapterId = "crm";
-    internalRoute = `/requests/${record.recordId}`;
-  } else if (record.kind === "task" || record.kind === "review" || record.kind === "audit_event") {
+  } else if (record.kind === "task" || record.kind === "deal" || record.kind === "audit_event") {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
+    if (record.kind === "deal") internalRoute = "/pipeline";
   }
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
@@ -236,10 +236,10 @@ function extractCitationInfo(record: CompanyRecord): {
     excerptText = excerpt(data.summary);
   } else if (record.kind === "contact") {
     excerptText = excerpt([data.displayName, data.phoneE164, data.email].filter(Boolean).join(" · "));
-  } else if (record.kind === "service_request") {
-    excerptText = excerpt([data.title, data.serviceType, data.description, data.address].filter(Boolean).join(" — "));
+  } else if (record.kind === "deal") {
+    excerptText = excerpt([data.title, data.stageName, data.contactName].filter(Boolean).join(" · "));
   } else if (record.kind === "task") {
-    excerptText = excerpt(`${data.type || "Task"} · Status: ${data.status || "unknown"}`);
+    excerptText = excerpt(`${data.title || "Task"} · Status: ${data.status || "unknown"}`);
   } else {
     excerptText = excerpt(record.title || record.recordId);
   }
@@ -343,8 +343,8 @@ export class CompanyFactTools implements AgentToolExecutor {
         if (!adapterId) {
           if (externalUrl?.includes("drive.google.com") || hit.sourcePath.includes("drive")) adapterId = "google_drive";
           else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) adapterId = "google_calendar";
-          else if (hit.kind === "call" || hit.kind === "interaction") adapterId = "odorik";
-          else if (hit.kind === "contact" || hit.kind === "service_request") adapterId = "crm";
+          else if (hit.kind === "call") adapterId = "odorik";
+          else if (hit.kind === "contact" || hit.kind === "deal") adapterId = "crm";
         }
 
         const citation = this.citations.add({
