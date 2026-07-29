@@ -19,7 +19,7 @@ const localeOptions = [
   { label: 'EN', value: 'en' },
 ]
 const navigation = [
-  { to: '/tasks', icon: 'pi pi-check-square', label: 'nav.tasks' },
+  { to: '/tasks', icon: 'pi pi-inbox', label: 'nav.work' },
   { to: '/pipeline', icon: 'pi pi-th-large', label: 'nav.pipeline' },
   { to: '/contacts', icon: 'pi pi-users', label: 'nav.contacts' },
   { to: '/ask', icon: 'pi pi-comment', label: 'nav.ask' },

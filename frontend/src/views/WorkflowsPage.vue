@@ -13,7 +13,7 @@ import {
 } from '../api/client'
 
 const router = useRouter()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const items = ref<WorkflowListItem[]>([])
 const loading = ref(true)
 const creating = ref(false)
@@ -49,6 +49,29 @@ function runSummary(item: WorkflowListItem) {
   const duplicate = item.recentRuns.duplicate || 0
   if (!created && !duplicate) return t('workflows.noRecentRuns')
   return t('workflows.recentTaskRuns', { created, duplicate })
+}
+
+function exceptionSummary(item: NonNullable<WorkflowListItem['recentExceptions']>[number]) {
+  return t(`workflows.skipReason.${item.reason}`, { count: item.matches })
+}
+
+function exceptionContext(item: NonNullable<WorkflowListItem['recentExceptions']>[number]) {
+  const action = item.actionKind === 'action.task.create'
+    ? t('workflows.taskBlock')
+    : item.actionKind === 'action.case.create'
+      ? t('workflows.createCaseBlock')
+      : t('workflows.moveCaseBlock')
+  const occurredAt = item.occurredAt ? new Date(item.occurredAt) : null
+  const date = occurredAt && Number.isFinite(occurredAt.getTime())
+    ? new Intl.DateTimeFormat(locale.value === 'cs' ? 'cs-CZ' : 'en', {
+        dateStyle: 'medium',
+      }).format(occurredAt)
+    : '—'
+  return t('workflows.exceptionContext', {
+    action,
+    date,
+    call: item.callId.slice(0, 10) || '—',
+  })
 }
 
 onMounted(load)
@@ -92,6 +115,17 @@ onMounted(load)
           <p class="font-mono text-[.65rem] text-surface-500 mt-2 mb-0">
             {{ runSummary(item) }}
           </p>
+          <div v-if="item.recentExceptions?.length" class="mt-3 grid gap-1.5">
+            <p
+              v-for="exception in item.recentExceptions.slice(0, 2)"
+              :key="`${exception.runId}-${exception.blockId}`"
+              class="m-0 rounded border border-amber-200 bg-amber-50 px-2.5 py-2 text-xs text-amber-900"
+            >
+              <i class="pi pi-info-circle mr-1" />{{ exceptionSummary(exception) }}
+              <span class="block font-mono text-[.58rem] text-amber-700 mt-1">{{ exceptionContext(exception) }}</span>
+              <span class="block font-mono text-[.58rem] text-amber-700 mt-0.5">{{ t('workflows.noActionPerformed') }}</span>
+            </p>
+          </div>
         </div>
         <span class="inline-flex items-center justify-end gap-2 text-xs font-medium text-surface-500">
           {{ t('workflows.edit') }} <i class="pi pi-chevron-right text-[.65rem]" />

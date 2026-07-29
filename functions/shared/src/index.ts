@@ -9,7 +9,21 @@ export type TaskRecipe = {
   assigneeUid: string;
   assigneeName: string;
   dueAfterDays?: number | null;
+  // Older schema-v4 task blocks did not declare a subject. An absent subject
+  // retains their deployed behavior: keep the source call and link a resolved
+  // contact when one exists. Newly created blocks always set this explicitly.
+  subject?: TaskSubject;
 };
+
+export type TaskSubject =
+  | { kind: "internal" }
+  | { kind: "contact" }
+  | {
+      kind: "matching_case";
+      pipelineId: "default";
+      stageId: string;
+      stageName: string;
+    };
 
 export type RequiredApproval = {
   kind: "required";
@@ -158,6 +172,9 @@ export type TaskRecipePreview = {
   approverUid: string;
   approverName: string;
   dueAt: string | null;
+  subject: TaskSubject | null;
+  caseId: string | null;
+  caseTitle: string | null;
   context: CallTaskContext;
 };
 
@@ -196,11 +213,12 @@ export type ActionPreview = TaskRecipePreview | CreateCasePreview | MoveCasePrev
 export type ActionSkipReason =
   | "contact_required"
   | "no_matching_case"
-  | "ambiguous_case";
+  | "ambiguous_case"
+  | "target_unavailable";
 
 export type ActionSkip = {
   blockId: string;
-  kind: CreateCaseBlock["kind"] | MoveCaseBlock["kind"];
+  kind: ActionBlock["kind"];
   reason: ActionSkipReason;
   matches: number;
 };
@@ -240,6 +258,7 @@ export function createTaskBlock(input: {
       assigneeUid: input.assigneeUid,
       assigneeName: input.assigneeName,
       dueAfterDays: 1,
+      subject: { kind: "contact" },
     },
     approval: {
       kind: "required",
@@ -476,6 +495,43 @@ function validateTask(
       `${path}.dueAfterDays`,
       "Due offset must be a whole number from 0 to 365.",
     ));
+  }
+  if (task.subject !== undefined) {
+    if (!task.subject || typeof task.subject !== "object") {
+      errors.push(issue(
+        "task.subject_invalid",
+        `${path}.subject`,
+        "Choose what this task is about.",
+      ));
+    } else if (task.subject.kind === "matching_case") {
+      if (typeof task.subject.pipelineId !== "string" || !task.subject.pipelineId.trim()) {
+        holes.push(issue(
+          "task.subject_pipeline_empty",
+          `${path}.subject.pipelineId`,
+          "Choose the case pipeline.",
+        ));
+      }
+      if (typeof task.subject.stageId !== "string" || !task.subject.stageId.trim()) {
+        holes.push(issue(
+          "task.subject_stage_empty",
+          `${path}.subject.stageId`,
+          "Choose the case stage to match.",
+        ));
+      }
+      if (typeof task.subject.stageName !== "string" || !task.subject.stageName.trim()) {
+        holes.push(issue(
+          "task.subject_stage_name_empty",
+          `${path}.subject.stageName`,
+          "The matching case stage needs a name.",
+        ));
+      }
+    } else if (task.subject.kind !== "internal" && task.subject.kind !== "contact") {
+      errors.push(issue(
+        "task.subject_unsupported",
+        `${path}.subject.kind`,
+        "This task subject is not supported.",
+      ));
+    }
   }
 }
 
@@ -872,6 +928,7 @@ function previewTaskBlock(
   block: CreateTaskBlock,
   context: CallTaskContext,
   now: Date,
+  match: CaseContext | null = null,
 ): TaskRecipePreview {
   return {
     kind: "task.create",
@@ -885,6 +942,9 @@ function previewTaskBlock(
     approverUid: block.approval.approverUid,
     approverName: block.approval.approverName,
     dueAt: resolveTaskDueAt(block.task.dueAfterDays, now),
+    subject: block.task.subject || null,
+    caseId: match?.id || null,
+    caseTitle: match?.title || null,
     // Conditions may inspect the complete transcript, but tasks should retain
     // only the compact, human-readable context needed to complete the work.
     context: {
@@ -911,7 +971,40 @@ function previewActionBlock(
   now: Date,
 ): { action?: ActionPreview; skipped?: ActionSkip } {
   if (block.kind === "action.task.create") {
-    return { action: previewTaskBlock(block, context, now) };
+    const subject = block.task.subject;
+    // Compatibility for deployed schema-v4 blocks: retain the original
+    // contact-if-resolved behavior when no explicit subject was stored.
+    if (!subject || subject.kind === "internal") {
+      return { action: previewTaskBlock(block, context, now) };
+    }
+    if (!context.callerHasContact) {
+      return {
+        skipped: {
+          blockId: block.id,
+          kind: block.kind,
+          reason: "contact_required",
+          matches: 0,
+        },
+      };
+    }
+    if (subject.kind === "contact") {
+      return { action: previewTaskBlock(block, context, now) };
+    }
+    const matches = (context.cases || []).filter((candidate) => (
+      candidate.pipelineId === subject.pipelineId
+      && candidate.stageId === subject.stageId
+    ));
+    if (matches.length !== 1) {
+      return {
+        skipped: {
+          blockId: block.id,
+          kind: block.kind,
+          reason: matches.length === 0 ? "no_matching_case" : "ambiguous_case",
+          matches: matches.length,
+        },
+      };
+    }
+    return { action: previewTaskBlock(block, context, now, matches[0]!) };
   }
   if (!context.callerHasContact) {
     return {

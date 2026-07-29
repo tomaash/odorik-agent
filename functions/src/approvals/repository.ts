@@ -31,15 +31,55 @@ type ExecutionStatus =
 
 const executionLeaseMs = 5 * 60 * 1_000;
 
-function caseIdForAction(value: unknown): string | null {
-  if (!value || typeof value !== "object") return null;
-  const action = value as { kind?: unknown; caseId?: unknown };
+type ApprovalScope = {
+  contactId: string | null;
+  callId: string;
+  caseId: string | null;
+};
+
+function scopeForAction(value: unknown): ApprovalScope {
+  if (!value || typeof value !== "object") {
+    return { contactId: null, callId: "", caseId: null };
+  }
+  const action = value as {
+    kind?: unknown;
+    contactId?: unknown;
+    callId?: unknown;
+    caseId?: unknown;
+  };
+  const caseId = (
+    (action.kind === "case.move" || action.kind === "task.create")
+    && typeof action.caseId === "string"
+    && action.caseId
+  )
+    ? action.caseId
+    : null;
+  return {
+    contactId: typeof action.contactId === "string" && action.contactId
+      ? action.contactId
+      : null,
+    callId: typeof action.callId === "string" ? action.callId : "",
+    caseId,
+  };
+}
+
+function caseIdForApproval(data: FirebaseFirestore.DocumentData): string | null {
+  if (typeof data.scope?.caseId === "string" && data.scope.caseId) {
+    return data.scope.caseId;
+  }
+  const action = data.action as { kind?: unknown; caseId?: unknown } | undefined;
   if (
-    (action.kind === "case.create" || action.kind === "case.move")
+    (action?.kind === "case.move" || action?.kind === "task.create")
     && typeof action.caseId === "string"
     && action.caseId
   ) return action.caseId;
   return null;
+}
+
+function resultForAction(action: WorkflowAction): { kind: string; id: string } {
+  if (action.kind === "task.create") return { kind: "task", id: action.taskId };
+  if (action.kind === "case.create") return { kind: "case", id: action.caseId };
+  return { kind: "case_movement", id: action.movementId };
 }
 
 function inferredDecision(data: FirebaseFirestore.DocumentData): DecisionStatus {
@@ -78,9 +118,21 @@ export async function requestWorkflowActionApproval(input: {
 }) {
   const approver = await activeMember(input.companyId, input.approverUid);
   let action = parseWorkflowAction(input.action);
+  let linkedCaseRef: FirebaseFirestore.DocumentReference | null = null;
+  let matchingCasesQuery: FirebaseFirestore.Query | null = null;
   if (action.kind === "task.create") {
     const assignee = await activeMember(input.companyId, action.assigneeUid);
     action = { ...action, assigneeName: assignee.displayName };
+    if (action.caseId) {
+      linkedCaseRef = db.doc(
+        companyDocumentPath(input.companyId, "cases", action.caseId),
+      );
+    }
+    if (action.subject?.kind === "matching_case" && action.contactId) {
+      matchingCasesQuery = db.collection(
+        companyCollectionPath(input.companyId, "cases"),
+      ).where("contactId", "==", action.contactId);
+    }
   } else if (action.kind === "case.create") {
     const [owner, stage] = await Promise.all([
       activeMember(input.companyId, action.ownerUid),
@@ -97,6 +149,9 @@ export async function requestWorkflowActionApproval(input: {
       fromStageName: from.name,
       toStageName: to.name,
     };
+    linkedCaseRef = db.doc(
+      companyDocumentPath(input.companyId, "cases", action.caseId),
+    );
   }
   const approvalRef = db.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
@@ -105,11 +160,68 @@ export async function requestWorkflowActionApproval(input: {
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
   const digest = actionEffectDigest(action);
-  const caseId = caseIdForAction(action);
+  const scope = scopeForAction(action);
+  const caseId = scope.caseId;
+  const taskMatchingSubject = action.kind === "task.create"
+    && action.subject?.kind === "matching_case"
+    ? action.subject
+    : null;
   return db.runTransaction(async (transaction) => {
     const existing = await transaction.get(approvalRef);
     if (existing.exists) {
       return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
+    }
+    const linkedCase = linkedCaseRef && !matchingCasesQuery
+      ? await transaction.get(linkedCaseRef)
+      : null;
+    const matchingCases = matchingCasesQuery
+      ? await transaction.get(matchingCasesQuery)
+      : null;
+    if (action.kind === "task.create" && action.caseId) {
+      const selectedCase = matchingCases
+        ? matchingCases.docs.find((document) => document.id === action.caseId) || null
+        : linkedCase;
+      const activeMatches = matchingCases?.docs.filter((document) => {
+        const data = document.data();
+        return data.objectType === "case"
+          && data.archived !== true
+          && String(data.pipelineId || "default") === taskMatchingSubject?.pipelineId
+          && data.stageId === taskMatchingSubject?.stageId;
+      });
+      if (
+        !selectedCase?.exists
+        || selectedCase.data()?.objectType !== "case"
+        || selectedCase.data()?.archived === true
+        || selectedCase.data()?.contactId !== action.contactId
+        || (
+          taskMatchingSubject
+          && (
+            activeMatches?.length !== 1
+            || activeMatches[0]?.id !== action.caseId
+          )
+        )
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "The task's selected case is no longer an active unique match.",
+        });
+      }
+    }
+    if (action.kind === "case.move") {
+      if (
+        !linkedCase?.exists
+        || linkedCase.data()?.objectType !== "case"
+        || linkedCase.data()?.archived === true
+        || linkedCase.data()?.contactId !== action.contactId
+        || String(linkedCase.data()?.pipelineId || "default") !== action.pipelineId
+        || linkedCase.data()?.stageId !== action.fromStageId
+        || Number(linkedCase.data()?.revision || 0) !== action.expectedRevision
+      ) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "The selected case changed before the approval could be requested.",
+        });
+      }
     }
     const now = Timestamp.now();
     const approval = {
@@ -120,6 +232,8 @@ export async function requestWorkflowActionApproval(input: {
       approverUid: approver.uid,
       approverName: approver.displayName,
       action,
+      scope,
+      result: null,
       effectDigest: digest,
       effectDigestVersion: "canonical-v1",
       source: input.source,
@@ -151,23 +265,23 @@ export async function requestWorkflowActionApproval(input: {
 export async function listActionApprovals(input: {
   companyId: string;
   status?: ApprovalStatus;
+  statuses?: ApprovalStatus[];
   approverUid?: string;
   limit?: number;
 }) {
-  const snapshot = await db.collection(
+  let query: FirebaseFirestore.Query = db.collection(
     companyCollectionPath(input.companyId, "actionApprovals"),
-  )
+  );
+  const statuses = [...new Set(input.statuses || (input.status ? [input.status] : []))];
+  if (statuses.length === 1) query = query.where("status", "==", statuses[0]);
+  if (statuses.length > 1) query = query.where("status", "in", statuses);
+  if (input.approverUid) query = query.where("approverUid", "==", input.approverUid);
+  const snapshot = await query
     .orderBy("createdAt", "desc")
     .limit(Math.min(input.limit || 100, 200))
     .get();
   return jsonSafe(snapshot.docs
-    .filter((document) => {
-      const data = document.data();
-      if (data.objectType !== "action_approval") return false;
-      if (input.status && data.status !== input.status) return false;
-      if (input.approverUid && data.approverUid !== input.approverUid) return false;
-      return true;
-    })
+    .filter((document) => document.data().objectType === "action_approval")
     .map((document) => ({ id: document.id, ...document.data() })));
 }
 
@@ -219,7 +333,7 @@ async function claimApproval(input: {
 
     const attemptId = randomUUID();
     const now = Timestamp.now();
-    const caseId = caseIdForAction(data.action);
+    const caseId = caseIdForApproval(data);
     transaction.update(approvalRef, {
       status: "executing",
       decisionStatus: "approved",
@@ -251,23 +365,47 @@ async function claimApproval(input: {
 }
 
 async function markExecutionFailed(input: {
+  companyId: string;
+  actorUid: string;
+  approvalId: string;
   ref: FirebaseFirestore.DocumentReference;
   attemptId: string | null;
   error: unknown;
 }) {
   if (!input.attemptId) return;
+  const auditRef = db.collection(
+    companyCollectionPath(input.companyId, "auditEvents"),
+  ).doc();
   await db.runTransaction(async (transaction) => {
     const latest = await transaction.get(input.ref);
     if (latest.data()?.executionAttemptId !== input.attemptId) return;
+    const message = input.error instanceof Error
+      ? input.error.message.slice(0, 500)
+      : "Action execution failed.";
+    const now = Timestamp.now();
     transaction.update(input.ref, {
       status: "execution_failed",
       decisionStatus: "approved",
       executionStatus: "failed_safe_to_retry",
-      executionError: input.error instanceof Error
-        ? input.error.message.slice(0, 500)
-        : "Action execution failed.",
+      executionError: message,
       executionLeaseExpiresAt: null,
-      updatedAt: Timestamp.now(),
+      updatedAt: now,
+    });
+    transaction.create(auditRef, {
+      aggregateType: "action_approval",
+      aggregateId: input.approvalId,
+      ...(caseIdForApproval(latest.data() || {}) ? {
+        caseId: caseIdForApproval(latest.data() || {}),
+      } : {}),
+      type: "approval_execution_failed",
+      actor: { kind: "user", id: input.actorUid },
+      before: { executionStatus: "executing" },
+      after: {
+        decisionStatus: "approved",
+        executionStatus: "failed_safe_to_retry",
+        error: message,
+      },
+      createdAt: now,
     });
   });
 }
@@ -293,6 +431,9 @@ export async function approveAction(input: {
     }
   } catch (error) {
     await markExecutionFailed({
+      companyId: input.companyId,
+      actorUid: input.actorUid,
+      approvalId: input.approvalId,
       ref: claimed.ref,
       attemptId: claimed.attemptId,
       error: error instanceof Error ? error : new Error("Invalid action."),
@@ -315,7 +456,9 @@ export async function approveAction(input: {
       companyCollectionPath(input.companyId, "auditEvents"),
     ).doc();
     const now = Timestamp.now();
-    const caseId = caseIdForAction(action);
+    const caseId = caseIdForApproval({ action, scope: claimed.data.scope })
+      || (action.kind === "case.create" ? action.caseId : null);
+    const result = resultForAction(action);
     await db.runTransaction(async (transaction) => {
       const latest = await transaction.get(claimed.ref);
       if (latest.data()?.executionAttemptId !== claimed.attemptId) {
@@ -329,6 +472,7 @@ export async function approveAction(input: {
         decisionStatus: "approved",
         executionStatus: "succeeded",
         resultId: execution.resultId,
+        result,
         executedAt: now,
         executionLeaseExpiresAt: null,
         executionError: null,
@@ -356,7 +500,8 @@ export async function approveAction(input: {
       status: "approved",
       actionKind: action.kind,
       resultId: execution.resultId,
-      result: execution.result,
+      result,
+      executionResult: execution.result,
       duplicate: false,
     });
   } catch (error) {
@@ -364,6 +509,9 @@ export async function approveAction(input: {
       throw error;
     }
     await markExecutionFailed({
+      companyId: input.companyId,
+      actorUid: input.actorUid,
+      approvalId: input.approvalId,
       ref: claimed.ref,
       attemptId: claimed.attemptId,
       error,
@@ -407,7 +555,7 @@ export async function rejectAction(input: {
     }
     const now = Timestamp.now();
     const note = String(input.note || "").trim().slice(0, 2_000) || null;
-    const caseId = caseIdForAction(data.action);
+    const caseId = caseIdForApproval(data);
     transaction.update(approvalRef, {
       status: "rejected",
       decisionStatus: "rejected",

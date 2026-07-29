@@ -4,9 +4,10 @@
 
 Each slice must prove one complete operating loop and leave a usable outcome.
 The streamlined redesign starts with objects the application can honestly own:
-internal tasks, contact-linked cases, and a small approval-gated block language.
-Speculative workflow primitives and chat authoring remain deferred. See
-`REDESIGN_PLAN.md` and `INTERNAL_WORKFLOW.md`.
+internal/contact/case tasks, contact-linked cases, and a small approval-gated
+block language. Speculative workflow primitives and chat authoring remain
+deferred. See `REDESIGN_PLAN.md`, `CASES_AND_TASKS.md`, and
+`INTERNAL_WORKFLOW.md`.
 
 The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
@@ -190,10 +191,12 @@ was authorized and what the provider actually did.
 The current product experiment is a deliberately small block language. A
 completed transcribed call runs ordered create-task, create-case, or exact
 move-case blocks and one-level IF/ELSE blocks over stored call duration,
-contact match, or transcript text. Each action has an inseparable named
-approver and can only execute its typed effect after approval. There are no
-generic reads, AI drafts, nested expressions, free-form decisions, or external
-writes.
+contact match, or transcript text. A task explicitly targets internal work, the
+resolved contact, or exactly one active case in a selected stage. Each action
+has an inseparable named approver and can only execute its typed effect after
+approval. Separate action blocks are independent proposals. There are no
+generic reads, AI drafts, nested expressions, free-form decisions, positional
+result bindings, or external writes.
 
 Conversational workflow authoring becomes worth testing when:
 

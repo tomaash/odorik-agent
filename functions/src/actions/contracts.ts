@@ -10,6 +10,17 @@ const compactContextSchema = z.object({
   transcriptExcerpt: z.string().nullable().optional(),
 }).strict();
 
+const taskSubjectSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("internal") }).strict(),
+  z.object({ kind: z.literal("contact") }).strict(),
+  z.object({
+    kind: z.literal("matching_case"),
+    pipelineId: z.literal("default"),
+    stageId: z.string().min(1),
+    stageName: z.string().min(1),
+  }).strict(),
+]).nullable();
+
 export const workflowActionSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("task.create"),
@@ -20,7 +31,10 @@ export const workflowActionSchema = z.discriminatedUnion("kind", [
     assigneeName: z.string().min(1),
     dueAt: z.string().datetime().nullable(),
     contactId: z.string().nullable(),
+    caseId: z.string().nullable().optional(),
+    caseTitle: z.string().min(1).max(300).nullable().optional(),
     callId: z.string().min(1),
+    subject: taskSubjectSchema.optional(),
     context: compactContextSchema,
   }).strict(),
   z.object({
@@ -51,7 +65,30 @@ export const workflowActionSchema = z.discriminatedUnion("kind", [
     callId: z.string().min(1),
     context: compactContextSchema,
   }).strict(),
-]);
+]).superRefine((action, context) => {
+  if (action.kind !== "task.create" || !action.subject) return;
+  if (action.subject.kind === "internal" && (action.contactId || action.caseId)) {
+    context.addIssue({
+      code: "custom",
+      message: "An internal task cannot target a contact or case",
+    });
+  }
+  if (action.subject.kind === "contact" && (!action.contactId || action.caseId)) {
+    context.addIssue({
+      code: "custom",
+      message: "A contact task requires a contact and cannot target a case",
+    });
+  }
+  if (
+    action.subject.kind === "matching_case"
+    && (!action.contactId || !action.caseId || !action.caseTitle)
+  ) {
+    context.addIssue({
+      code: "custom",
+      message: "A case task requires the matched case, its title, and its contact",
+    });
+  }
+});
 
 export type WorkflowAction = z.infer<typeof workflowActionSchema>;
 
@@ -110,6 +147,7 @@ export async function executeWorkflowAction(input: {
       assigneeUid: input.action.assigneeUid,
       dueAt: input.action.dueAt,
       contactId: input.action.contactId,
+      caseId: input.action.caseId,
       callId: input.action.callId,
       source: authorization,
       context: input.action.context,

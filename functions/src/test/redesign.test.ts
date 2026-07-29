@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   actionEffectDigest,
+  legacyActionEffectDigest,
   parseWorkflowAction,
 } from "../actions/contracts.js";
 import { workflowRuntimeFlags } from "../workflow/runtime.js";
@@ -44,4 +45,81 @@ test("typed workflow actions reject unsupported effects and use a stable digest"
     ...action,
     pipelineId: "unregistered-pipeline",
   }));
+});
+
+test("task action subjects disclose and enforce their relationship target", () => {
+  const base = {
+    kind: "task.create" as const,
+    taskId: "task-1",
+    title: "Call ACME back",
+    instructions: null,
+    assigneeUid: "member-1",
+    assigneeName: "Member",
+    dueAt: null,
+    callId: "call-1",
+    context: {
+      callerPhone: "+420777123456",
+      callerName: "ACME",
+    },
+  };
+
+  const caseTask = parseWorkflowAction({
+    ...base,
+    contactId: "contact-1",
+    caseId: "case-1",
+    caseTitle: "Renew ACME",
+    subject: {
+      kind: "matching_case",
+      pipelineId: "default",
+      stageId: "new",
+      stageName: "New",
+    },
+  });
+  assert.equal(caseTask.kind, "task.create");
+  assert.equal(caseTask.caseId, "case-1");
+
+  assert.throws(() => parseWorkflowAction({
+    ...base,
+    contactId: null,
+    caseId: null,
+    subject: {
+      kind: "matching_case",
+      pipelineId: "default",
+      stageId: "new",
+      stageName: "New",
+    },
+  }));
+  assert.throws(() => parseWorkflowAction({
+    ...base,
+    contactId: "contact-1",
+    caseId: null,
+    subject: { kind: "internal" },
+  }));
+});
+
+test("deployed task actions without a subject keep their historical digest", () => {
+  const legacyAction = {
+    kind: "task.create" as const,
+    taskId: "legacy-task",
+    title: "Legacy follow-up",
+    instructions: null,
+    assigneeUid: "member-1",
+    assigneeName: "Member",
+    dueAt: null,
+    contactId: "contact-1",
+    callId: "call-1",
+    context: {
+      callerName: "ACME",
+      callerPhone: "+420777123456",
+    },
+  };
+
+  const parsed = parseWorkflowAction(legacyAction);
+  assert.equal(parsed.kind, "task.create");
+  assert.equal(parsed.subject, undefined);
+  assert.equal(parsed.caseId, undefined);
+  assert.equal(
+    legacyActionEffectDigest(parsed),
+    legacyActionEffectDigest(legacyAction),
+  );
 });

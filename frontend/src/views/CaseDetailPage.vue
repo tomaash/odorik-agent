@@ -11,14 +11,19 @@ import Select from 'primevue/select'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
+import ApprovalCard from '../components/ApprovalCard.vue'
 import { useAuthStore } from '../stores/auth'
 import { caseActivity } from '../case-model'
+import { isTaskOverdue } from '../task-model'
+import { approvalNeedsAttention, approvalsForScope } from '../work-model'
 import {
   archiveCase,
+  approveAction,
   createTask,
   getCaseDetails,
   getTeamOverview,
   moveCase,
+  rejectAction,
   transitionTask,
   type ActionApprovalItem,
   type CaseActivity,
@@ -36,6 +41,7 @@ const details = ref<CaseDetails | null>(null)
 const members = ref<TeamMember[]>([])
 const loading = ref(true)
 const saving = ref(false)
+const processingApprovalId = ref('')
 const error = ref('')
 const dialog = ref<'create' | 'outcome' | 'archive' | null>(null)
 const selectedTask = ref<TaskItem | null>(null)
@@ -62,9 +68,17 @@ const tasks = computed(() => [...(details.value?.tasks || [])].sort((left, right
   return new Date(right.updatedAt || right.createdAt || 0).getTime()
     - new Date(left.updatedAt || left.createdAt || 0).getTime()
 }))
-const pendingApprovals = computed(() => details.value?.approvals.filter(
-  (approval) => approval.status === 'pending' || approval.status === 'execution_failed',
-).length || 0)
+const actionableApprovals = computed(() => approvalsForScope(
+  details.value?.approvals || [],
+  'waiting',
+))
+const openTasks = computed(() => tasks.value.filter((task) => task.status === 'open'))
+const attentionCount = computed(() => openTasks.value.length + actionableApprovals.value.length)
+const canArchive = computed(() => Boolean(
+  currentStage.value?.terminal
+  && openTasks.value.length === 0
+  && !details.value?.approvals.some(approvalNeedsAttention),
+))
 
 function formatDate(value?: string | null, includeTime = true) {
   if (!value) return '—'
@@ -92,36 +106,6 @@ function taskSeverity(status: TaskItem['status']) {
   if (status === 'completed') return 'success'
   if (status === 'dismissed') return 'secondary'
   return 'info'
-}
-
-function approvalSeverity(status: ActionApprovalItem['status']) {
-  if (status === 'approved') return 'success'
-  if (status === 'rejected') return 'danger'
-  if (status === 'execution_failed') return 'warn'
-  if (status === 'executing') return 'info'
-  return 'secondary'
-}
-
-function approvalTitle(approval: ActionApprovalItem) {
-  return approval.action.kind === 'case.move'
-    ? approval.action.caseTitle
-    : approval.action.title
-}
-
-function approvalEffect(approval: ActionApprovalItem) {
-  if (approval.action.kind === 'case.create') {
-    return t('approvals.createCaseFor', {
-      owner: approval.action.ownerName,
-      stage: approval.action.stageName,
-    })
-  }
-  if (approval.action.kind === 'case.move') {
-    return t('approvals.moveCaseFromTo', {
-      from: approval.action.fromStageName,
-      to: approval.action.toStageName,
-    })
-  }
-  return t('approvals.createTaskFor', { assignee: approval.action.assigneeName })
 }
 
 function originLabel() {
@@ -153,12 +137,14 @@ function activityText(item: CaseActivity) {
     'deal_stage_changed',
     'case_archived',
     'task_created',
+    'task_updated',
     'task_completed',
     'task_dismissed',
     'task_reopened',
     'approval_requested',
     'approval_approved',
     'approval_execution_retried',
+    'approval_execution_failed',
     'approval_executed',
     'approval_rejected',
   ])
@@ -291,6 +277,32 @@ async function reopen(task: TaskItem) {
   }
 }
 
+async function approve(approval: ActionApprovalItem) {
+  processingApprovalId.value = approval.id
+  error.value = ''
+  try {
+    await approveAction(approval.id)
+    await load(false)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    processingApprovalId.value = ''
+  }
+}
+
+async function reject(approval: ActionApprovalItem, note?: string) {
+  processingApprovalId.value = approval.id
+  error.value = ''
+  try {
+    await rejectAction(approval.id, note)
+    await load(false)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    processingApprovalId.value = ''
+  }
+}
+
 async function confirmArchive() {
   if (!details.value) return
   saving.value = true
@@ -373,8 +385,10 @@ onMounted(load)
               text
               size="small"
               class="justify-self-start"
+              :disabled="!canArchive"
               @click="dialog = 'archive'"
             />
+            <small v-if="!canArchive" class="text-surface-500 leading-relaxed">{{ t('caseDetails.archiveHint') }}</small>
           </div>
         </div>
 
@@ -398,7 +412,7 @@ onMounted(load)
 
       <div class="grid lg:grid-cols-[minmax(0,1.25fr)_minmax(19rem,.75fr)] gap-5 items-start">
         <div class="min-w-0 grid gap-5">
-          <section class="hairline-card overflow-hidden">
+          <section id="case-tasks" class="hairline-card overflow-hidden">
             <header class="px-4 py-3 border-b border-[var(--hairline)] flex items-center justify-between gap-3">
               <h2 class="text-sm font-semibold m-0">{{ t('caseDetails.tasks') }} <span class="text-surface-400 ml-1">{{ tasks.length }}</span></h2>
               <Button v-if="!details.case.archived" :label="t('caseDetails.newTask')" icon="pi pi-plus" size="small" text @click="openCreateTask" />
@@ -454,24 +468,38 @@ onMounted(load)
         <aside class="min-w-0 grid gap-5">
           <section class="hairline-card overflow-hidden">
             <header class="px-4 py-3 border-b border-[var(--hairline)] flex items-center justify-between gap-2">
-              <h2 class="text-sm font-semibold m-0">{{ t('caseDetails.approvals') }} <span class="text-surface-400 ml-1">{{ details.approvals.length }}</span></h2>
-              <Tag v-if="pendingApprovals" :value="String(pendingApprovals)" severity="warn" />
+              <h2 class="text-sm font-semibold m-0">{{ t('caseDetails.needsAttention') }} <span class="text-surface-400 ml-1">{{ attentionCount }}</span></h2>
+              <Tag v-if="attentionCount" :value="String(attentionCount)" severity="warn" />
             </header>
-            <div v-if="details.approvals.length" class="divide-y divide-[var(--hairline)]">
-              <article v-for="approval in details.approvals" :key="approval.id" class="p-4">
-                <div class="flex items-center gap-2 flex-wrap">
-                  <Tag :value="t(`approvals.status.${approval.status}`)" :severity="approvalSeverity(approval.status)" />
-                  <span class="eyebrow !text-violet-700">{{ approval.action.kind === 'case.move' ? t('approvals.moveCaseAction') : t('approvals.createCaseAction') }}</span>
+            <div v-if="attentionCount" class="divide-y divide-[var(--hairline)]">
+              <a
+                v-for="task in openTasks"
+                :key="task.id"
+                href="#case-tasks"
+                class="block p-3 text-[var(--ink)] no-underline bg-white/40 hover:bg-white"
+              >
+                <div class="flex items-center gap-2 flex-wrap mb-1">
+                  <Tag
+                    :value="isTaskOverdue(task) ? t('tasks.overdue') : t('caseDetails.openTaskAttention')"
+                    :severity="isTaskOverdue(task) ? 'danger' : 'info'"
+                  />
+                  <span class="font-mono text-[.6rem] text-surface-500">{{ formatDate(task.dueAt, false) }}</span>
                 </div>
-                <strong class="block text-sm mt-2 break-words">{{ approvalTitle(approval) }}</strong>
-                <p class="text-xs text-surface-600 leading-relaxed mt-2 mb-0">{{ approvalEffect(approval) }}</p>
-                <p class="text-xs text-surface-500 mt-2 mb-0">{{ t('approvals.approver', { approver: approval.approverName }) }}</p>
-              </article>
-              <router-link to="/tasks?view=approvals" class="h-11 px-4 flex items-center justify-center text-xs font-semibold text-indigo-700 no-underline hover:bg-white">
-                {{ t('caseDetails.viewApprovalQueue') }}
-              </router-link>
+                <strong class="block text-xs leading-relaxed break-words">{{ task.title }}</strong>
+                <span class="block font-mono text-[.58rem] text-surface-500 mt-1">{{ task.assigneeName }}</span>
+              </a>
+              <ApprovalCard
+                v-for="approval in actionableApprovals"
+                :key="approval.id"
+                compact
+                :approval="approval"
+                :currentUid="authStore.user?.uid"
+                :processing="processingApprovalId === approval.id"
+                @approve="approve"
+                @reject="reject"
+              />
             </div>
-            <p v-else class="text-sm text-surface-500 text-center py-8 px-4 m-0">{{ t('caseDetails.noApprovals') }}</p>
+            <p v-else class="text-sm text-surface-500 text-center py-8 px-4 m-0">{{ t('caseDetails.noAttention') }}</p>
           </section>
 
           <section class="hairline-card overflow-hidden">

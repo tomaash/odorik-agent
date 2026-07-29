@@ -318,7 +318,9 @@ export async function getCaseDetails(input: {
     pipeline,
     contactSnapshot,
     taskSnapshot,
-    approvalSnapshot,
+    scopedApprovalSnapshot,
+    legacyApprovalSnapshot,
+    resultApprovalSnapshot,
     caseActivitySnapshot,
     relatedActivitySnapshot,
   ] = await Promise.all([
@@ -329,7 +331,15 @@ export async function getCaseDetails(input: {
       .limit(200)
       .get(),
     db.collection(companyCollectionPath(input.companyId, "actionApprovals"))
+      .where("scope.caseId", "==", input.caseId)
+      .limit(100)
+      .get(),
+    db.collection(companyCollectionPath(input.companyId, "actionApprovals"))
       .where("action.caseId", "==", input.caseId)
+      .limit(100)
+      .get(),
+    db.collection(companyCollectionPath(input.companyId, "actionApprovals"))
+      .where("result.id", "==", input.caseId)
       .limit(100)
       .get(),
     db.collection(companyCollectionPath(input.companyId, "auditEvents"))
@@ -348,7 +358,21 @@ export async function getCaseDetails(input: {
     .sort((left, right) => (
       (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
     ));
-  const approvals = approvalSnapshot.docs
+  const approvalById = new Map(
+    [
+      ...scopedApprovalSnapshot.docs,
+      ...legacyApprovalSnapshot.docs.filter((document) => {
+        const data = document.data();
+        if (data.scope !== undefined) return false;
+        if (data.action?.kind === "case.move" || data.action?.kind === "task.create") return true;
+        return data.action?.kind === "case.create" && data.status === "approved";
+      }),
+      ...resultApprovalSnapshot.docs.filter((document) => (
+        document.data().result?.kind === "case"
+      )),
+    ].map((document) => [document.id, document] as const),
+  );
+  const approvals = [...approvalById.values()]
     .filter((document) => document.data().objectType === "action_approval")
     .map((document) => ({ id: document.id, ...document.data() }) as RawRecord)
     .sort((left, right) => (
@@ -631,15 +655,69 @@ export async function archiveCase(input: {
   actorUid: string;
   caseId: string;
 }) {
+  const pipeline = await ensurePipeline(input.companyId);
+  const terminalStageIds = new Set(
+    pipeline.stages.filter((stage) => stage.terminal).map((stage) => stage.id),
+  );
   const ref = db.doc(companyDocumentPath(input.companyId, "cases", input.caseId));
   const activityRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
+  const openTasksQuery = db.collection(companyCollectionPath(input.companyId, "workItems"))
+    .where("caseId", "==", input.caseId)
+    .where("status", "==", "open")
+    .limit(1);
+  const scopedApprovalsQuery = db.collection(
+    companyCollectionPath(input.companyId, "actionApprovals"),
+  )
+    .where("scope.caseId", "==", input.caseId)
+    .where("status", "in", ["pending", "executing", "execution_failed"])
+    .limit(1);
+  const legacyApprovalsQuery = db.collection(
+    companyCollectionPath(input.companyId, "actionApprovals"),
+  )
+    .where("action.caseId", "==", input.caseId)
+    .where("status", "in", ["pending", "executing", "execution_failed"]);
   return db.runTransaction(async (transaction) => {
-    const snapshot = await transaction.get(ref);
+    const [snapshot, openTasks, scopedApprovals, legacyApprovals] = await Promise.all([
+      transaction.get(ref),
+      transaction.get(openTasksQuery),
+      transaction.get(scopedApprovalsQuery),
+      transaction.get(legacyApprovalsQuery),
+    ]);
     if (!snapshot.exists) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
     }
     if (snapshot.data()?.archived === true) {
       return { id: input.caseId, archived: true as const, duplicate: true };
+    }
+    if (!terminalStageIds.has(String(snapshot.data()?.stageId || ""))) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Move the case to a terminal stage before archiving it.",
+      });
+    }
+    if (!openTasks.empty) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Complete or dismiss the case's open tasks before archiving it.",
+      });
+    }
+    const unresolvedLegacyApproval = legacyApprovals.docs.some((document) => {
+      const data = document.data();
+      return (
+        data.scope === undefined
+        && (data.action?.kind === "case.move" || data.action?.kind === "task.create")
+        && (
+          data.status === "pending"
+          || data.status === "executing"
+          || data.status === "execution_failed"
+        )
+      );
+    });
+    if (!scopedApprovals.empty || unresolvedLegacyApproval) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Resolve the case's pending approvals before archiving it.",
+      });
     }
     const now = Timestamp.now();
     transaction.update(ref, {

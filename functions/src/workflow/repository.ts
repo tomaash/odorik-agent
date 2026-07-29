@@ -41,7 +41,10 @@ async function validateActionReferences(
   refreshNames: boolean,
 ) {
   const blocks = actionBlocks(spec);
-  const needsPipeline = blocks.some((block) => block.kind !== "action.task.create");
+  const needsPipeline = blocks.some((block) => (
+    block.kind !== "action.task.create"
+    || block.task.subject?.kind === "matching_case"
+  ));
   const pipeline = needsPipeline ? await getPipeline(companyId) : null;
   const stages = new Map(pipeline?.stages.map((stage) => [stage.id, stage]));
   await Promise.all(blocks.map(async (block) => {
@@ -50,6 +53,22 @@ async function validateActionReferences(
     if (block.kind === "action.task.create") {
       const assignee = await activeMember(companyId, block.task.assigneeUid);
       if (refreshNames) block.task.assigneeName = assignee.displayName;
+      if (block.task.subject?.kind === "matching_case") {
+        if (block.task.subject.pipelineId !== defaultPipelineId) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Only the company’s current pipeline is supported.",
+          });
+        }
+        const stage = stages.get(block.task.subject.stageId);
+        if (!stage || stage.archived) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Choose an active stage for the task's case match.",
+          });
+        }
+        if (refreshNames) block.task.subject.stageName = stage.name;
+      }
       return;
     }
     if (block.case.pipelineId !== defaultPipelineId) {
@@ -195,6 +214,7 @@ export async function listWorkflows(companyId: string) {
     const runs = supported
       ? await db.collection(companyCollectionPath(companyId, "workflowRuns"))
         .where("workflowId", "==", document.id)
+        .orderBy("createdAt", "desc")
         .limit(20)
         .get()
       : null;
@@ -203,6 +223,27 @@ export async function listWorkflows(companyId: string) {
       counts[status] = (counts[status] || 0) + 1;
       return counts;
     }, {}) || {};
+    const recentExceptions = (runs?.docs || [])
+      .flatMap((run) => {
+        const skipped = Array.isArray(run.data().skippedActions)
+          ? run.data().skippedActions as Array<{
+              blockId?: unknown;
+              kind?: unknown;
+              reason?: unknown;
+              matches?: unknown;
+            }>
+          : [];
+        return skipped.map((item) => ({
+          runId: run.id,
+          callId: String(run.data().contextId || ""),
+          occurredAt: run.data().occurredAt || null,
+          blockId: String(item.blockId || ""),
+          actionKind: String(item.kind || ""),
+          reason: String(item.reason || "unknown"),
+          matches: Number(item.matches || 0),
+        }));
+      })
+      .slice(0, 5);
     return {
       id: document.id,
       ...data,
@@ -210,6 +251,7 @@ export async function listWorkflows(companyId: string) {
       legacy: !supported,
       draft: supported ? data.draft : null,
       recentRuns: statuses,
+      recentExceptions,
     };
   }));
   return jsonSafe(items);
