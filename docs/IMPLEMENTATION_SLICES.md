@@ -9,6 +9,10 @@ block language. Speculative workflow primitives and chat authoring remain
 deferred. See `REDESIGN_PLAN.md`, `CASES_AND_TASKS.md`, and
 `INTERNAL_WORKFLOW.md`.
 
+Connector work now follows `CONNECTOR_EPIC.md`. The connector slices below
+record the historical platform sequence; use the dedicated epic for current
+implementation order, acceptance criteria, and provider decision gates.
+
 The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
 CRM-specific customer intake are not platform priorities.
@@ -128,13 +132,14 @@ Exit criterion: after the first interactive calendar grant and selection, the
 same agent can answer a question requiring both a call and calendar event
 without a source-specific model tool.
 
-## Slice 3b: Drive folder connector
+## Slice 3b: Drive folder connector — implemented initial version
 
-Reuse the connection/resource/context kernel for folders selected with Google
-Picker. Validate whether `drive.file` provides recursive visibility for
-existing children; use it when it does, otherwise request `drive.readonly` and
-enforce the folder boundary in the adapter. Start with Google Docs, PDF,
-Markdown, and plain text.
+The application now reuses the connection/resource/context kernel for
+explicitly selected Google Drive folders using `drive.readonly`. The initial
+implementation imports direct children, extracts Google Docs and text-like
+files, and retains metadata for other files. Scheduled reconciliation,
+recursive folder semantics, stale-file deletion, PDF extraction, and
+permission-aware audiences remain part of `CONNECTOR_EPIC.md`.
 
 ## Slice 4: generic proposal and human-decision cards
 
@@ -171,6 +176,9 @@ At least two packages should share the same retrieval, proposal, decision, and
 evaluation contracts before introducing a more general workflow abstraction.
 
 ## Slice 6: first approved external action
+
+Current execution is specified by G2–G3 in `CONNECTOR_EPIC.md`: propose and
+then approval-gate creation of a Gmail draft. Sending email remains deferred.
 
 Add one connector write capability with a real business result—for example,
 creating a calendar hold or sending a follow-up through a chosen call-centre

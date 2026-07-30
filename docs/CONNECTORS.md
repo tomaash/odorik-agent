@@ -1,5 +1,8 @@
 # Source connectors
 
+Current implementation sequencing, hardening work, and provider decision gates
+are defined in `CONNECTOR_EPIC.md`. This document describes deployed behavior.
+
 ## Runtime model
 
 ```text
@@ -97,6 +100,20 @@ For each selection:
 Calendar events are visible to all members of their company. Do not connect a
 calendar that should be visible to only some team members until
 restricted member ACL filtering is implemented.
+
+## Google Drive adapter
+
+OAuth currently uses `drive.readonly`. After authorization, an administrator
+explicitly selects folders; nothing is selected implicitly. The deployed
+implementation imports non-folder files that are direct children of each
+selected folder. It extracts Google Docs and text-like files and otherwise
+stores searchable metadata plus a provider link.
+
+Drive sync currently runs when a folder is selected or an administrator
+requests it manually. Recursive selection, scheduled reconciliation,
+provider-side deletion/move cleanup, PDF extraction, and restricted member
+audiences are not yet implemented. Their order and acceptance criteria are
+defined in `CONNECTOR_EPIC.md`.
 
 ## Operations
 
