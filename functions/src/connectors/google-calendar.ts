@@ -44,7 +44,7 @@ type CalendarListResponse = {
   nextPageToken?: string;
 };
 
-type CalendarEvent = {
+export type CalendarEvent = {
   id?: string;
   status?: string;
   summary?: string;
@@ -87,11 +87,11 @@ export type SelectableCalendar = {
   selected: boolean;
 };
 
-function calendarResourceId(calendarId: string): string {
+export function calendarResourceId(calendarId: string): string {
   return `calendar_${sha256Hex(calendarId).slice(0, 24)}`;
 }
 
-function calendarContextItemId(
+export function calendarContextItemId(
   connectionId: string,
   calendarId: string,
   eventId: string,
@@ -196,13 +196,14 @@ export async function listGoogleCalendars(input: {
     || a.displayName.localeCompare(b.displayName));
 }
 
-function eventContextItem(input: {
+export function calendarEventContextItem(input: {
   companyId: string;
   connectionId: string;
   resourceId: string;
   calendarId: string;
   calendarName: string;
   event: CalendarEvent;
+  observedAt?: Timestamp;
 }): Record<string, unknown> | null {
   if (!input.event.id || input.event.status === "cancelled") return null;
   const start = input.event.start?.dateTime || input.event.start?.date || null;
@@ -244,7 +245,7 @@ function eventContextItem(input: {
     title,
     text: body,
     occurredAt: start,
-    observedAt: Timestamp.now(),
+    observedAt: input.observedAt || Timestamp.now(),
     artifactRefs: [],
     participantRefs,
     access: { visibility: "company" },
@@ -274,6 +275,27 @@ function eventContextItem(input: {
   };
 }
 
+export function calendarEventsUrl(input: {
+  calendarId: string;
+  syncToken?: string;
+  pageToken?: string;
+  timeMin: string;
+}): URL {
+  const url = new URL(
+    `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(input.calendarId)}/events`,
+  );
+  url.searchParams.set("maxResults", "2500");
+  url.searchParams.set("showDeleted", "true");
+  url.searchParams.set("singleEvents", "true");
+  if (input.syncToken) {
+    url.searchParams.set("syncToken", input.syncToken);
+  } else {
+    url.searchParams.set("timeMin", input.timeMin);
+  }
+  if (input.pageToken) url.searchParams.set("pageToken", input.pageToken);
+  return url;
+}
+
 async function syncCalendarResource(input: {
   companyId: string;
   connectionId: string;
@@ -291,21 +313,12 @@ async function syncCalendarResource(input: {
     ? data.syncToken
     : "";
   do {
-    const url = new URL(
-      `https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
-    );
-    url.searchParams.set("maxResults", "2500");
-    url.searchParams.set("showDeleted", "true");
-    url.searchParams.set("singleEvents", "true");
-    if (storedSyncToken) {
-      url.searchParams.set("syncToken", storedSyncToken);
-    } else {
-      url.searchParams.set(
-        "timeMin",
-        new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
-      );
-    }
-    if (pageToken) url.searchParams.set("pageToken", pageToken);
+    const url = calendarEventsUrl({
+      calendarId,
+      syncToken: storedSyncToken,
+      pageToken,
+      timeMin: new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString(),
+    });
 
     let page: EventsResponse;
     try {
@@ -333,7 +346,7 @@ async function syncCalendarResource(input: {
         "contextItems",
         calendarContextItemId(input.connectionId, calendarId, event.id),
       ));
-      const contextItem = eventContextItem({
+      const contextItem = calendarEventContextItem({
         companyId: input.companyId,
         connectionId: input.connectionId,
         resourceId: input.resource.id,

@@ -27,7 +27,7 @@ const driveConnector: GoogleConnector = {
   scopes: driveScopes,
 };
 
-type DriveFileEntry = {
+export type DriveFileEntry = {
   id?: string;
   name?: string;
   mimeType?: string;
@@ -60,16 +60,74 @@ export type SelectableFolder = {
 /** Bounded searchable text retained per document. */
 const maxDocumentTextLength = 50_000;
 
-function folderResourceId(folderId: string): string {
+export function folderResourceId(folderId: string): string {
   return `folder_${sha256Hex(folderId).slice(0, 24)}`;
 }
 
-function driveContextItemId(
+export function driveContextItemId(
   connectionId: string,
   folderId: string,
   fileId: string,
 ): string {
   return `drive_${sha256Hex(`${connectionId}:${folderId}:${fileId}`).slice(0, 32)}`;
+}
+
+export function driveFolderFilesQuery(
+  folderId: string,
+  pageToken?: string,
+): URLSearchParams {
+  return new URLSearchParams({
+    q: `'${folderId}' in parents and trashed = false`,
+    fields: "nextPageToken, files(id, name, mimeType, description, webViewLink, createdTime, modifiedTime, md5Checksum, size)",
+    pageSize: "50",
+    ...(pageToken ? { pageToken } : {}),
+  });
+}
+
+export function importableDriveFiles(
+  files: DriveFileEntry[],
+): Array<DriveFileEntry & { id: string; name: string }> {
+  return files.filter(
+    (file): file is DriveFileEntry & { id: string; name: string } =>
+      Boolean(file.id && file.name)
+      // The current contract imports direct files only. Subfolders are
+      // independently selectable resources rather than implicit recursion.
+      && file.mimeType !== "application/vnd.google-apps.folder",
+  );
+}
+
+export function driveContextItem(input: {
+  companyId: string;
+  connectionId: string;
+  folderId: string;
+  file: DriveFileEntry & { id: string; name: string };
+  contentText: string;
+  observedAt: Timestamp;
+}): Record<string, unknown> {
+  return {
+    companyId: input.companyId,
+    kind: "document",
+    source: {
+      adapterId: "google_drive",
+      connectionId: input.connectionId,
+      resourceId: input.folderId,
+      externalId: input.file.id,
+      version: input.file.md5Checksum || input.file.modifiedTime || "v1",
+    },
+    title: input.file.name,
+    text: input.contentText.slice(0, maxDocumentTextLength),
+    artifactRefs: input.file.webViewLink ? [input.file.webViewLink] : [],
+    participantRefs: [],
+    access: { visibility: "company" },
+    provenance: {
+      checksum: sha256Hex(input.contentText),
+      ingestionVersion: "google-drive-v1",
+      modifiedTime: input.file.modifiedTime || null,
+    },
+    observedAt: input.observedAt.toDate().toISOString(),
+    createdAt: input.observedAt,
+    updatedAt: input.observedAt,
+  };
 }
 
 function contextItems(companyId: string) {
@@ -327,19 +385,12 @@ export async function syncDriveFolder(input: {
   const now = Timestamp.now();
 
   do {
-    const body = await driveFiles(input.accessToken, new URLSearchParams({
-      q: `'${input.folderId}' in parents and trashed = false`,
-      fields: "nextPageToken, files(id, name, mimeType, description, webViewLink, createdTime, modifiedTime, md5Checksum, size)",
-      pageSize: "50",
-      ...(pageToken ? { pageToken } : {}),
-    }));
-
-    const files = (body.files || []).filter(
-      (file): file is DriveFileEntry & { id: string; name: string } =>
-        Boolean(file.id && file.name)
-        // Subfolders are browsable as their own resource, not as items.
-        && file.mimeType !== "application/vnd.google-apps.folder",
+    const body = await driveFiles(
+      input.accessToken,
+      driveFolderFilesQuery(input.folderId, pageToken),
     );
+
+    const files = importableDriveFiles(body.files || []);
 
     for (const file of files) {
       const contentText = await driveFileText(file, input.accessToken);
@@ -348,30 +399,14 @@ export async function syncDriveFolder(input: {
         "contextItems",
         driveContextItemId(input.connectionId, input.folderId, file.id),
       ));
-      await itemRef.set({
+      await itemRef.set(driveContextItem({
         companyId: input.companyId,
-        kind: "document",
-        source: {
-          adapterId: "google_drive",
-          connectionId: input.connectionId,
-          resourceId: input.folderId,
-          externalId: file.id,
-          version: file.md5Checksum || file.modifiedTime || "v1",
-        },
-        title: file.name,
-        text: contentText.slice(0, maxDocumentTextLength),
-        artifactRefs: file.webViewLink ? [file.webViewLink] : [],
-        participantRefs: [],
-        access: { visibility: "company" },
-        provenance: {
-          checksum: sha256Hex(contentText),
-          ingestionVersion: "google-drive-v1",
-          modifiedTime: file.modifiedTime || null,
-        },
-        observedAt: now.toDate().toISOString(),
-        createdAt: now,
-        updatedAt: now,
-      }, { merge: true });
+        connectionId: input.connectionId,
+        folderId: input.folderId,
+        file,
+        contentText,
+        observedAt: now,
+      }), { merge: true });
       syncedCount += 1;
     }
 

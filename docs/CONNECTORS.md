@@ -113,7 +113,11 @@ Drive sync currently runs when a folder is selected or an administrator
 requests it manually. Recursive selection, scheduled reconciliation,
 provider-side deletion/move cleanup, PDF extraction, and restricted member
 audiences are not yet implemented. Their order and acceptance criteria are
-defined in `CONNECTOR_EPIC.md`.
+defined in `CONNECTOR_EPIC.md`. Drive context currently records the provider
+folder ID as `source.resourceId` while the resource document uses a hashed ID.
+Adapter-specific folder deselection removes context correctly, but the generic
+resource enable/disable path does not match those Drive items; C1 owns the
+identity migration.
 
 ## Operations
 
