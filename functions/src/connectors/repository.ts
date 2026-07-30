@@ -22,11 +22,14 @@ function odorikUploadUrl(companyId: string, connectionId: string): string {
   return `${ingestBaseUrl}/webhooks/odorik/${companyId}/${connectionId}/recordings`;
 }
 
-function connectionCollection(companyId: string) {
-  return db.collection(`companies/${companyId}/connections`);
+function connectionCollection(
+  companyId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  return database.collection(`companies/${companyId}/connections`);
 }
 
-function publicResource(
+export function sourceResourcePublicView(
   connectionId: string,
   id: string,
   data: Record<string, unknown>,
@@ -46,8 +49,11 @@ function publicResource(
   };
 }
 
-export async function listSources(companyId: string) {
-  const connectionsSnapshot = await connectionCollection(companyId)
+export async function listSources(
+  companyId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  const connectionsSnapshot = await connectionCollection(companyId, database)
     .orderBy("createdAt", "asc")
     .get();
   const connections = await Promise.all(connectionsSnapshot.docs.map(async (document) => {
@@ -55,7 +61,7 @@ export async function listSources(companyId: string) {
     const resourcesSnapshot = await document.ref.collection("resources")
       .orderBy("displayName", "asc")
       .get();
-    const resources = resourcesSnapshot.docs.map((resource) => publicResource(
+    const resources = resourcesSnapshot.docs.map((resource) => sourceResourcePublicView(
       document.id,
       resource.id,
       resource.data(),
@@ -182,8 +188,9 @@ export async function setConnectionStatus(
   connectionId: string,
   status: "active" | "disconnected",
   actorUid: string,
+  database: FirebaseFirestore.Firestore = db,
 ): Promise<void> {
-  const ref = connectionCollection(companyId).doc(connectionId);
+  const ref = connectionCollection(companyId, database).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
   await ref.set({
@@ -197,8 +204,9 @@ export async function prepareConnectionDeletion(
   companyId: string,
   connectionId: string,
   actorUid: string,
+  database: FirebaseFirestore.Firestore = db,
 ): Promise<{ adapterId: AdapterId; displayName: string }> {
-  const ref = connectionCollection(companyId).doc(connectionId);
+  const ref = connectionCollection(companyId, database).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
   const data = snapshot.data() || {};
@@ -216,22 +224,26 @@ export async function prepareConnectionDeletion(
 
 async function commitInChunks(
   writes: Array<(batch: FirebaseFirestore.WriteBatch) => void>,
+  database: FirebaseFirestore.Firestore,
 ): Promise<void> {
   for (let offset = 0; offset < writes.length; offset += 400) {
-    const batch = db.batch();
+    const batch = database.batch();
     for (const write of writes.slice(offset, offset + 400)) write(batch);
     await batch.commit();
   }
 }
 
-export async function deleteSourceConnection(input: {
-  companyId: string;
-  connectionId: string;
-  actorUid: string;
-  adapterId: AdapterId;
-  displayName: string;
-  providerAccessRevoked: boolean | null;
-}): Promise<{
+export async function deleteSourceConnection(
+  input: {
+    companyId: string;
+    connectionId: string;
+    actorUid: string;
+    adapterId: AdapterId;
+    displayName: string;
+    providerAccessRevoked: boolean | null;
+  },
+  database: FirebaseFirestore.Firestore = db,
+): Promise<{
   ok: true;
   connectionId: string;
   resourcesDeleted: number;
@@ -239,15 +251,15 @@ export async function deleteSourceConnection(input: {
   sourceRecordsDisabled: number;
   providerAccessRevoked: boolean | null;
 }> {
-  const connectionRef = connectionCollection(input.companyId).doc(input.connectionId);
+  const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
   const [connection, resources, contextItems, calls] = await Promise.all([
     connectionRef.get(),
     connectionRef.collection("resources").get(),
-    db.collection(`companies/${input.companyId}/contextItems`)
+    database.collection(`companies/${input.companyId}/contextItems`)
       .where("source.connectionId", "==", input.connectionId)
       .get(),
     input.adapterId === "odorik"
-      ? db.collection(`companies/${input.companyId}/calls`)
+      ? database.collection(`companies/${input.companyId}/calls`)
         .where("connectionId", "==", input.connectionId).get()
       : Promise.resolve(null),
   ]);
@@ -257,14 +269,14 @@ export async function deleteSourceConnection(input: {
     contextEnabled: false,
     sourceConnectionDeletedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true })));
+  }, { merge: true })), database);
   await commitInChunks([
     ...contextItems.docs.map((item) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(item.ref)),
     ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
-  ]);
+  ], database);
 
-  const auditRef = db.collection(`companies/${input.companyId}/auditEvents`).doc();
-  const batch = db.batch();
+  const auditRef = database.collection(`companies/${input.companyId}/auditEvents`).doc();
+  const batch = database.batch();
   batch.set(auditRef, {
     eventType: "source.connection_deleted",
     actorUid: input.actorUid,
@@ -290,24 +302,27 @@ export async function deleteSourceConnection(input: {
   };
 }
 
-export async function setResourceStatus(input: {
-  companyId: string;
-  connectionId: string;
-  resourceId: string;
-  enabled: boolean;
-  actorUid: string;
-}): Promise<void> {
-  const connectionRef = connectionCollection(input.companyId).doc(input.connectionId);
+export async function setResourceStatus(
+  input: {
+    companyId: string;
+    connectionId: string;
+    resourceId: string;
+    enabled: boolean;
+    actorUid: string;
+  },
+  database: FirebaseFirestore.Firestore = db,
+): Promise<void> {
+  const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
   const resourceRef = connectionRef.collection("resources").doc(input.resourceId);
   const [connection, resource] = await Promise.all([connectionRef.get(), resourceRef.get()]);
   if (!connection.exists || !resource.exists) throw new Error("Connection resource not found");
-  const batch = db.batch();
+  const batch = database.batch();
   batch.set(resourceRef, {
     status: input.enabled ? "enabled" : "disabled",
     updatedBy: input.actorUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  const contextItems = await db.collection(`companies/${input.companyId}/contextItems`)
+  const contextItems = await database.collection(`companies/${input.companyId}/contextItems`)
     .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resourceId)
     .get();

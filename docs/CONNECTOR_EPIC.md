@@ -1,8 +1,8 @@
 # Connector epic: external context and approved effects
 
-**Status:** approved direction; execution has not started
+**Status:** core execution active
 
-**Current implementation slice:** C0 — characterize and protect the baseline
+**Current implementation slice:** C0 — implementation complete; deployment verification pending
 
 **Last code review:** 2026-07-30
 
@@ -128,7 +128,7 @@ The baseline was inspected in the repository on 2026-07-30.
 | Connection kernel | Multiple connections, encrypted credentials, selected resources, disconnect, revoke/delete, health summary | Registry is provider-shaped and reduces capability to `readOnly` |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
 | Google Calendar | Explicit calendar selection, incremental sync tokens, cancellation deletion, 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
-| Google Drive | Explicit direct-folder selection, Google Docs/text extraction, manual sync | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction |
+| Google Drive | Explicit direct-folder selection, Google Docs/text extraction, manual sync | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction; normalized items use the provider folder ID while the resource document uses a hashed ID |
 | Context | Provenance, source IDs, indexing, citations, `company`/`restricted` envelope | Google adapters always write `company`; provider ACLs are not projected |
 | Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states | Dispatch is hard-coded to `task.create`, `case.create`, and `case.move` |
 | Planned catalog | Gmail and GitHub cards | Planned cards imply commitments without a proven loop or demand gate |
@@ -263,6 +263,9 @@ Build:
 - replace the `readOnly` descriptor with declared observe/execute
   capabilities;
 - persist normalized provider, account, scopes, and capability grants;
+- make `source.resourceId` consistently reference the resource document ID,
+  retaining provider identity only in `externalId`, and migrate existing Drive
+  context safely;
 - infer backward-compatible grants for existing Odorik, Calendar, and Drive
   records;
 - show capability, account, selection, and reauthorization state in Sources;

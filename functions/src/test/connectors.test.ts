@@ -1,0 +1,473 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { Timestamp } from "firebase-admin/firestore";
+import {
+  calendarContextItemId,
+  calendarEventContextItem,
+  calendarEventsUrl,
+  calendarResourceId,
+  type CalendarEvent,
+} from "../connectors/google-calendar.js";
+import {
+  driveContextItem,
+  driveContextItemId,
+  driveFolderFilesQuery,
+  folderResourceId,
+  importableDriveFiles,
+} from "../connectors/google-drive.js";
+import {
+  odorikContextItem,
+  odorikContextItemId,
+} from "../connectors/odorik.js";
+import {
+  deleteSourceConnection,
+  listSources,
+  prepareConnectionDeletion,
+  setConnectionStatus,
+  setResourceStatus,
+} from "../connectors/repository.js";
+import { MemoryFirestore } from "./firestore-harness.js";
+
+test("source public views retain operational state and exclude credentials", async () => {
+  const memory = new MemoryFirestore();
+  memory.seed("companies/explorers/connections/drive-a", {
+    companyId: "explorers",
+    adapterId: "google_drive",
+    displayName: "Shared Drive",
+    accountLabel: "operator@example.com",
+    status: "active",
+    reauthorizationRequired: false,
+    auth: {
+      kind: "oauth2",
+      credentialMode: "encrypted",
+      scopes: ["https://www.googleapis.com/auth/drive.readonly"],
+      internalHint: "must-stay-private",
+    },
+    credentialCiphertext: "encrypted-top-secret",
+    authorizedBy: {
+      email: "private-operator@example.com",
+    },
+    stats: {
+      itemCount: 3,
+      lastSyncAt: "2026-07-30T10:00:00.000Z",
+      lastObservedAt: "2026-07-30T09:59:00.000Z",
+      lastError: null,
+    },
+    createdAt: "2026-07-29T10:00:00.000Z",
+    updatedAt: "2026-07-30T10:00:00.000Z",
+  });
+  memory.seed("companies/explorers/connections/drive-a/resources/folder-a", {
+    connectionId: "drive-a",
+    resourceType: "folder",
+    externalId: "provider-folder-a",
+    displayName: "Customers",
+    status: "enabled",
+    itemCount: 3,
+    providerSecret: "resource-secret",
+    lastObservedAt: "2026-07-30T09:59:00.000Z",
+    createdAt: "2026-07-29T10:00:00.000Z",
+    updatedAt: "2026-07-30T10:00:00.000Z",
+  });
+
+  const result = await listSources("explorers", memory.asFirestore());
+  const connection = result.connections[0];
+  assert.ok(connection);
+  assert.deepEqual({
+    id: connection.id,
+    companyId: connection.companyId,
+    adapterId: connection.adapterId,
+    displayName: connection.displayName,
+    status: connection.status,
+    authKind: connection.authKind,
+    credentialMode: connection.credentialMode,
+    accountLabel: connection.accountLabel,
+    lastSyncAt: connection.lastSyncAt,
+    lastObservedAt: connection.lastObservedAt,
+    lastError: connection.lastError,
+    itemCount: connection.itemCount,
+    resourceCount: connection.resourceCount,
+  }, {
+    id: "drive-a",
+    companyId: "explorers",
+    adapterId: "google_drive",
+    displayName: "Shared Drive",
+    status: "active",
+    authKind: "oauth2",
+    credentialMode: "encrypted",
+    accountLabel: "operator@example.com",
+    lastSyncAt: "2026-07-30T10:00:00.000Z",
+    lastObservedAt: "2026-07-30T09:59:00.000Z",
+    lastError: null,
+    itemCount: 3,
+    resourceCount: 1,
+  });
+  assert.deepEqual(connection.resources[0], {
+    id: "folder-a",
+    connectionId: "drive-a",
+    resourceType: "folder",
+    externalId: "provider-folder-a",
+    displayName: "Customers",
+    status: "enabled",
+    itemCount: 3,
+    lastObservedAt: "2026-07-30T09:59:00.000Z",
+    createdAt: "2026-07-29T10:00:00.000Z",
+    updatedAt: "2026-07-30T10:00:00.000Z",
+  });
+
+  const publicJson = JSON.stringify(result);
+  assert.doesNotMatch(publicJson, /encrypted-top-secret/);
+  assert.doesNotMatch(publicJson, /must-stay-private/);
+  assert.doesNotMatch(publicJson, /private-operator/);
+  assert.doesNotMatch(publicJson, /resource-secret/);
+  assert.deepEqual(
+    result.adapters.map((adapter) => ({
+      id: adapter.id,
+      availability: adapter.availability,
+      readOnly: adapter.readOnly,
+    })),
+    [
+      { id: "odorik", availability: "available", readOnly: true },
+      { id: "google_calendar", availability: "available", readOnly: true },
+      { id: "google_drive", availability: "available", readOnly: true },
+      { id: "gmail", availability: "planned", readOnly: true },
+      { id: "github", availability: "planned", readOnly: true },
+    ],
+  );
+});
+
+test("connection and resource lifecycle preserves or removes context intentionally", async () => {
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  const connectionPath = "companies/explorers/connections/odorik-a";
+  const resourcePath = `${connectionPath}/resources/phone-a`;
+  const contextPath = "companies/explorers/contextItems/call-a";
+  const otherContextPath = "companies/explorers/contextItems/call-other";
+  const callPath = "companies/explorers/calls/call-a";
+  const otherCallPath = "companies/explorers/calls/call-other";
+
+  memory.seed(connectionPath, {
+    companyId: "explorers",
+    adapterId: "odorik",
+    displayName: "Odorik sales",
+    status: "active",
+    credentialCiphertext: "encrypted-credential",
+  });
+  memory.seed(resourcePath, {
+    connectionId: "odorik-a",
+    resourceType: "phone_line",
+    externalId: "line:Sales",
+    displayName: "Sales",
+    status: "enabled",
+  });
+  memory.seed(contextPath, {
+    source: {
+      connectionId: "odorik-a",
+      resourceId: "phone-a",
+    },
+    access: { visibility: "company" },
+    indexingEnabled: true,
+  });
+  memory.seed(otherContextPath, {
+    source: {
+      connectionId: "odorik-b",
+      resourceId: "phone-b",
+    },
+    access: { visibility: "company" },
+    indexingEnabled: true,
+  });
+  memory.seed(callPath, {
+    connectionId: "odorik-a",
+    contextEnabled: true,
+  });
+  memory.seed(otherCallPath, {
+    connectionId: "odorik-b",
+    contextEnabled: true,
+  });
+
+  await setConnectionStatus(
+    "explorers",
+    "odorik-a",
+    "disconnected",
+    "admin-1",
+    database,
+  );
+  assert.equal(memory.read(connectionPath)?.status, "disconnected");
+  assert.ok(memory.read(resourcePath));
+  assert.ok(memory.read(contextPath));
+
+  await setResourceStatus({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    enabled: false,
+    actorUid: "admin-1",
+  }, database);
+  assert.equal(memory.read(resourcePath)?.status, "disabled");
+  assert.deepEqual(memory.read(contextPath)?.access, {
+    visibility: "restricted",
+    memberIds: [],
+  });
+  assert.equal(memory.read(contextPath)?.indexingEnabled, false);
+  assert.equal(memory.read(otherContextPath)?.indexingEnabled, true);
+
+  await setResourceStatus({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    enabled: true,
+    actorUid: "admin-1",
+  }, database);
+  assert.equal(memory.read(resourcePath)?.status, "enabled");
+  assert.deepEqual(memory.read(contextPath)?.access, {
+    visibility: "company",
+  });
+  assert.equal(memory.read(contextPath)?.indexingEnabled, true);
+
+  assert.deepEqual(
+    await prepareConnectionDeletion(
+      "explorers",
+      "odorik-a",
+      "admin-1",
+      database,
+    ),
+    {
+      adapterId: "odorik",
+      displayName: "Odorik sales",
+    },
+  );
+  assert.equal(memory.read(connectionPath)?.status, "disconnected");
+  assert.ok(memory.read(resourcePath));
+  assert.ok(memory.read(contextPath));
+
+  const result = await deleteSourceConnection({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    actorUid: "admin-1",
+    adapterId: "odorik",
+    displayName: "Odorik sales",
+    providerAccessRevoked: null,
+  }, database);
+  assert.deepEqual(result, {
+    ok: true,
+    connectionId: "odorik-a",
+    resourcesDeleted: 1,
+    contextItemsDeleted: 1,
+    sourceRecordsDisabled: 1,
+    providerAccessRevoked: null,
+  });
+  assert.equal(memory.read(connectionPath), undefined);
+  assert.equal(memory.read(resourcePath), undefined);
+  assert.equal(memory.read(contextPath), undefined);
+  assert.ok(memory.read(otherContextPath));
+  assert.equal(memory.read(callPath)?.contextEnabled, false);
+  assert.equal(memory.read(callPath)?.sourceConnectionDeletedAt, "server-timestamp");
+  assert.equal(memory.read(otherCallPath)?.contextEnabled, true);
+
+  const auditEvents = memory.list("companies/explorers/auditEvents");
+  assert.equal(auditEvents.length, 1);
+  assert.deepEqual({
+    eventType: auditEvents[0]?.eventType,
+    actorUid: auditEvents[0]?.actorUid,
+    connectionId: auditEvents[0]?.connectionId,
+    adapterId: auditEvents[0]?.adapterId,
+    resourcesDeleted: auditEvents[0]?.resourcesDeleted,
+    contextItemsDeleted: auditEvents[0]?.contextItemsDeleted,
+    sourceRecordsDisabled: auditEvents[0]?.sourceRecordsDisabled,
+  }, {
+    eventType: "source.connection_deleted",
+    actorUid: "admin-1",
+    connectionId: "odorik-a",
+    adapterId: "odorik",
+    resourcesDeleted: 1,
+    contextItemsDeleted: 1,
+    sourceRecordsDisabled: 1,
+  });
+  assert.doesNotMatch(JSON.stringify(auditEvents), /encrypted-credential/);
+});
+
+test("Calendar incremental sync keeps stable identity and deletes cancellations", () => {
+  const observedAt = Timestamp.fromDate(new Date("2026-07-30T11:00:00.000Z"));
+  const event: CalendarEvent = {
+    id: "event-1",
+    status: "confirmed",
+    summary: "Customer follow-up",
+    description: "Discuss contract renewal",
+    htmlLink: "https://calendar.google.com/event?eid=event-1",
+    updated: "2026-07-30T10:30:00.000Z",
+    start: { dateTime: "2026-08-01T09:00:00+02:00" },
+    end: { dateTime: "2026-08-01T09:30:00+02:00" },
+    organizer: { email: "owner@example.com" },
+    attendees: [{ email: "customer@example.com", responseStatus: "accepted" }],
+  };
+  const baseInput = {
+    companyId: "explorers",
+    connectionId: "calendar-connection",
+    resourceId: calendarResourceId("primary@example.com"),
+    calendarId: "primary@example.com",
+    calendarName: "Primary",
+    observedAt,
+  };
+  const initial = calendarEventContextItem({ ...baseInput, event });
+  const changed = calendarEventContextItem({
+    ...baseInput,
+    event: { ...event, description: "Discuss signed renewal" },
+  });
+  assert.ok(initial);
+  assert.ok(changed);
+  assert.equal(
+    calendarContextItemId("calendar-connection", "primary@example.com", "event-1"),
+    calendarContextItemId("calendar-connection", "primary@example.com", "event-1"),
+  );
+  assert.notEqual(
+    calendarContextItemId("calendar-connection", "primary@example.com", "event-1"),
+    calendarContextItemId("other-connection", "primary@example.com", "event-1"),
+  );
+  assert.deepEqual(initial.source, {
+    adapterId: "google_calendar",
+    connectionId: "calendar-connection",
+    resourceId: calendarResourceId("primary@example.com"),
+    externalId: "event-1",
+    version: "2026-07-30T10:30:00.000Z",
+  });
+  assert.deepEqual(initial.access, { visibility: "company" });
+  assert.deepEqual(initial.participantRefs, [
+    "owner@example.com",
+    "customer@example.com",
+  ]);
+  assert.equal(
+    (initial.provenance as Record<string, unknown>).rawRef,
+    "google-calendar/primary@example.com/events/event-1",
+  );
+  assert.notEqual(
+    (initial.provenance as Record<string, unknown>).checksum,
+    (changed.provenance as Record<string, unknown>).checksum,
+  );
+  assert.equal(
+    calendarEventContextItem({
+      ...baseInput,
+      event: { id: "event-1", status: "cancelled" },
+    }),
+    null,
+  );
+
+  const full = calendarEventsUrl({
+    calendarId: "primary@example.com",
+    timeMin: "2025-07-30T00:00:00.000Z",
+  });
+  assert.equal(full.searchParams.get("timeMin"), "2025-07-30T00:00:00.000Z");
+  assert.equal(full.searchParams.get("syncToken"), null);
+  assert.equal(full.searchParams.get("showDeleted"), "true");
+  assert.equal(full.searchParams.get("singleEvents"), "true");
+
+  const incremental = calendarEventsUrl({
+    calendarId: "primary@example.com",
+    syncToken: "sync-token-1",
+    pageToken: "page-2",
+    timeMin: "ignored",
+  });
+  assert.equal(incremental.searchParams.get("syncToken"), "sync-token-1");
+  assert.equal(incremental.searchParams.get("timeMin"), null);
+  assert.equal(incremental.searchParams.get("pageToken"), "page-2");
+});
+
+test("Drive sync characterizes direct-child selection and normalized provenance", () => {
+  const query = driveFolderFilesQuery("folder-a", "page-2");
+  assert.equal(query.get("q"), "'folder-a' in parents and trashed = false");
+  assert.equal(query.get("pageToken"), "page-2");
+  assert.equal(query.get("pageSize"), "50");
+
+  const importable = importableDriveFiles([
+    {
+      id: "doc-1",
+      name: "Renewal.md",
+      mimeType: "text/markdown",
+    },
+    {
+      id: "folder-child",
+      name: "Nested",
+      mimeType: "application/vnd.google-apps.folder",
+    },
+    {
+      id: "missing-name",
+      mimeType: "text/plain",
+    },
+  ]);
+  assert.deepEqual(importable.map((file) => file.id), ["doc-1"]);
+
+  const observedAt = Timestamp.fromDate(new Date("2026-07-30T11:00:00.000Z"));
+  const file = {
+    id: "doc-1",
+    name: "Renewal.md",
+    mimeType: "text/markdown",
+    modifiedTime: "2026-07-30T10:00:00.000Z",
+    webViewLink: "https://drive.google.com/file/d/doc-1/view",
+  };
+  const item = driveContextItem({
+    companyId: "explorers",
+    connectionId: "drive-connection",
+    folderId: "folder-a",
+    file,
+    contentText: "Customer requested a renewal proposal.",
+    observedAt,
+  });
+  assert.equal(
+    folderResourceId("folder-a"),
+    folderResourceId("folder-a"),
+  );
+  assert.equal(
+    driveContextItemId("drive-connection", "folder-a", "doc-1"),
+    driveContextItemId("drive-connection", "folder-a", "doc-1"),
+  );
+  assert.notEqual(
+    driveContextItemId("drive-connection", "folder-a", "doc-1"),
+    driveContextItemId("drive-connection", "folder-b", "doc-1"),
+  );
+  assert.deepEqual(item.source, {
+    adapterId: "google_drive",
+    connectionId: "drive-connection",
+    resourceId: "folder-a",
+    externalId: "doc-1",
+    version: "2026-07-30T10:00:00.000Z",
+  });
+  assert.deepEqual(item.access, { visibility: "company" });
+  assert.deepEqual(item.artifactRefs, [
+    "https://drive.google.com/file/d/doc-1/view",
+  ]);
+  assert.deepEqual(item.provenance, {
+    checksum: "0e9b432e4e6e1ed0aeef70fc4b2d6c4218cf1c15f83fa473299d23cd6e15ff49",
+    ingestionVersion: "google-drive-v1",
+    modifiedTime: "2026-07-30T10:00:00.000Z",
+  });
+});
+
+test("Odorik context identity is connection-scoped and provenance is stable", () => {
+  const call = {
+    status: "completed",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    from: "+420777123456",
+    to: "+420222333444",
+    summary: "Renewal requested.",
+    transcript: "Please prepare the renewal.",
+    processedAt: "2026-07-30T10:00:00.000Z",
+    updatedAt: "2026-07-30T10:00:00.000Z",
+  };
+  const first = odorikContextItem("call-1", call, "explorers");
+  const second = odorikContextItem("call-1", { ...call }, "explorers");
+  assert.ok(first);
+  assert.ok(second);
+  assert.equal(
+    odorikContextItemId("odorik-a", "call-1"),
+    odorikContextItemId("odorik-a", "call-1"),
+  );
+  assert.notEqual(
+    odorikContextItemId("odorik-a", "call-1"),
+    odorikContextItemId("odorik-b", "call-1"),
+  );
+  assert.deepEqual(first.source, second.source);
+  assert.deepEqual(first.provenance, second.provenance);
+  assert.equal(
+    (first.provenance as Record<string, unknown>).rawRef,
+    "companies/explorers/calls/call-1",
+  );
+});
