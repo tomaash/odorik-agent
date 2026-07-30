@@ -2,7 +2,7 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C0 — implementation complete; deployment verification pending
+**Current implementation slice:** C1 — explicit source capabilities and grants
 
 **Last code review:** 2026-07-30
 
@@ -202,8 +202,8 @@ Every action capability must define:
 
 | Slice | Outcome | Status | Gate |
 | --- | --- | --- | --- |
-| C0 | Characterize and protect current connector behavior | Next | Baseline contract tests pass |
-| C1 | Replace `readOnly` with explicit source capabilities and grants | Pending | Existing sources behave unchanged |
+| C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
+| C1 | Replace `readOnly` with explicit source capabilities and grants | Next | Existing sources behave unchanged |
 | C2 | Put internal actions behind an extensible typed action registry | Pending | Existing workflow approvals behave unchanged |
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Pending | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
@@ -221,7 +221,7 @@ Every action capability must define:
 
 ## Core foundation slices
 
-### C0 — Characterize and protect the baseline
+### C0 — Characterize and protect the baseline — completed 2026-07-30
 
 **Usable outcome:** current source behavior can be refactored without guessing
 what must remain stable.
@@ -679,3 +679,24 @@ YYYY-MM-DD — Slice
 - Known limitations:
 - Decision: continue, revise, or stop
 ```
+
+### 2026-07-30 — C0
+
+- **Commit/deployment:** `e997f07`; GitHub Actions run
+  [30573276441](https://github.com/tomaash/odorik-agent/actions/runs/30573276441)
+  completed successfully.
+- **Acceptance:** the production repository functions were exercised through
+  an in-memory Firestore contract harness; CI rebuilt and tested Functions,
+  rebuilt the frontend, deployed Firebase resources, and the hosted
+  application returned HTTP 200. C0 intentionally made no live provider or
+  source-data mutation.
+- **Metrics observed:** the full redesign suite passes 60 tests: 11 shared
+  workflow, 41 Functions, and 8 frontend tests. Five new connector tests cover
+  public projections and secret exclusion, connection/resource lifecycle,
+  Calendar incremental/cancellation behavior, Drive's direct-child boundary,
+  and deterministic Odorik provenance.
+- **Known limitations:** Drive normalized context uses the provider folder ID
+  while the resource document uses a hashed ID, so generic resource
+  enable/disable cannot match Drive items. Google source audiences remain
+  company-wide. C1 and C4 own those changes respectively.
+- **Decision:** C0 passed. Continue to C1.
