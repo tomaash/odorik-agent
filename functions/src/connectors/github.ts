@@ -18,7 +18,7 @@ export type GitHubAppConfiguration = {
   privateKey: string;
 };
 
-type GitHubAccount = {
+export type GitHubAccount = {
   id: number;
   login: string;
   type: string;
@@ -87,7 +87,7 @@ export type GitHubComment = {
   user: { login: string } | null;
 };
 
-type FetchLike = typeof fetch;
+export type FetchLike = typeof fetch;
 
 const githubApiVersion = "2026-03-10";
 const maxIssuePagesPerRepository = 10;
@@ -242,6 +242,10 @@ export function githubRepositoryResourceId(repositoryId: number): string {
   return `repo_${sha256Hex(String(repositoryId)).slice(0, 24)}`;
 }
 
+export function githubInstallationRoutingPath(installationId: number): string {
+  return `githubInstallations/${installationId}`;
+}
+
 export function githubIssueContextItemId(
   connectionId: string,
   repositoryId: number,
@@ -377,7 +381,21 @@ export async function connectGitHubInstallation(input: {
   });
   const connectionId = `github_${snapshot.installationId}`;
   const connectionRef = connectionDocument(input.companyId, connectionId, database);
-  const existingConnection = await connectionRef.get();
+  const routingRef = database.doc(githubInstallationRoutingPath(snapshot.installationId));
+  const [existingConnection, existingRouting] = await Promise.all([
+    connectionRef.get(),
+    routingRef.get(),
+  ]);
+  if (
+    existingRouting.exists
+    && (
+      existingRouting.data()?.companyId !== input.companyId
+      || existingRouting.data()?.connectionId !== connectionId
+      || Number(existingRouting.data()?.appId) !== input.configuration.appId
+    )
+  ) {
+    throw new Error("GitHub installation is already connected to another company");
+  }
   const existingResources = await connectionRef.collection("resources").get();
   const resourcesByExternalId = new Map(existingResources.docs.map(
     (resource) => [String(resource.data().externalId), resource],
@@ -406,6 +424,13 @@ export async function connectGitHubInstallation(input: {
       scopes: permissionLabels,
     },
     stats: { ...previousStats, lastError: null },
+    webhook: existingConnection.data()?.webhook || {
+      status: "pending",
+      lastDeliveryAt: null,
+      lastEvent: null,
+      lastAction: null,
+      lastError: null,
+    },
     reauthorizationRequired: false,
     createdBy: existingConnection.exists
       ? existingConnection.data()?.createdBy || input.actorUid
@@ -414,6 +439,16 @@ export async function connectGitHubInstallation(input: {
       ? existingConnection.data()?.createdAt || now
       : now,
     updatedBy: input.actorUid,
+    updatedAt: now,
+  }, { merge: true });
+  batch.set(routingRef, {
+    installationId: snapshot.installationId,
+    appId: input.configuration.appId,
+    companyId: input.companyId,
+    connectionId,
+    accountId: snapshot.account.id,
+    accountLogin: snapshot.account.login,
+    createdAt: existingRouting.data()?.createdAt || now,
     updatedAt: now,
   }, { merge: true });
   batch.set(connectionRef.collection("capabilities").doc("issues"), {
@@ -482,6 +517,60 @@ function repositoryApiPath(repository: GitHubRepository): string {
   const [owner, name, ...extra] = repository.full_name.split("/");
   if (!owner || !name || extra.length > 0) throw new Error("Invalid GitHub repository name");
   return `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`;
+}
+
+export async function githubInstallationToken(input: {
+  configuration: GitHubAppConfiguration;
+  installationId: number;
+  fetcher?: FetchLike;
+}): Promise<{ token: string; expiresAt: string }> {
+  const tokenResult = await githubRequest<InstallationTokenResponse>(
+    input.fetcher || fetch,
+    `/app/installations/${input.installationId}/access_tokens`,
+    githubAppJwt(input.configuration),
+    {
+      method: "POST",
+      body: JSON.stringify({ permissions: githubRequiredPermissions }),
+    },
+  );
+  assertReadOnlyPermissions(tokenResult.permissions);
+  return { token: tokenResult.token, expiresAt: tokenResult.expires_at };
+}
+
+export async function fetchGitHubIssueWithComments(input: {
+  configuration: GitHubAppConfiguration;
+  installationId: number;
+  repository: GitHubRepository;
+  issueNumber: number;
+  fetcher?: FetchLike;
+}): Promise<{ issue: GitHubIssue; comments: GitHubComment[] }> {
+  const fetcher = input.fetcher || fetch;
+  const installationToken = await githubInstallationToken({
+    configuration: input.configuration,
+    installationId: input.installationId,
+    fetcher,
+  });
+  const repositoryPath = repositoryApiPath(input.repository);
+  const issue = await githubRequest<GitHubIssue>(
+    fetcher,
+    `${repositoryPath}/issues/${input.issueNumber}`,
+    installationToken.token,
+  );
+  const comments: GitHubComment[] = [];
+  for (
+    let commentPage = 1;
+    issue.comments > 0 && commentPage <= maxCommentPagesPerIssue;
+    commentPage += 1
+  ) {
+    const pageComments = await githubRequest<GitHubComment[]>(
+      fetcher,
+      `${repositoryPath}/issues/${input.issueNumber}/comments?per_page=100&page=${commentPage}`,
+      installationToken.token,
+    );
+    comments.push(...pageComments);
+    if (pageComments.length < 100) break;
+  }
+  return { issue, comments };
 }
 
 async function fetchRepositoryIssues(input: {
@@ -639,4 +728,46 @@ export async function syncGitHubConnection(input: {
     }, { merge: true });
     throw error;
   }
+}
+
+export async function syncAllGitHubConnections(input: {
+  configuration: GitHubAppConfiguration;
+  fetcher?: FetchLike;
+  database?: FirebaseFirestore.Firestore;
+}): Promise<Array<{ companyId: string; connectionId: string; ok: boolean; error?: string }>> {
+  const database = input.database || db;
+  const companies = await database.collection("companies").get();
+  const results: Array<{
+    companyId: string;
+    connectionId: string;
+    ok: boolean;
+    error?: string;
+  }> = [];
+  for (const company of companies.docs) {
+    if (company.data().status !== "active") continue;
+    const connections = await company.ref.collection("connections")
+      .where("connectorId", "==", "github")
+      .where("status", "in", ["active", "attention"])
+      .get();
+    for (const connection of connections.docs) {
+      try {
+        await syncGitHubConnection({
+          companyId: company.id,
+          connectionId: connection.id,
+          configuration: input.configuration,
+          fetcher: input.fetcher,
+          database,
+        });
+        results.push({ companyId: company.id, connectionId: connection.id, ok: true });
+      } catch (error) {
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  return results;
 }

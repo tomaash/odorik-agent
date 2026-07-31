@@ -53,9 +53,7 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
       "metadata:read",
       "pull_requests:read",
     ],
-    // The development App has no webhook configured yet; admins trigger the
-    // bounded snapshot sync from Sources until the webhook slice lands.
-    syncMode: "manual",
+    syncMode: "webhook",
     requiresApproval: false,
   },
 };

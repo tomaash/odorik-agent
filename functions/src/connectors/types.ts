@@ -67,6 +67,14 @@ export type ConnectionPublicView = {
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;
   lastError?: string | null;
+  webhook?: {
+    status: "pending" | "active" | "attention";
+    lastDeliveryAt?: string | null;
+    lastEvent?: string | null;
+    lastAction?: string | null;
+    lastOutcome?: string | null;
+    lastError?: string | null;
+  };
   /** The provider grant is gone; only fresh consent restores the connection. */
   reauthorizationRequired: boolean;
   itemCount: number;

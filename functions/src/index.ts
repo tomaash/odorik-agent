@@ -6,6 +6,7 @@ import { synchronizeKnowledgeRecord } from "./sync-qdrant.js";
 import {
   connectorCredentialKey,
   geminiApiKey,
+  githubAppPrivateKey,
   googleConnectorClientId,
   googleConnectorClientSecret,
   qdrantApiKey,
@@ -14,11 +15,16 @@ import {
 import { projectOdorikCallContext } from "./connectors/odorik.js";
 import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.js";
 import {
+  githubConfigurationFromEnvironment,
+  syncAllGitHubConnections,
+} from "./connectors/github.js";
+import {
   runEnabledWorkflowsForCall,
   workflowRuntimeFlags,
 } from "./workflow/runtime.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { sendPartnerForm } from "./partner-form.js";
+export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
 
 export { api };
 
@@ -125,6 +131,30 @@ export const syncCalendarSources = onSchedule(
     if (failures.length) {
       console.error("One or more Google Calendar connections failed to synchronize", failures);
       throw new Error(`${failures.length} Google Calendar connection(s) failed`);
+    }
+  },
+);
+
+export const syncGitHubSources = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 3,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [githubAppPrivateKey],
+  },
+  async () => {
+    const results = await syncAllGitHubConnections({
+      configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more GitHub connections failed to reconcile", failures);
+      throw new Error(`${failures.length} GitHub connection(s) failed`);
     }
   },
 );

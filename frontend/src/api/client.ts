@@ -486,6 +486,14 @@ export type SourceConnection = {
   reauthorizationRequired?: boolean
   itemCount: number
   resourceCount: number
+  webhook?: {
+    status: 'pending' | 'active' | 'attention'
+    lastDeliveryAt?: string | null
+    lastEvent?: string | null
+    lastAction?: string | null
+    lastOutcome?: string | null
+    lastError?: string | null
+  }
   capabilities: SourceCapability[]
   resources: SourceResource[]
 }
