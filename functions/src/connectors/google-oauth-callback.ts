@@ -1,8 +1,7 @@
 import { onRequest } from "firebase-functions/v2/https";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
-import { exchangeGoogleAuthorization } from "./google-calendar.js";
-import { exchangeGoogleDriveAuthorization } from "./google-drive.js";
+import { completeGoogleWorkspaceAuthorization } from "./google-oauth.js";
 import { googleOAuthReturnUrl } from "./google-oauth-return.js";
 import {
   connectorCredentialKey,
@@ -41,44 +40,30 @@ export const googleOAuthCallback = onRequest(
     const sourcesUrl = googleOAuthReturnUrl(
       typeof stateData?.returnUrl === "string" ? stateData.returnUrl : undefined,
     );
-    const resultKey = stateData?.provider === "google_drive"
-      ? "drive"
-      : stateData?.provider === "google_calendar"
-        ? "calendar"
-        : "auth";
     if (oauthError) {
-      response.redirect(`${sourcesUrl}?${resultKey}=denied`);
+      response.redirect(`${sourcesUrl}?workspace=denied`);
       return;
     }
     if (!code || !state) {
-      response.redirect(`${sourcesUrl}?${resultKey}=invalid`);
+      response.redirect(`${sourcesUrl}?workspace=invalid`);
       return;
     }
     try {
-      const provider = stateData?.provider;
-
-      if (provider === "google_drive") {
-        await exchangeGoogleDriveAuthorization({
-          code,
-          state,
-          clientId: googleConnectorClientId.value(),
-          clientSecret: googleConnectorClientSecret.value(),
-          credentialKey: connectorCredentialKey.value(),
-        });
-        response.redirect(`${sourcesUrl}?drive=connected`);
-      } else {
-        await exchangeGoogleAuthorization({
-          code,
-          state,
-          clientId: googleConnectorClientId.value(),
-          clientSecret: googleConnectorClientSecret.value(),
-          credentialKey: connectorCredentialKey.value(),
-        });
-        response.redirect(`${sourcesUrl}?calendar=connected`);
-      }
+      const result = await completeGoogleWorkspaceAuthorization({
+        code,
+        state,
+        clientId: googleConnectorClientId.value(),
+        clientSecret: googleConnectorClientSecret.value(),
+        credentialKey: connectorCredentialKey.value(),
+      });
+      response.redirect(
+        `${sourcesUrl}?workspace=${
+          result.missingCapabilityIds.length > 0 ? "partial" : "connected"
+        }`,
+      );
     } catch (error) {
       console.error("Google OAuth callback failed", error);
-      response.redirect(`${sourcesUrl}?${resultKey}=failed`);
+      response.redirect(`${sourcesUrl}?workspace=failed`);
     }
   },
 );

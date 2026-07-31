@@ -413,22 +413,48 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type AdapterId = 'odorik' | 'google_calendar' | 'google_drive' | 'gmail' | 'github'
+export type ConnectorId = 'odorik' | 'google_workspace'
+export type SourceCapabilityId =
+  | 'context.call.read'
+  | 'context.calendar.read'
+  | 'context.document.read'
 
-export type SourceAdapter = {
-  id: AdapterId
+export type SourceCapabilityDescriptor = {
+  id: SourceCapabilityId
+  serviceId: 'calls' | 'calendar' | 'drive'
+  direction: 'observe'
+  resourceType: 'phone_line' | 'calendar' | 'folder'
+  requiredScopes: string[]
+  syncMode: 'webhook' | 'incremental' | 'manual'
+  requiresApproval: false
+}
+
+export type SourceConnector = {
+  id: ConnectorId
   name: string
   description: string
-  resourceNoun: string
-  available: boolean
-  availability: 'available' | 'needs_configuration' | 'planned'
-  readOnly: boolean
+  availability: 'available' | 'needs_configuration'
+  capabilities: SourceCapabilityDescriptor[]
+}
+
+export type SourceCapability = {
+  id: 'calls' | 'calendar' | 'drive'
+  capabilityId: SourceCapabilityId
+  status: 'active' | 'attention' | 'reauthorization_required' | 'disabled'
+  grantedScopes: string[]
+  requiredScopes: string[]
+  itemCount: number
+  resourceCount: number
+  lastSyncAt?: string | null
+  lastObservedAt?: string | null
+  lastError?: string | null
 }
 
 export type SourceResource = {
   id: string
   connectionId: string
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository'
+  capabilityId: SourceCapabilityId
+  resourceType: 'phone_line' | 'calendar' | 'folder'
   externalId: string
   displayName: string
   status: 'enabled' | 'disabled'
@@ -439,25 +465,30 @@ export type SourceResource = {
 export type SourceConnection = {
   id: string
   companyId: string
-  adapterId: AdapterId
+  connectorId: ConnectorId
+  providerId: 'odorik' | 'google'
+  providerAccountId?: string
+  tenantId?: string
   displayName: string
   status: 'configuring' | 'active' | 'attention' | 'disconnected'
-  authKind: 'basic_upload' | 'oauth2' | 'github_app'
+  authKind: 'basic_upload' | 'oauth2'
   credentialMode: 'encrypted' | 'legacy_secret' | 'none'
   uploadUrl?: string
   accountLabel?: string
+  grantedScopes: string[]
   lastSyncAt?: string | null
   lastObservedAt?: string | null
   lastError?: string | null
   reauthorizationRequired?: boolean
   itemCount: number
   resourceCount: number
+  capabilities: SourceCapability[]
   resources: SourceResource[]
 }
 
 export type SourcesResponse = {
   companyId: string
-  adapters: SourceAdapter[]
+  connectors: SourceConnector[]
   connections: SourceConnection[]
 }
 
@@ -711,6 +742,18 @@ export async function setSourceConnectionStatus(
   return trpc.sources.setConnectionStatus.mutate({ connectionId, status })
 }
 
+export async function setSourceCapabilityStatus(
+  connectionId: string,
+  capabilityId: Exclude<SourceCapabilityId, 'context.call.read'>,
+  enabled: boolean,
+) {
+  return trpc.sources.setCapabilityStatus.mutate({
+    connectionId,
+    capabilityId,
+    enabled,
+  })
+}
+
 export async function deleteSourceConnection(connectionId: string) {
   return trpc.sources.deleteConnection.mutate({ connectionId })
 }
@@ -732,8 +775,13 @@ export type SelectableFolder = {
   selected: boolean
 }
 
-export async function startGoogleCalendarAuthorization() {
-  return trpc.sources.googleCalendar.authorizationUrl.mutate({
+export async function startGoogleWorkspaceAuthorization(
+  capabilityIds: Array<Exclude<SourceCapabilityId, 'context.call.read'>>,
+  connectionId?: string,
+) {
+  return trpc.sources.googleWorkspace.authorizationUrl.mutate({
+    capabilityIds,
+    ...(connectionId ? { connectionId } : {}),
     returnOrigin: window.location.origin,
   })
 }
@@ -748,12 +796,6 @@ export async function selectGoogleCalendars(connectionId: string, calendarIds: s
 
 export async function syncGoogleCalendars(connectionId: string) {
   return trpc.sources.googleCalendar.sync.mutate({ connectionId })
-}
-
-export async function startGoogleDriveAuthorization() {
-  return trpc.sources.googleDrive.authorizationUrl.mutate({
-    returnOrigin: window.location.origin,
-  })
 }
 
 export async function getGoogleDriveFolders(connectionId: string): Promise<SelectableFolder[]> {

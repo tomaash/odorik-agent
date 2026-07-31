@@ -15,6 +15,7 @@
     "eval:live": "npm run build && node lib/eval/run.js --live",
     "qdrant:reindex": "npm run build && node --env-file=../.env lib/reindex-qdrant.js",
     "migrate:sources": "npm run build && node lib/migrate-source-adapters.js",
+    "reset:google": "npm run build && node lib/reset-google-connectors.js",
     "migrate:multi-tenant": "npm run build && node lib/migrate-multi-tenant.js",
     "migrate:cases": "npm run build && node lib/migrate-cases.js",
     "seed:local": "node scripts/seed-local.js",

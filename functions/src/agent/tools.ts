@@ -201,7 +201,18 @@ function extractCitationInfo(record: CompanyRecord): {
 
   if (record.kind === "context_item") {
     const sourceObj = (data.source && typeof data.source === "object" ? data.source : {}) as Record<string, unknown>;
-    adapterId = typeof sourceObj.adapterId === "string" ? sourceObj.adapterId : undefined;
+    const capabilityId = typeof sourceObj.capabilityId === "string"
+      ? sourceObj.capabilityId
+      : undefined;
+    adapterId = capabilityId === "context.document.read"
+      ? "google_drive"
+      : capabilityId === "context.calendar.read"
+        ? "google_calendar"
+        : capabilityId === "context.call.read"
+          ? "odorik"
+          : typeof sourceObj.adapterId === "string"
+            ? sourceObj.adapterId
+            : undefined;
     if (adapterId === "google_drive") {
       externalUrl = artifactRefs?.[0];
     } else if (adapterId === "google_calendar") {

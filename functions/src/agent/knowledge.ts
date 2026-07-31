@@ -55,7 +55,14 @@ const filterFields: Record<KnowledgeKind, string[]> = {
   task: ["status", "assigneeUid", "contactId", "caseId", "callId"],
   case: ["stageId", "contactId", "ownerUid"],
   audit_event: ["aggregateType", "aggregateId", "type"],
-  context_item: ["kind", "source.adapterId", "source.connectionId", "source.resourceId"],
+  context_item: [
+    "kind",
+    "source.providerId",
+    "source.capabilityId",
+    "source.adapterId",
+    "source.connectionId",
+    "source.resourceId",
+  ],
 };
 
 export type CompanyRecord = {
@@ -156,7 +163,18 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
 
   if (record.kind === "context_item") {
     const sourceObj = (data.source && typeof data.source === "object" ? data.source : {}) as Record<string, unknown>;
-    adapterId = typeof sourceObj.adapterId === "string" ? sourceObj.adapterId : null;
+    const capabilityId = typeof sourceObj.capabilityId === "string"
+      ? sourceObj.capabilityId
+      : null;
+    adapterId = capabilityId === "context.document.read"
+      ? "google_drive"
+      : capabilityId === "context.calendar.read"
+        ? "google_calendar"
+        : capabilityId === "context.call.read"
+          ? "odorik"
+          : typeof sourceObj.adapterId === "string"
+            ? sourceObj.adapterId
+            : null;
     if (adapterId === "google_drive") {
       externalUrl = artifactRefs[0] || null;
     } else if (adapterId === "google_calendar") {

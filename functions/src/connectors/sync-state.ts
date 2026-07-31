@@ -77,3 +77,85 @@ export async function markConnectionAttention(input: {
     }, { merge: true });
   });
 }
+
+async function refreshConnectionAggregate(
+  connection: FirebaseFirestore.DocumentReference,
+): Promise<void> {
+  const [capabilities, resources] = await Promise.all([
+    connection.collection("capabilities").get(),
+    connection.collection("resources").get(),
+  ]);
+  const activeCapabilities = capabilities.docs.filter(
+    (document) => document.data().status !== "disabled",
+  );
+  const attention = activeCapabilities.find(
+    (document) => document.data().status !== "active",
+  );
+  const lastError = attention?.data().stats?.lastError || null;
+  const itemCount = resources.docs.reduce(
+    (sum, resource) => sum + Number(resource.data().itemCount || 0),
+    0,
+  );
+  await connection.set({
+    status: attention ? "attention" : "active",
+    stats: {
+      itemCount,
+      lastSyncAt: FieldValue.serverTimestamp(),
+      lastObservedAt: FieldValue.serverTimestamp(),
+      lastError,
+    },
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+}
+
+/** Record one Workspace subsystem sync without letting it overwrite sibling state. */
+export async function markCapabilitySynced(input: {
+  connection: FirebaseFirestore.DocumentReference;
+  capability: FirebaseFirestore.DocumentReference;
+  itemCount: number;
+}): Promise<boolean> {
+  const updated = await db.runTransaction(async (transaction) => {
+    const [connection, capability] = await Promise.all([
+      transaction.get(input.connection),
+      transaction.get(input.capability),
+    ]);
+    if (
+      !connection.exists
+      || !activeStatuses.includes(String(connection.data()?.status))
+      || !capability.exists
+      || capability.data()?.status !== "active"
+    ) return false;
+    transaction.set(input.capability, {
+      status: "active",
+      stats: {
+        itemCount: input.itemCount,
+        lastSyncAt: FieldValue.serverTimestamp(),
+        lastObservedAt: FieldValue.serverTimestamp(),
+        lastError: null,
+      },
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return true;
+  });
+  if (updated) await refreshConnectionAggregate(input.connection);
+  return updated;
+}
+
+/** Move only the failing Workspace subsystem to attention, then aggregate. */
+export async function markCapabilityAttention(input: {
+  connection: FirebaseFirestore.DocumentReference;
+  capability: FirebaseFirestore.DocumentReference;
+  error: unknown;
+}): Promise<void> {
+  const message = (
+    input.error instanceof Error ? input.error.message : String(input.error)
+  ).slice(0, 1500);
+  const current = await input.connection.get();
+  if (!current.exists || !activeStatuses.includes(String(current.data()?.status))) return;
+  await input.capability.set({
+    status: "attention",
+    stats: { lastError: message },
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  await refreshConnectionAggregate(input.connection);
+}

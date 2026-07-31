@@ -12,7 +12,7 @@
       "collectionGroup": "connections",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "adapterId", "order": "ASCENDING" },
+        { "fieldPath": "connectorId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
     },

@@ -43,24 +43,26 @@ import {
   listSources,
   migrateLegacyOdorik,
   prepareConnectionDeletion,
+  setCapabilityStatus,
   setConnectionStatus,
   setResourceStatus,
 } from "./connectors/repository.js";
 import { odorikDestinationUrl } from "./connectors/odorik.js";
 import {
-  createCalendarAuthorization,
   listGoogleCalendars,
-  revokeGoogleCalendarAuthorization,
   selectGoogleCalendars,
   syncGoogleCalendarConnection,
 } from "./connectors/google-calendar.js";
 import {
-  createDriveAuthorization,
   listGoogleDriveFolders,
-  revokeGoogleDriveAuthorization,
   selectGoogleDriveFolders,
   syncGoogleDriveConnection,
 } from "./connectors/google-drive.js";
+import {
+  createGoogleWorkspaceAuthorization,
+  revokeGoogleWorkspaceAuthorization,
+} from "./connectors/google-oauth.js";
+import type { SourceCapabilityId } from "./connectors/types.js";
 import {
   acceptTeamInvitation,
   createTeamInvitation,
@@ -186,17 +188,28 @@ export const appRouter = router({
 
   sources: router({
     list: enabledProcedure.query(({ ctx }) => listSources(ctx.companyId)),
-    googleCalendar: router({
+    googleWorkspace: router({
       authorizationUrl: adminProcedure
-        .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
-        .mutation(({ ctx, input }) => createCalendarAuthorization({
+        .input(z.object({
+          capabilityIds: z.array(z.enum([
+            "context.calendar.read",
+            "context.document.read",
+          ])).min(1).max(2),
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
+          returnOrigin: z.string().max(200).optional(),
+        }))
+        .mutation(({ ctx, input }) => createGoogleWorkspaceAuthorization({
           companyId: ctx.companyId,
           uid: ctx.uid,
           email: ctx.email,
           displayName: ctx.displayName,
           clientId: googleConnectorClientId.value(),
-          returnOrigin: input?.returnOrigin,
+          capabilityIds: input.capabilityIds as SourceCapabilityId[],
+          connectionId: input.connectionId,
+          returnOrigin: input.returnOrigin,
         })),
+    }),
+    googleCalendar: router({
       calendars: adminProcedure
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
@@ -234,16 +247,6 @@ export const appRouter = router({
         })),
     }),
     googleDrive: router({
-      authorizationUrl: adminProcedure
-        .input(z.object({ returnOrigin: z.string().max(200).optional() }).optional())
-        .mutation(({ ctx, input }) => createDriveAuthorization({
-          companyId: ctx.companyId,
-          uid: ctx.uid,
-          email: ctx.email,
-          displayName: ctx.displayName,
-          clientId: googleConnectorClientId.value(),
-          returnOrigin: input?.returnOrigin,
-        })),
       folders: adminProcedure
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
@@ -325,6 +328,25 @@ export const appRouter = router({
           });
         }
       }),
+    setCapabilityStatus: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        capabilityId: z.enum([
+          "context.calendar.read",
+          "context.document.read",
+        ]),
+        enabled: z.boolean(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        await setCapabilityStatus({
+          companyId: ctx.companyId,
+          connectionId: input.connectionId,
+          capabilityId: input.capabilityId,
+          enabled: input.enabled,
+          actorUid: ctx.uid,
+        });
+        return { ok: true };
+      }),
     deleteConnection: adminProcedure
       .input(z.object({
         connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
@@ -337,29 +359,15 @@ export const appRouter = router({
             ctx.uid,
           );
           let providerAccessRevoked: boolean | null = null;
-          if (prepared.adapterId === "google_calendar") {
+          if (prepared.connectorId === "google_workspace") {
             try {
-              providerAccessRevoked = await revokeGoogleCalendarAuthorization({
+              providerAccessRevoked = await revokeGoogleWorkspaceAuthorization({
                 companyId: ctx.companyId,
                 connectionId: input.connectionId,
                 credentialKey: connectorCredentialKey.value(),
               });
             } catch (error) {
               console.warn("Google OAuth revocation failed; deleting local credentials anyway", {
-                connectionId: input.connectionId,
-                error: error instanceof Error ? error.message : String(error),
-              });
-              providerAccessRevoked = false;
-            }
-          } else if (prepared.adapterId === "google_drive") {
-            try {
-              providerAccessRevoked = await revokeGoogleDriveAuthorization({
-                companyId: ctx.companyId,
-                connectionId: input.connectionId,
-                credentialKey: connectorCredentialKey.value(),
-              });
-            } catch (error) {
-              console.warn("Google Drive OAuth revocation failed; deleting local credentials anyway", {
                 connectionId: input.connectionId,
                 error: error instanceof Error ? error.message : String(error),
               });

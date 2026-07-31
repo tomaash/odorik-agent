@@ -1,6 +1,6 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db, jsonSafe } from "../firestore.js";
-import { adapterCatalog } from "./registry.js";
+import { capabilityDescriptor, connectorCatalog } from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
 import {
   legacyOdorikConnectionId,
@@ -10,9 +10,11 @@ import {
   odorikResourceIdentity,
 } from "./odorik.js";
 import type {
-  AdapterId,
+  CapabilityConfigurationPublicView,
+  ConnectorId,
   ConnectionPublicView,
   ConnectionResourcePublicView,
+  SourceCapabilityId,
 } from "./types.js";
 
 const ingestBaseUrl = process.env.ODORIK_INGEST_BASE_URL?.trim()
@@ -33,11 +35,15 @@ export function sourceResourcePublicView(
   connectionId: string,
   id: string,
   data: Record<string, unknown>,
+  fallbackCapabilityId: SourceCapabilityId = "context.call.read",
 ): ConnectionResourcePublicView {
   const safe = jsonSafe(data) as Record<string, unknown>;
   return {
     id,
     connectionId,
+    capabilityId: (
+      typeof safe.capabilityId === "string" ? safe.capabilityId : fallbackCapabilityId
+    ) as SourceCapabilityId,
     resourceType: (safe.resourceType || "phone_line") as ConnectionResourcePublicView["resourceType"],
     externalId: String(safe.externalId || id),
     displayName: String(safe.displayName || safe.externalId || id),
@@ -58,6 +64,17 @@ export async function listSources(
     .get();
   const connections = await Promise.all(connectionsSnapshot.docs.map(async (document) => {
     const data = jsonSafe(document.data()) as Record<string, unknown>;
+    const connectorId = (
+      typeof data.connectorId === "string"
+        ? data.connectorId
+        : data.adapterId === "odorik"
+          ? "odorik"
+          : null
+    ) as ConnectorId | null;
+    if (!connectorId) return null;
+    const fallbackCapabilityId: SourceCapabilityId = connectorId === "odorik"
+      ? "context.call.read"
+      : "context.document.read";
     const resourcesSnapshot = await document.ref.collection("resources")
       .orderBy("displayName", "asc")
       .get();
@@ -65,21 +82,78 @@ export async function listSources(
       document.id,
       resource.id,
       resource.data(),
+      fallbackCapabilityId,
     ));
+    const capabilitySnapshots = await document.ref.collection("capabilities").get();
     const stats = (data.stats || {}) as Record<string, unknown>;
     const auth = (data.auth || {}) as Record<string, unknown>;
+    const capabilities: CapabilityConfigurationPublicView[] = connectorId === "odorik"
+      ? [{
+        id: "calls",
+        capabilityId: "context.call.read",
+        status: data.status === "disconnected" ? "disabled" : "active",
+        grantedScopes: [],
+        requiredScopes: [],
+        itemCount: Number(stats.itemCount || resources.reduce((sum, item) => sum + item.itemCount, 0)),
+        resourceCount: resources.length,
+        lastSyncAt: typeof stats.lastSyncAt === "string" ? stats.lastSyncAt : null,
+        lastObservedAt: typeof stats.lastObservedAt === "string" ? stats.lastObservedAt : null,
+        lastError: typeof stats.lastError === "string" ? stats.lastError : null,
+        createdAt: typeof data.createdAt === "string" ? data.createdAt : null,
+        updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
+      }]
+      : capabilitySnapshots.docs.map((capability) => {
+        const safe = jsonSafe(capability.data()) as Record<string, unknown>;
+        const capabilityStats = (safe.stats || {}) as Record<string, unknown>;
+        const capabilityId = String(safe.capabilityId) as SourceCapabilityId;
+        const descriptor = capabilityDescriptor(capabilityId);
+        const capabilityResources = resources.filter(
+          (resource) => resource.capabilityId === capabilityId,
+        );
+        return {
+          id: descriptor.serviceId,
+          capabilityId,
+          status: String(safe.status || "attention") as CapabilityConfigurationPublicView["status"],
+          grantedScopes: Array.isArray(safe.grantedScopes)
+            ? safe.grantedScopes.map(String)
+            : [],
+          requiredScopes: descriptor.requiredScopes,
+          itemCount: Number(
+            capabilityStats.itemCount
+            || capabilityResources.reduce((sum, item) => sum + item.itemCount, 0),
+          ),
+          resourceCount: capabilityResources.length,
+          lastSyncAt: typeof capabilityStats.lastSyncAt === "string"
+            ? capabilityStats.lastSyncAt
+            : null,
+          lastObservedAt: typeof capabilityStats.lastObservedAt === "string"
+            ? capabilityStats.lastObservedAt
+            : null,
+          lastError: typeof capabilityStats.lastError === "string"
+            ? capabilityStats.lastError
+            : null,
+          createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
+          updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
+        };
+      });
     const connection: ConnectionPublicView = {
       id: document.id,
       companyId,
-      adapterId: String(data.adapterId || "odorik") as AdapterId,
+      connectorId,
+      providerId: connectorId === "google_workspace" ? "google" : "odorik",
+      providerAccountId: typeof data.providerAccountId === "string"
+        ? data.providerAccountId
+        : undefined,
+      tenantId: typeof data.tenantId === "string" ? data.tenantId : undefined,
       displayName: String(data.displayName || document.id),
       status: (data.status || "attention") as ConnectionPublicView["status"],
       authKind: (auth.kind || "basic_upload") as ConnectionPublicView["authKind"],
       credentialMode: (auth.credentialMode || "none") as ConnectionPublicView["credentialMode"],
       accountLabel: typeof data.accountLabel === "string" ? data.accountLabel : undefined,
-      uploadUrl: data.adapterId === "odorik"
+      uploadUrl: connectorId === "odorik"
         ? odorikUploadUrl(companyId, document.id)
         : undefined,
+      grantedScopes: Array.isArray(auth.scopes) ? auth.scopes.map(String) : [],
       lastSyncAt: typeof stats.lastSyncAt === "string" ? stats.lastSyncAt : null,
       lastObservedAt: typeof stats.lastObservedAt === "string"
         ? stats.lastObservedAt
@@ -92,14 +166,17 @@ export async function listSources(
       resourceCount: resources.length,
       createdAt: typeof data.createdAt === "string" ? data.createdAt : null,
       updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
+      capabilities,
       resources,
     };
     return connection;
   }));
   return {
     companyId,
-    adapters: adapterCatalog(),
-    connections,
+    connectors: connectorCatalog(),
+    connections: connections.filter(
+      (connection): connection is ConnectionPublicView => connection !== null,
+    ),
   };
 }
 
@@ -119,8 +196,10 @@ export async function createOdorikConnection(input: {
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   batch.set(connectionRef, {
+    schemaVersion: 2,
     companyId: input.companyId,
-    adapterId: "odorik",
+    connectorId: "odorik",
+    providerId: "odorik",
     displayName: input.displayName,
     accountLabel: input.accountLabel || null,
     status: "active",
@@ -139,6 +218,7 @@ export async function createOdorikConnection(input: {
     const identity = odorikResourceIdentity({ to: number });
     batch.set(connectionRef.collection("resources").doc(identity.resourceId), {
       connectionId: connectionRef.id,
+      capabilityId: "context.call.read",
       resourceType: "phone_line",
       externalId: identity.externalId,
       displayName: identity.displayName,
@@ -164,7 +244,7 @@ export async function getOdorikSetupDestination(input: {
   const data = connection.data();
   if (
     !connection.exists
-    || data?.adapterId !== "odorik"
+    || (data?.connectorId !== "odorik" && data?.adapterId !== "odorik")
     || data?.auth?.credentialMode !== "encrypted"
     || typeof data.credentialCiphertext !== "string"
   ) {
@@ -193,6 +273,11 @@ export async function setConnectionStatus(
   const ref = connectionCollection(companyId, database).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
+  if (snapshot.data()?.connectorId === "google_workspace") {
+    throw new Error(
+      "Google Workspace account status is managed through authorization and revocation",
+    );
+  }
   await ref.set({
     status,
     updatedBy: actorUid,
@@ -205,7 +290,7 @@ export async function prepareConnectionDeletion(
   connectionId: string,
   actorUid: string,
   database: FirebaseFirestore.Firestore = db,
-): Promise<{ adapterId: AdapterId; displayName: string }> {
+): Promise<{ connectorId: ConnectorId; displayName: string }> {
   const ref = connectionCollection(companyId, database).doc(connectionId);
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
@@ -217,7 +302,7 @@ export async function prepareConnectionDeletion(
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
   return {
-    adapterId: String(data.adapterId || "odorik") as AdapterId,
+    connectorId: String(data.connectorId || data.adapterId || "odorik") as ConnectorId,
     displayName: String(data.displayName || connectionId),
   };
 }
@@ -238,7 +323,7 @@ export async function deleteSourceConnection(
     companyId: string;
     connectionId: string;
     actorUid: string;
-    adapterId: AdapterId;
+    connectorId: ConnectorId;
     displayName: string;
     providerAccessRevoked: boolean | null;
   },
@@ -252,13 +337,14 @@ export async function deleteSourceConnection(
   providerAccessRevoked: boolean | null;
 }> {
   const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
-  const [connection, resources, contextItems, calls] = await Promise.all([
+  const [connection, capabilities, resources, contextItems, calls] = await Promise.all([
     connectionRef.get(),
+    connectionRef.collection("capabilities").get(),
     connectionRef.collection("resources").get(),
     database.collection(`companies/${input.companyId}/contextItems`)
       .where("source.connectionId", "==", input.connectionId)
       .get(),
-    input.adapterId === "odorik"
+    input.connectorId === "odorik"
       ? database.collection(`companies/${input.companyId}/calls`)
         .where("connectionId", "==", input.connectionId).get()
       : Promise.resolve(null),
@@ -272,6 +358,9 @@ export async function deleteSourceConnection(
   }, { merge: true })), database);
   await commitInChunks([
     ...contextItems.docs.map((item) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(item.ref)),
+    ...capabilities.docs.map((capability) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(capability.ref)),
     ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
   ], database);
 
@@ -281,7 +370,7 @@ export async function deleteSourceConnection(
     eventType: "source.connection_deleted",
     actorUid: input.actorUid,
     connectionId: input.connectionId,
-    adapterId: input.adapterId,
+    connectorId: input.connectorId,
     displayName: input.displayName,
     resourcesDeleted: resources.size,
     contextItemsDeleted: contextItems.size,
@@ -342,6 +431,172 @@ export async function setResourceStatus(
   await batch.commit();
 }
 
+export async function setCapabilityStatus(
+  input: {
+    companyId: string;
+    connectionId: string;
+    capabilityId: SourceCapabilityId;
+    enabled: boolean;
+    actorUid: string;
+  },
+  database: FirebaseFirestore.Firestore = db,
+): Promise<void> {
+  const descriptor = capabilityDescriptor(input.capabilityId);
+  const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
+  const capabilityRef = connectionRef.collection("capabilities").doc(descriptor.serviceId);
+  const [connection, capability, resources, contextItems] = await Promise.all([
+    connectionRef.get(),
+    capabilityRef.get(),
+    connectionRef.collection("resources")
+      .where("capabilityId", "==", input.capabilityId)
+      .get(),
+    database.collection(`companies/${input.companyId}/contextItems`)
+      .where("source.connectionId", "==", input.connectionId)
+      .where("source.capabilityId", "==", input.capabilityId)
+      .get(),
+  ]);
+  if (
+    !connection.exists
+    || connection.data()?.connectorId !== "google_workspace"
+    || !capability.exists
+  ) {
+    throw new Error("Workspace capability not found");
+  }
+  if (
+    input.enabled
+    && !["active", "disabled"].includes(String(capability.data()?.status))
+  ) {
+    throw new Error("Reconnect Google Workspace before enabling this service");
+  }
+  await commitInChunks([
+    (batch) => batch.set(capabilityRef, {
+      status: input.enabled ? "active" : "disabled",
+      disabledBy: input.enabled ? FieldValue.delete() : input.actorUid,
+      disabledAt: input.enabled ? FieldValue.delete() : FieldValue.serverTimestamp(),
+      updatedBy: input.actorUid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }),
+    (batch) => batch.set(connectionRef, {
+      // A locally disabled subsystem does not disconnect or revoke the
+      // provider account. The connection remains authorized and can later
+      // enable another already-granted capability without a new OAuth flow.
+      status: "active",
+      updatedBy: input.actorUid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }),
+    ...(!input.enabled ? resources.docs.map((resource) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.set(resource.ref, {
+      status: "disabled",
+      updatedBy: input.actorUid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })) : []),
+    ...(!input.enabled ? contextItems.docs.map((context) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(context.ref)) : []),
+  ], database);
+}
+
+export type GoogleConnectorResetResult = {
+  applied: boolean;
+  companyId: string;
+  connections: number;
+  capabilities: number;
+  resources: number;
+  contextItems: number;
+  oauthStates: number;
+};
+
+/**
+ * One-time pre-production reset for the superseded split Google model.
+ *
+ * The selection is deliberately structural rather than name-based: only old
+ * Calendar/Drive connections, new Workspace connections, Google-owned context,
+ * and Google OAuth state qualify. Odorik and internal operational collections
+ * never enter the write set.
+ */
+export async function resetGoogleConnectorData(
+  input: {
+    companyId: string;
+    actorUid: string;
+    apply: boolean;
+  },
+  database: FirebaseFirestore.Firestore = db,
+): Promise<GoogleConnectorResetResult> {
+  const connectionSnapshot = await connectionCollection(input.companyId, database).get();
+  const googleConnections = connectionSnapshot.docs.filter((connection) => {
+    const data = connection.data();
+    return data.connectorId === "google_workspace"
+      || data.adapterId === "google_calendar"
+      || data.adapterId === "google_drive";
+  });
+  const googleConnectionIds = new Set(googleConnections.map((connection) => connection.id));
+  const childSnapshots = await Promise.all(googleConnections.map(async (connection) => ({
+    capabilities: await connection.ref.collection("capabilities").get(),
+    resources: await connection.ref.collection("resources").get(),
+  })));
+  const contextSnapshot = await database
+    .collection(`companies/${input.companyId}/contextItems`)
+    .get();
+  const googleContext = contextSnapshot.docs.filter((context) => {
+    const source = context.data().source || {};
+    return source.providerId === "google"
+      || source.adapterId === "google_calendar"
+      || source.adapterId === "google_drive"
+      || googleConnectionIds.has(String(source.connectionId || ""));
+  });
+  const oauthSnapshot = await database.collection("oauthStates").get();
+  const googleOauthStates = oauthSnapshot.docs.filter((state) => {
+    const data = state.data();
+    return data.companyId === input.companyId
+      && ["google_workspace", "google_calendar", "google_drive"].includes(String(data.provider));
+  });
+  const result: GoogleConnectorResetResult = {
+    applied: input.apply,
+    companyId: input.companyId,
+    connections: googleConnections.length,
+    capabilities: childSnapshots.reduce(
+      (sum, snapshots) => sum + snapshots.capabilities.size,
+      0,
+    ),
+    resources: childSnapshots.reduce(
+      (sum, snapshots) => sum + snapshots.resources.size,
+      0,
+    ),
+    contextItems: googleContext.length,
+    oauthStates: googleOauthStates.length,
+  };
+  if (!input.apply) return result;
+
+  await commitInChunks([
+    ...googleContext.map((context) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(context.ref)),
+    ...googleOauthStates.map((state) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(state.ref)),
+    ...childSnapshots.flatMap((snapshots) => [
+      ...snapshots.capabilities.docs.map((capability) => (
+        batch: FirebaseFirestore.WriteBatch,
+      ) => batch.delete(capability.ref)),
+      ...snapshots.resources.docs.map((resource) => (
+        batch: FirebaseFirestore.WriteBatch,
+      ) => batch.delete(resource.ref)),
+    ]),
+    ...googleConnections.map((connection) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(connection.ref)),
+  ], database);
+  await database.collection(`companies/${input.companyId}/auditEvents`).doc().set({
+    eventType: "source.google_reset",
+    actorUid: input.actorUid,
+    ...result,
+    occurredAt: FieldValue.serverTimestamp(),
+    createdAt: FieldValue.serverTimestamp(),
+  });
+  return result;
+}
+
 export async function migrateLegacyOdorik(companyId: string, actorUid: string): Promise<{
   connectionId: string;
   calls: number;
@@ -364,8 +619,10 @@ export async function migrateLegacyOdorik(companyId: string, actorUid: string): 
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     batch.set(connectionRef, {
+      schemaVersion: 2,
       companyId,
-      adapterId: "odorik",
+      connectorId: "odorik",
+      providerId: "odorik",
       displayName: "Primary Odorik account",
       status: "active",
       auth: {
@@ -393,6 +650,7 @@ export async function migrateLegacyOdorik(companyId: string, actorUid: string): 
     ));
     writes.push((batch) => batch.set(connectionRef.collection("resources").doc(resource.resourceId), {
       connectionId: connectionRef.id,
+      capabilityId: "context.call.read",
       resourceType: "phone_line",
       externalId: resource.externalId,
       displayName: resource.displayName,
@@ -415,7 +673,8 @@ export async function migrateLegacyOdorik(companyId: string, actorUid: string): 
       resourceId: resource.resourceId,
       contextEnabled: true,
       source: {
-        adapterId: "odorik",
+        providerId: "odorik",
+        capabilityId: "context.call.read",
         connectionId: connectionRef.id,
         resourceId: resource.resourceId,
         externalId: call.id,

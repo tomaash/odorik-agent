@@ -3,29 +3,20 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import {
-  authorizedGoogleConnection,
-  completeGoogleAuthorization,
+  authorizedGoogleCapability,
   connectionRef,
-  createGoogleAuthorization,
   requireGoogleSuccess,
-  revokeGoogleAuthorization,
-  type GoogleConnector,
 } from "./google-oauth.js";
+import { driveScopes } from "./registry.js";
 import {
-  markConnectionAttention,
-  markConnectionSynced,
+  markCapabilityAttention,
+  markCapabilitySynced,
   writeResourceSyncState,
 } from "./sync-state.js";
 
-export const driveScopes = [
-  "https://www.googleapis.com/auth/drive.readonly",
-] as const;
-
-const driveConnector: GoogleConnector = {
-  adapterId: "google_drive",
-  displayName: "Google Drive",
-  scopes: driveScopes,
-};
+export { driveScopes };
+const driveCapabilityId = "context.document.read" as const;
+const driveDisplayName = "Google Drive";
 
 export type DriveFileEntry = {
   id?: string;
@@ -108,9 +99,10 @@ export function driveContextItem(input: {
     companyId: input.companyId,
     kind: "document",
     source: {
-      adapterId: "google_drive",
+      providerId: "google",
+      capabilityId: driveCapabilityId,
       connectionId: input.connectionId,
-      resourceId: input.folderId,
+      resourceId: folderResourceId(input.folderId),
       externalId: input.file.id,
       version: input.file.md5Checksum || input.file.modifiedTime || "v1",
     },
@@ -146,55 +138,10 @@ async function driveFiles(
     },
   );
   return requireGoogleSuccess(
-    driveConnector.displayName,
+    driveDisplayName,
     response,
     await response.json() as DriveFileListResponse,
   );
-}
-
-export async function createDriveAuthorization(input: {
-  companyId: string;
-  uid: string;
-  email: string;
-  displayName: string;
-  clientId: string;
-  returnOrigin?: string;
-}): Promise<{ authorizationUrl: string }> {
-  return createGoogleAuthorization(driveConnector, input);
-}
-
-export async function revokeGoogleDriveAuthorization(input: {
-  companyId: string;
-  connectionId: string;
-  credentialKey: string;
-}): Promise<boolean> {
-  return revokeGoogleAuthorization(driveConnector, input);
-}
-
-export async function exchangeGoogleDriveAuthorization(input: {
-  code: string;
-  state: string;
-  clientId: string;
-  clientSecret: string;
-  credentialKey: string;
-}): Promise<{ connectionId: string }> {
-  return completeGoogleAuthorization(driveConnector, {
-    ...input,
-    resolveAccountLabel: async (accessToken) => {
-      const response = await fetch(
-        "https://www.googleapis.com/drive/v3/about?fields=user",
-        {
-          headers: { authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-      if (!response.ok) return null;
-      const body = await response.json() as {
-        user?: { emailAddress?: string; displayName?: string };
-      };
-      return body.user?.emailAddress || null;
-    },
-  });
 }
 
 async function authorizedDriveConnection(input: {
@@ -204,7 +151,7 @@ async function authorizedDriveConnection(input: {
   clientSecret: string;
   credentialKey: string;
 }) {
-  return authorizedGoogleConnection(driveConnector, input);
+  return authorizedGoogleCapability(driveCapabilityId, input);
 }
 
 export async function fetchDriveFolders(accessToken: string): Promise<DriveFileEntry[]> {
@@ -232,7 +179,9 @@ export async function listGoogleDriveFolders(input: {
 }): Promise<SelectableFolder[]> {
   const { accessToken, connection } = await authorizedDriveConnection(input);
   const folders = await fetchDriveFolders(accessToken);
-  const resourceSnapshots = await connection.ref.collection("resources").get();
+  const resourceSnapshots = await connection.ref.collection("resources")
+    .where("capabilityId", "==", driveCapabilityId)
+    .get();
   const selectedMap = new Map<string, boolean>();
   for (const resource of resourceSnapshots.docs) {
     const data = resource.data();
@@ -273,7 +222,9 @@ export async function selectGoogleDriveFolders(input: {
   const selectedSet = new Set(input.folderIds);
 
   const resourceCollection = connection.ref.collection("resources");
-  const existingResources = await resourceCollection.get();
+  const existingResources = await resourceCollection
+    .where("capabilityId", "==", driveCapabilityId)
+    .get();
   const existingMap = new Map(
     existingResources.docs
       .filter((resource) => resource.data().resourceType === "folder")
@@ -292,6 +243,7 @@ export async function selectGoogleDriveFolders(input: {
     if (!existing) {
       batch.set(resourceRef, {
         connectionId: input.connectionId,
+        capabilityId: driveCapabilityId,
         resourceType: "folder",
         externalId: folderId,
         displayName,
@@ -314,7 +266,7 @@ export async function selectGoogleDriveFolders(input: {
     batch.delete(resource.ref);
     const items = await contextItems(input.companyId)
       .where("source.connectionId", "==", input.connectionId)
-      .where("source.resourceId", "==", folderId)
+      .where("source.resourceId", "==", resource.id)
       .get();
     for (const item of items.docs) batch.delete(item.ref);
   }
@@ -429,9 +381,9 @@ export async function syncGoogleDriveConnection(input: {
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ totalSynced: number }> {
-  const { accessToken, connection } = await authorizedDriveConnection(input);
+  const { accessToken, connection, capability } = await authorizedDriveConnection(input);
   const resources = await connection.ref.collection("resources")
-    .where("resourceType", "==", "folder")
+    .where("capabilityId", "==", driveCapabilityId)
     .where("status", "==", "enabled")
     .get();
 
@@ -446,8 +398,9 @@ export async function syncGoogleDriveConnection(input: {
       });
       totalSynced += result.syncedCount;
     }
-    const updated = await markConnectionSynced({
+    const updated = await markCapabilitySynced({
       connection: connection.ref,
+      capability: capability.ref,
       itemCount: totalSynced,
     });
     if (!updated) {
@@ -455,7 +408,11 @@ export async function syncGoogleDriveConnection(input: {
     }
     return { totalSynced };
   } catch (error) {
-    await markConnectionAttention({ connection: connection.ref, error });
+    await markCapabilityAttention({
+      connection: connection.ref,
+      capability: capability.ref,
+      error,
+    });
     throw error;
   }
 }

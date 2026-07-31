@@ -393,7 +393,7 @@ const messages = {
     sources: {
       eyebrow: 'Firemní kontext',
       title: 'Zdroje',
-      subtitle: 'Každý typ zdroje může mít více účtů. V každém účtu samostatně nastavíte kalendáře, složky, štítky, repozitáře nebo telefonní linky.',
+      subtitle: 'Připojte účet jednou a vyberte, které jeho služby smí přispívat do firemního kontextu.',
       addOdorik: 'Přidat účet Odorik',
       addAccount: 'Přidat další účet',
       multipleAccounts: 'Samostatná připojení účtů',
@@ -408,6 +408,7 @@ const messages = {
       attention: 'Vyžaduje pozornost',
       disconnected: 'Odpojeno',
       enabled: 'Zahrnuto',
+      notEnabled: 'Není zapnuto',
       disabled: 'Vyloučeno',
       pause: 'Vyloučit',
       resume: 'Zahrnout',
@@ -416,7 +417,7 @@ const messages = {
       deleteConnection: 'Smazat připojení',
       deletePermanently: 'Trvale smazat',
       deleteConfirmTitle: 'Smazat účet „{name}“?',
-      deleteConfirmDescription: 'Odstraníme uložené přihlašovací údaje, vybrané podzdroje, importovaný firemní kontext a jeho vyhledávací index. U Google účtu také zrušíme OAuth přístup. Původní data u poskytovatele se nesmažou.',
+      deleteConfirmDescription: 'Odstraníme zabezpečenou adresu, nastavení linek, importovaný firemní kontext a jeho vyhledávací index. Původní hovory v Odoriku se nesmažou.',
       deleted: 'Připojení „{name}“ bylo trvale smazáno.',
       emptyResources: 'V tomto účtu zatím nejsou nastavené žádné podzdroje.',
       emptyCalendars: 'Vyberte kalendáře, které se mají zahrnout do firemního kontextu.',
@@ -428,6 +429,56 @@ const messages = {
       planned: 'Naplánováno',
       readOnly: 'Pouze čtení',
       receivesRecordings: 'Příjem nahrávek',
+      workspaceConnected: 'Google Workspace je připojený. Nyní vyberte kalendáře a složky, které chcete načítat.',
+      workspacePartial: 'Google Workspace byl připojený jen částečně. Zkontrolujte udělená oprávnění a zkuste chybějící službu povolit znovu.',
+      connectors: {
+        odorik: 'Přijímá nové nahrávky hovorů na zabezpečenou adresu. Žádné přihlášení k Odoriku není potřeba.',
+        google_workspace: 'Jedno připojení účtu pro kalendář a dokumenty. Každou službu můžete povolit a nastavit samostatně.',
+      },
+      capabilities: {
+        context: {
+          call: {
+            read: {
+              name: 'Nahrávky hovorů',
+              description: 'Přijímat dokončené hovory a přepisovat jejich nahrávky.',
+            },
+          },
+          calendar: {
+            read: {
+              name: 'Kalendář',
+              description: 'Načítat události pouze z výslovně vybraných kalendářů.',
+            },
+          },
+          document: {
+            read: {
+              name: 'Dokumenty',
+              description: 'Načítat dokumenty pouze z výslovně vybraných složek na Disku.',
+            },
+          },
+        },
+      },
+      scopes: {
+        calendarList: 'Zobrazit seznam kalendářů',
+        calendarEvents: 'Číst události ve vybraných kalendářích',
+        drive: 'Číst dokumenty ve vybraných složkách',
+      },
+      workspace: {
+        services: 'Kalendář + Disk',
+        connectTitle: 'Připojit Google Workspace',
+        enableTitle: 'Povolit další službu',
+        chooseDescription: 'Vyberte služby, které má Erik používat. Google požádá jen o oprávnění potřebná pro tento výběr.',
+        permissionHint: 'Připojení je pouze pro čtení. Erik v Google Workspace nic neupravuje ani neodesílá.',
+        continueToGoogle: 'Pokračovat do Google',
+        addAccountTitle: 'Připojte účet Google Workspace',
+        addAccountHint: 'Jedno připojení spravuje kalendář i dokumenty tohoto účtu.',
+        connectAccount: 'Připojit účet',
+        account: 'Účet Google Workspace',
+        permissionDetails: 'Udělená oprávnění',
+        enableService: 'Povolit službu',
+        disableService: 'Vypnout službu',
+        disconnectAccount: 'Odpojit účet',
+        disconnectDescription: 'Zrušíme přístup celého účtu Google Workspace a odstraníme vybrané kalendáře, složky, importovaný kontext a jeho vyhledávací index. Původní data v Google se nesmažou.',
+      },
       odorikSetup: {
         title: 'Připojení probíhá přes adresu pro nahrávky',
         description: 'Nevyžaduje přihlášení k Odoriku ani čísla linek. Vytvoříme zabezpečenou adresu, kterou vložíte do nastavení každé linky v Odoriku.',
@@ -895,7 +946,7 @@ const messages = {
     sources: {
       eyebrow: 'Company context',
       title: 'Sources',
-      subtitle: 'Every source type can contain multiple accounts. Configure calendars, folders, labels, repositories, or phone lines independently inside each account.',
+      subtitle: 'Connect an account once, then choose which of its services may contribute to company context.',
       addOdorik: 'Add Odorik account',
       addAccount: 'Add another account',
       multipleAccounts: 'Independent account connections',
@@ -910,6 +961,7 @@ const messages = {
       attention: 'Needs attention',
       disconnected: 'Disconnected',
       enabled: 'Included',
+      notEnabled: 'Not enabled',
       disabled: 'Excluded',
       pause: 'Exclude',
       resume: 'Include',
@@ -918,7 +970,7 @@ const messages = {
       deleteConnection: 'Delete connection',
       deletePermanently: 'Delete permanently',
       deleteConfirmTitle: 'Delete “{name}”?',
-      deleteConfirmDescription: 'Stored credentials, selected sub-sources, imported company context, and its search index will be removed. Google OAuth access is also revoked. Original data at the provider is not deleted.',
+      deleteConfirmDescription: 'The secure upload address, line configuration, imported company context, and its search index will be removed. Original calls in Odorik are not deleted.',
       deleted: 'Connection “{name}” was permanently deleted.',
       emptyResources: 'No sub-sources are configured in this account yet.',
       emptyCalendars: 'Choose which calendars should be included in company context.',
@@ -930,6 +982,56 @@ const messages = {
       planned: 'Planned',
       readOnly: 'Read only',
       receivesRecordings: 'Receives recordings',
+      workspaceConnected: 'Google Workspace is connected. Now choose the calendars and folders you want to import.',
+      workspacePartial: 'Google Workspace was connected only partially. Review the granted permissions and enable the missing service again.',
+      connectors: {
+        odorik: 'Receives new call recordings at a secure address. No Odorik sign-in is required.',
+        google_workspace: 'One account connection for Calendar and documents. Enable and configure each service independently.',
+      },
+      capabilities: {
+        context: {
+          call: {
+            read: {
+              name: 'Call recordings',
+              description: 'Receive completed calls and transcribe their recordings.',
+            },
+          },
+          calendar: {
+            read: {
+              name: 'Calendar',
+              description: 'Import events only from explicitly selected calendars.',
+            },
+          },
+          document: {
+            read: {
+              name: 'Documents',
+              description: 'Import documents only from explicitly selected Drive folders.',
+            },
+          },
+        },
+      },
+      scopes: {
+        calendarList: 'View the calendar list',
+        calendarEvents: 'Read events in selected calendars',
+        drive: 'Read documents in selected folders',
+      },
+      workspace: {
+        services: 'Calendar + Drive',
+        connectTitle: 'Connect Google Workspace',
+        enableTitle: 'Enable another service',
+        chooseDescription: 'Choose the services Erik may use. Google will request only the permissions needed for this selection.',
+        permissionHint: 'This connection is read-only. Erik cannot change or send anything in Google Workspace.',
+        continueToGoogle: 'Continue to Google',
+        addAccountTitle: 'Connect a Google Workspace account',
+        addAccountHint: 'One connection manages Calendar and documents for this account.',
+        connectAccount: 'Connect account',
+        account: 'Google Workspace account',
+        permissionDetails: 'Granted permissions',
+        enableService: 'Enable service',
+        disableService: 'Disable service',
+        disconnectAccount: 'Disconnect account',
+        disconnectDescription: 'Access for the entire Google Workspace account will be revoked, and selected calendars, folders, imported context, and its search index will be removed. Original data in Google is not deleted.',
+      },
       odorikSetup: {
         title: 'Connect with a recording destination',
         description: 'No Odorik sign-in or phone numbers are required. We generate a secure address that you paste into each Odorik line you want to import.',
