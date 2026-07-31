@@ -31,5 +31,12 @@ web/.env
 web/.env.*
 !web/.env.example
 
+# private keys (GitHub App keys, service account keys). These belong in Secret
+# Manager; a copy on disk must never reach the repository.
+*.pem
+*.key
+*.p12
+*-private-key*
+
 # editor / filesystem junk
 .fuse_hidden*

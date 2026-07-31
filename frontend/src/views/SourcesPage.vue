@@ -11,6 +11,7 @@ import Tag from 'primevue/tag'
 import { useAuthStore } from '../stores/auth'
 import {
   addOdorikConnection,
+  connectConfiguredGitHubInstallation,
   deleteSourceConnection,
   getGoogleCalendars,
   getGoogleDriveFolders,
@@ -24,6 +25,7 @@ import {
   startGoogleWorkspaceAuthorization,
   syncGoogleCalendars,
   syncGoogleDrive,
+  syncGitHubIssues,
   type SourceCapabilityDescriptor,
   type SourceCapabilityId,
   type SourceConnector,
@@ -136,7 +138,59 @@ function connectorIcon(connector: SourceConnector) {
   return {
     odorik: 'pi pi-phone',
     google_workspace: 'pi pi-google',
+    github: 'pi pi-github',
   }[connector.id]
+}
+
+function connectorTag(connector: SourceConnector) {
+  if (connector.id === 'odorik') return t('sources.receivesRecordings')
+  if (connector.id === 'github') return t('sources.github.readOnlyIssues')
+  return t('sources.workspace.services')
+}
+
+function addConnectionTitle(connector: SourceConnector) {
+  if (connector.id !== 'github') return t('sources.workspace.addAccountTitle')
+  return connectionsByConnector.value.get('github')?.length
+    ? t('sources.github.refreshTitle')
+    : t('sources.github.addTitle')
+}
+
+function addConnectionHint(connector: SourceConnector) {
+  if (connector.id !== 'github') return t('sources.workspace.addAccountHint')
+  return connectionsByConnector.value.get('github')?.length
+    ? t('sources.github.refreshHint')
+    : t('sources.github.addHint')
+}
+
+function addConnectionLabel(connector: SourceConnector) {
+  if (connector.id !== 'github') return t('sources.workspace.connectAccount')
+  return connectionsByConnector.value.get('github')?.length
+    ? t('sources.github.refreshInstallation')
+    : t('sources.github.connectInstallation')
+}
+
+function addConnectionIcon(connector: SourceConnector) {
+  return connector.id === 'github' && connectionsByConnector.value.get('github')?.length
+    ? 'pi pi-refresh'
+    : 'pi pi-plus'
+}
+
+function connectionKindLabel(connection: SourceConnection) {
+  if (connection.connectorId === 'google_workspace') return t('sources.workspace.account')
+  if (connection.connectorId === 'github') return t('sources.github.installation')
+  return connection.displayName
+}
+
+function permissionDetailsLabel(connection: SourceConnection) {
+  return connection.connectorId === 'github'
+    ? t('sources.github.permissionDetails')
+    : t('sources.workspace.permissionDetails')
+}
+
+function deleteDescriptionKey(connection: SourceConnection) {
+  if (connection.connectorId === 'google_workspace') return 'sources.workspace.disconnectDescription'
+  if (connection.connectorId === 'github') return 'sources.github.deleteDescription'
+  return 'sources.deleteConfirmDescription'
 }
 
 function resourceIcon(resourceType: string) {
@@ -197,6 +251,10 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/calendar.calendarlist.readonly': t('sources.scopes.calendarList'),
     'https://www.googleapis.com/auth/calendar.events.readonly': t('sources.scopes.calendarEvents'),
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
+    'contents:read': t('sources.scopes.githubContents'),
+    'issues:read': t('sources.scopes.githubIssues'),
+    'metadata:read': t('sources.scopes.githubMetadata'),
+    'pull_requests:read': t('sources.scopes.githubPullRequests'),
   }[scope] || scope
 }
 
@@ -204,6 +262,7 @@ function emptyResourceMessage(capabilityId: string) {
   if (capabilityId === 'context.calendar.read') return t('sources.emptyCalendars')
   if (capabilityId === 'context.document.read') return t('sources.emptyFolders')
   if (capabilityId === 'context.call.read') return t('sources.emptyPhoneLines')
+  if (capabilityId === 'context.github.issue.read') return t('sources.emptyRepositories')
   return t('sources.emptyResources')
 }
 
@@ -266,6 +325,21 @@ async function addConnection(connector: SourceConnector) {
   }
   if (connector.id === 'odorik') {
     await createOdorik()
+    return
+  }
+  if (connector.id === 'github') {
+    saving.value = true
+    error.value = ''
+    notice.value = ''
+    try {
+      const result = await connectConfiguredGitHubInstallation()
+      notice.value = t('sources.github.connected', { count: result.repositories })
+      await load()
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : String(cause)
+    } finally {
+      saving.value = false
+    }
   }
 }
 
@@ -319,10 +393,14 @@ async function toggleCapability(
   capabilityId: SourceCapabilityId,
   enabled: boolean,
 ) {
-  if (capabilityId === 'context.call.read') return
+  if (!['context.calendar.read', 'context.document.read'].includes(capabilityId)) return
   error.value = ''
   try {
-    await setSourceCapabilityStatus(connection.id, capabilityId, enabled)
+    await setSourceCapabilityStatus(
+      connection.id,
+      capabilityId as 'context.calendar.read' | 'context.document.read',
+      enabled,
+    )
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -351,15 +429,17 @@ function openWorkspaceAuthorization(
   connection: SourceConnection | null = null,
   capabilityId?: SourceCapabilityId,
 ) {
-  if (capabilityId === 'context.call.read') return
+  if (capabilityId && !['context.calendar.read', 'context.document.read'].includes(capabilityId)) return
   workspaceConnection.value = connection
   selectedWorkspaceCapabilities.value = capabilityId
-    ? [capabilityId]
+    ? [capabilityId as 'context.calendar.read' | 'context.document.read']
     : connection
       ? connection.capabilities
         .filter((capability) => capability.status !== 'disabled')
         .map((capability) => capability.capabilityId)
-        .filter((id): id is 'context.calendar.read' | 'context.document.read' => id !== 'context.call.read')
+        .filter((id): id is 'context.calendar.read' | 'context.document.read' => (
+          id === 'context.calendar.read' || id === 'context.document.read'
+        ))
       : ['context.calendar.read', 'context.document.read']
   workspaceDialogVisible.value = true
 }
@@ -545,6 +625,24 @@ async function synchronizeDrive(connection: SourceConnection) {
   error.value = ''
   try {
     await syncGoogleDrive(connection.id)
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    synchronizingId.value = ''
+  }
+}
+
+async function synchronizeGitHub(connection: SourceConnection) {
+  synchronizingId.value = `${connection.id}:github`
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await syncGitHubIssues(connection.id)
+    notice.value = t('sources.github.synchronized', {
+      repositories: result.repositories,
+      issues: result.issues,
+    })
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -932,9 +1030,7 @@ onUnmounted(() => {
           }) }}
         </div>
         <p class="m-0 text-sm text-red-900/80 leading-relaxed">
-          {{ t(pendingDeleteConnection.connectorId === 'google_workspace'
-            ? 'sources.workspace.disconnectDescription'
-            : 'sources.deleteConfirmDescription') }}
+          {{ t(deleteDescriptionKey(pendingDeleteConnection)) }}
         </p>
       </div>
       <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
@@ -981,7 +1077,7 @@ onUnmounted(() => {
               </div>
             </div>
             <Tag
-              :value="connector.id === 'odorik' ? t('sources.receivesRecordings') : t('sources.workspace.services')"
+              :value="connectorTag(connector)"
               severity="success"
               rounded
             />
@@ -1009,13 +1105,14 @@ onUnmounted(() => {
             class="min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3.5 sm:p-4 mb-4"
           >
             <div class="min-w-0">
-              <div class="font-semibold text-sm text-emerald-950">{{ t('sources.workspace.addAccountTitle') }}</div>
-              <div class="text-xs text-emerald-800/80 mt-1 leading-relaxed">{{ t('sources.workspace.addAccountHint') }}</div>
+              <div class="font-semibold text-sm text-emerald-950">{{ addConnectionTitle(connector) }}</div>
+              <div class="text-xs text-emerald-800/80 mt-1 leading-relaxed">{{ addConnectionHint(connector) }}</div>
             </div>
             <Button
-              :label="t('sources.workspace.connectAccount')"
-              icon="pi pi-plus"
+              :label="addConnectionLabel(connector)"
+              :icon="addConnectionIcon(connector)"
               class="w-full sm:w-auto shrink-0"
+              :loading="saving"
               @click="addConnection(connector)"
             />
           </div>
@@ -1047,7 +1144,7 @@ onUnmounted(() => {
                     {{ connection.accountLabel || connection.displayName }}
                   </h3>
                   <p class="text-xs text-surface-400 mt-1 mb-0">
-                    {{ connection.connectorId === 'google_workspace' ? t('sources.workspace.account') : connection.displayName }}
+                    {{ connectionKindLabel(connection) }}
                   </p>
                 </div>
                 <Tag
@@ -1058,7 +1155,7 @@ onUnmounted(() => {
               </div>
 
               <div
-                v-if="connection.reauthorizationRequired"
+                v-if="connection.connectorId === 'google_workspace' && connection.reauthorizationRequired"
                 class="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3"
               >
                 <div class="text-sm font-semibold text-amber-950">{{ t('sources.reauthorize.title') }}</div>
@@ -1152,7 +1249,7 @@ onUnmounted(() => {
                       </span>
                     </div>
                     <details class="mt-2 rounded-xl bg-surface-50 px-3 py-2 text-xs text-surface-500">
-                      <summary class="cursor-pointer font-semibold text-surface-700">{{ t('sources.workspace.permissionDetails') }}</summary>
+                      <summary class="cursor-pointer font-semibold text-surface-700">{{ permissionDetailsLabel(connection) }}</summary>
                       <ul class="mb-0 mt-2 grid gap-1 pl-4">
                         <li v-for="scope in capabilityConfiguration(connection, descriptor)?.grantedScopes" :key="scope">
                           {{ scopeLabel(scope) }}
@@ -1227,7 +1324,17 @@ onUnmounted(() => {
                         @click="synchronizeDrive(connection)"
                       />
                       <Button
-                        v-if="['attention', 'reauthorization_required'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
+                        v-if="descriptor.id === 'context.github.issue.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="synchronizingId === `${connection.id}:github` ? t('sources.syncing') : t('sources.syncNow')"
+                        icon="pi pi-refresh"
+                        severity="secondary"
+                        text
+                        size="small"
+                        :loading="synchronizingId === `${connection.id}:github`"
+                        @click="synchronizeGitHub(connection)"
+                      />
+                      <Button
+                        v-if="connection.connectorId === 'google_workspace' && ['attention', 'reauthorization_required'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
                         :label="t('sources.workspace.grantPermission')"
                         icon="pi pi-refresh"
                         severity="warn"
@@ -1236,7 +1343,7 @@ onUnmounted(() => {
                         @click="openWorkspaceAuthorization(connection, descriptor.id)"
                       />
                       <Button
-                        v-else-if="capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
+                        v-else-if="connection.connectorId === 'google_workspace' && capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
                         :label="t('sources.workspace.enableService')"
                         icon="pi pi-check-circle"
                         severity="success"
@@ -1245,7 +1352,7 @@ onUnmounted(() => {
                         @click="toggleCapability(connection, descriptor.id, true)"
                       />
                       <Button
-                        v-else-if="capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        v-else-if="connection.connectorId === 'google_workspace' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
                         :label="t('sources.workspace.disableService')"
                         icon="pi pi-minus-circle"
                         severity="secondary"
@@ -1256,7 +1363,7 @@ onUnmounted(() => {
                     </div>
                   </template>
                   <Button
-                    v-else-if="isAdmin"
+                    v-else-if="isAdmin && connection.connectorId === 'google_workspace'"
                     :label="t('sources.workspace.enableService')"
                     icon="pi pi-plus"
                     severity="secondary"

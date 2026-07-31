@@ -423,6 +423,7 @@ const messages = {
       emptyCalendars: 'Vyberte kalendáře, které se mají zahrnout do firemního kontextu.',
       emptyFolders: 'Vyberte složky, které se mají zahrnout do firemního kontextu.',
       emptyPhoneLines: 'Linka se objeví automaticky po přijetí první nahrávky.',
+      emptyRepositories: 'Vyberte repozitáře, jejichž issues se mají zahrnout do firemního kontextu.',
       lastObserved: 'Naposledy přijato',
       never: 'Zatím nic',
       needsConfiguration: 'Vyžaduje OAuth konfiguraci',
@@ -434,6 +435,7 @@ const messages = {
       connectors: {
         odorik: 'Přijímá nové nahrávky hovorů na zabezpečenou adresu. Žádné přihlášení k Odoriku není potřeba.',
         google_workspace: 'Jedno připojení účtu pro kalendář a dokumenty. Každou službu můžete povolit a nastavit samostatně.',
+        github: 'Issues a komentáře pouze z repozitářů, které výslovně zahrnete. Připojení je pouze pro čtení.',
       },
       capabilities: {
         context: {
@@ -455,12 +457,38 @@ const messages = {
               description: 'Načítat dokumenty pouze z výslovně vybraných složek na Disku.',
             },
           },
+          github: {
+            issue: {
+              read: {
+                name: 'GitHub issues',
+                description: 'Načítat issues a jejich komentáře pouze z výslovně vybraných repozitářů.',
+              },
+            },
+          },
         },
       },
       scopes: {
         calendarList: 'Zobrazit seznam kalendářů',
         calendarEvents: 'Číst události ve vybraných kalendářích',
         drive: 'Číst dokumenty ve vybraných složkách',
+        githubContents: 'Číst obsah repozitáře',
+        githubIssues: 'Číst issues a komentáře',
+        githubMetadata: 'Číst základní metadata repozitáře',
+        githubPullRequests: 'Rozlišit pull requesty od issues',
+      },
+      github: {
+        readOnlyIssues: 'Issues · pouze čtení',
+        addTitle: 'Připojte nainstalovanou GitHub App',
+        addHint: 'Použije vývojovou instalaci Agent Erik Development. Repozitáře potom zahrnete jednotlivě.',
+        connectInstallation: 'Připojit instalaci',
+        refreshTitle: 'Obnovte instalaci GitHub App',
+        refreshHint: 'Znovu načte oprávnění a dostupné repozitáře. Váš Erik výběr zůstane zachovaný.',
+        refreshInstallation: 'Obnovit instalaci',
+        installation: 'Instalace GitHub App',
+        permissionDetails: 'Oprávnění GitHub App',
+        connected: 'GitHub App je připojená. Nalezeno repozitářů: {count}. Nyní zahrňte požadované repozitáře a spusťte synchronizaci.',
+        synchronized: 'GitHub synchronizován: {issues} issues z {repositories} repozitářů.',
+        deleteDescription: 'Odstraníme výběr repozitářů, importovaný firemní kontext a jeho vyhledávací index. GitHub App zůstane na GitHubu nainstalovaná a původní data se nesmažou.',
       },
       workspace: {
         services: 'Kalendář + Disk',
@@ -977,6 +1005,7 @@ const messages = {
       emptyCalendars: 'Choose which calendars should be included in company context.',
       emptyFolders: 'Choose which folders should be included in company context.',
       emptyPhoneLines: 'A line appears automatically after its first recording is received.',
+      emptyRepositories: 'Choose which repositories should contribute issues to company context.',
       lastObserved: 'Last received',
       never: 'Nothing yet',
       needsConfiguration: 'OAuth configuration required',
@@ -988,6 +1017,7 @@ const messages = {
       connectors: {
         odorik: 'Receives new call recordings at a secure address. No Odorik sign-in is required.',
         google_workspace: 'One account connection for Calendar and documents. Enable and configure each service independently.',
+        github: 'Issues and comments only from repositories you explicitly include. The connection is read-only.',
       },
       capabilities: {
         context: {
@@ -1009,12 +1039,38 @@ const messages = {
               description: 'Import documents only from explicitly selected Drive folders.',
             },
           },
+          github: {
+            issue: {
+              read: {
+                name: 'GitHub issues',
+                description: 'Import issues and their comments only from explicitly selected repositories.',
+              },
+            },
+          },
         },
       },
       scopes: {
         calendarList: 'View the calendar list',
         calendarEvents: 'Read events in selected calendars',
         drive: 'Read documents in selected folders',
+        githubContents: 'Read repository contents',
+        githubIssues: 'Read issues and comments',
+        githubMetadata: 'Read basic repository metadata',
+        githubPullRequests: 'Distinguish pull requests from issues',
+      },
+      github: {
+        readOnlyIssues: 'Issues · read only',
+        addTitle: 'Connect the installed GitHub App',
+        addHint: 'Uses the Agent Erik Development installation. You will include repositories individually afterward.',
+        connectInstallation: 'Connect installation',
+        refreshTitle: 'Refresh the GitHub App installation',
+        refreshHint: 'Reloads permissions and accessible repositories while preserving Erik’s repository selection.',
+        refreshInstallation: 'Refresh installation',
+        installation: 'GitHub App installation',
+        permissionDetails: 'GitHub App permissions',
+        connected: 'GitHub App connected. Found {count} repositories. Include the repositories you want, then synchronize.',
+        synchronized: 'GitHub synchronized: {issues} issues from {repositories} repositories.',
+        deleteDescription: 'The repository selection, imported company context, and its search index will be removed. The GitHub App remains installed on GitHub and original data is not deleted.',
       },
       workspace: {
         services: 'Calendar + Drive',

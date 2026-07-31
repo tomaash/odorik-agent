@@ -164,6 +164,11 @@ test("source public views retain operational state and exclude credentials", asy
         availability: "available",
         capabilities: ["context.calendar.read", "context.document.read"],
       },
+      {
+        id: "github",
+        availability: "available",
+        capabilities: ["context.github.issue.read"],
+      },
     ],
   );
   assert.deepEqual(connection.capabilities.map((capability) => ({

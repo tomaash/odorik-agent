@@ -42,6 +42,22 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     syncMode: "manual",
     requiresApproval: false,
   },
+  "context.github.issue.read": {
+    id: "context.github.issue.read",
+    serviceId: "issues",
+    direction: "observe",
+    resourceType: "repository",
+    requiredScopes: [
+      "contents:read",
+      "issues:read",
+      "metadata:read",
+      "pull_requests:read",
+    ],
+    // The development App has no webhook configured yet; admins trigger the
+    // bounded snapshot sync from Sources until the webhook slice lands.
+    syncMode: "manual",
+    requiresApproval: false,
+  },
 };
 
 const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
@@ -61,6 +77,13 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
       sourceCapabilities["context.calendar.read"],
       sourceCapabilities["context.document.read"],
     ],
+  },
+  github: {
+    id: "github",
+    name: "GitHub",
+    description: "Issues and comments from explicitly selected repositories.",
+    availability: "available",
+    capabilities: [sourceCapabilities["context.github.issue.read"]],
   },
 };
 

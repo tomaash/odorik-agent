@@ -62,6 +62,12 @@ import {
   createGoogleWorkspaceAuthorization,
   revokeGoogleWorkspaceAuthorization,
 } from "./connectors/google-oauth.js";
+import {
+  configuredGitHubInstallationId,
+  connectGitHubInstallation,
+  githubConfigurationFromEnvironment,
+  syncGitHubConnection,
+} from "./connectors/github.js";
 import type { SourceCapabilityId } from "./connectors/types.js";
 import {
   acceptTeamInvitation,
@@ -100,6 +106,7 @@ export const qdrantUrl = defineSecret("QDRANT_URL");
 export const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
 export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
+export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
 
 async function getAccess(uid: string) {
   return registrationStatus(uid);
@@ -280,6 +287,24 @@ export const appRouter = router({
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
           credentialKey: connectorCredentialKey.value(),
+        })),
+    }),
+    github: router({
+      connectConfiguredInstallation: adminProcedure
+        .mutation(({ ctx }) => connectGitHubInstallation({
+          companyId: ctx.companyId,
+          actorUid: ctx.uid,
+          installationId: configuredGitHubInstallationId(),
+          configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+        })),
+      sync: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^github_[0-9]{1,20}$/),
+        }))
+        .mutation(({ ctx, input }) => syncGitHubConnection({
+          companyId: ctx.companyId,
+          connectionId: input.connectionId,
+          configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
         })),
     }),
     addOdorik: adminProcedure

@@ -1,0 +1,26 @@
+[cli]
+auto_update = false
+
+[grok_com_config]
+disable_api_key_auth = true
+
+[sandbox]
+profile = "strict"
+
+[ui]
+# Grok 0.2.117 implements the documented legacy lock without a config warning.
+yolo = false
+
+[permission]
+rules = [
+  { action = "deny", tool = "bash", pattern = "git push*" },
+  { action = "deny", tool = "bash", pattern = "gh *" },
+  { action = "deny", tool = "bash", pattern = "gcloud *" },
+  { action = "deny", tool = "bash", pattern = "docker *" },
+  { action = "deny", tool = "bash", pattern = "kubectl *" },
+  { action = "deny", tool = "bash", pattern = "ssh *" },
+  { action = "deny", tool = "bash", pattern = "scp *" },
+  { action = "deny", tool = "mcp_tool", pattern = "*" },
+  { action = "deny", tool = "web_fetch", pattern = "*" },
+  { action = "deny", tool = "web_search", pattern = "*" },
+]
