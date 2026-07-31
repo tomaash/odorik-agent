@@ -128,17 +128,17 @@ and sends the draft in the mailbox that owns it.
 
 ## Current baseline
 
-The baseline was inspected in the repository on 2026-07-30.
+The baseline was inspected in the deployed test environment on 2026-07-31.
 
 | Area | Working now | Important limitation |
 | --- | --- | --- |
-| Connection kernel | Multiple connections, encrypted credentials, selected resources, disconnect, revoke/delete, health summary | A connection is currently one Google service grant rather than one provider account; the registry reduces behavior to `readOnly` |
+| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources | Durable run history, leases, retry, and honest aggregate health remain C3 |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
-| Google Calendar | Explicit calendar selection, incremental sync tokens, cancellation deletion, 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
-| Google Drive | Explicit direct-folder selection, Google Docs/text extraction, manual sync | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction; normalized items use the provider folder ID while the resource document uses a hashed ID |
-| Context | Provenance, source IDs, indexing, citations, `company`/`restricted` envelope | Google adapters always write `company`; provider ACLs are not projected |
+| Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, cancellation deletion, and 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
+| Google Drive | Workspace subsystem with least-privilege consent, explicit direct-folder selection, Google Docs/text extraction, manual sync, and consistent internal resource identity | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction |
+| Context | Provider/capability/connection/resource identity, provenance, indexing, citations, and `company`/`restricted` envelope | Google capabilities still write `company`; provider ACLs are not projected |
 | Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states | Dispatch is hard-coded to `task.create`, `case.create`, and `case.move` |
-| Planned catalog | Gmail and GitHub cards | Planned cards imply commitments without a proven loop or demand gate |
+| Connector catalog | Only working Odorik and Google Workspace capabilities are shown | Gmail remains deliberately absent until G1 has a complete operating loop |
 
 The first slices protect and improve this baseline rather than immediately
 adding another provider.
@@ -856,3 +856,31 @@ YYYY-MM-DD — Slice
   company-wide. C1 will replace and reimport Google test data rather than
   migrate the split connection model; C4 owns resource audiences.
 - **Decision:** C0 passed. Continue to C1.
+
+### 2026-07-31 — C1 deployment checkpoint
+
+- **Commit/deployment:** `a9e3740`; GitHub Actions run
+  [30611814118](https://github.com/tomaash/odorik-agent/actions/runs/30611814118)
+  completed successfully and deployed Functions, Firestore indexes, and both
+  application hosting targets.
+- **Acceptance:** the guarded production dry-run selected one superseded
+  Google connection, five Google resources, seven Google-derived context
+  items, and no OAuth states. The confirmed reset removed that exact set; a
+  second dry-run returned zero for every Google category. The signed-in
+  Sources screen retained the populated Odorik connection, rendered one empty
+  Google Workspace account card, and produced one OAuth request containing
+  only OpenID identity, Calendar read, and Drive read scopes.
+- **Metrics observed:** 63 tests pass: 11 shared workflow, 44 Functions, and
+  8 frontend tests. New C1 contracts cover target public projections and
+  secret exclusion, minimal and partial scope grants, cross-capability
+  isolation, stable Google account identity, and Google-only reset isolation.
+  The hosted app and OAuth callback returned healthy HTTP responses.
+- **Known limitations:** Google displayed its unverified-test-app safety
+  interstitial. The owner must explicitly continue through that warning;
+  connector acceptance has therefore not yet exercised real calendar/folder
+  selection, synchronization, citation, disable/re-enable, and full-account
+  disconnect. C3, C4, and C5 still own durable recovery, resource audiences,
+  and provider synchronization hardening.
+- **Decision:** the deployment and destructive reset passed. Stay on C1 until
+  the owner completes the Google safety handoff and the real-account scenario
+  passes; do not begin C2 yet.
