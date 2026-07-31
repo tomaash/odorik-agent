@@ -69,9 +69,10 @@ effect must have its own typed and disclosed execution contract.
 ## Approval and execution
 
 Each selected action creates one deterministic `actionApprovals` document with
-the exact typed payload, canonical SHA-256 effect digest, approver, immutable
-workflow provenance, `scope` over existing related objects, `result` after
-successful execution, and:
+the exact typed payload, registered action capability and contract version,
+canonical SHA-256 effect digest, approver, immutable workflow provenance,
+`scope` over existing related objects, typed `executionResult`, and generic
+`result` reference after successful execution, and:
 
 - decision state: `pending`, `approved`, `rejected`;
 - execution state: `not_started`, `executing`, `succeeded`,
@@ -82,12 +83,21 @@ Approval is recorded transactionally before execution. The executor:
 1. verifies the actor is the named approver;
 2. verifies the canonical action digest;
 3. claims a five-minute execution lease with a unique attempt ID;
-4. dispatches only `task.create`, `case.create`, or `case.move`;
-5. records the result and audit event.
+4. resolves the immutable application-owned action descriptor;
+5. validates and executes only its registered typed contract; and
+6. records the typed result, generic result reference, and audit event.
 
 Rejection creates no effect. An active lease prevents concurrent execution.
-All current internal actions are idempotent; an unknown-outcome state is
-reserved for future external effects where blind retry would be dishonest.
+The production registry currently contains only `task.create`, `case.create`,
+and `case.move`. All three use deterministic internal IDs and are safe to
+retry. An external descriptor must declare its provider capability,
+provider-aware idempotency, and reconciliation strategy; an uncertain outcome
+blocks blind retry.
+
+The registry is static backend infrastructure. It is not a browser-callable
+generic action endpoint, runtime plugin mechanism, or schema-generated
+workflow editor. Direct human task/case changes continue to record the
+initiating human as their authorization.
 
 A pending create-case approval has no case scope. A move or case-task approval
 scopes the existing case. Successful execution records the created task, case,

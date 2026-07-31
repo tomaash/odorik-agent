@@ -3,16 +3,20 @@ import { Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import {
   actionEffectDigest,
-  executeWorkflowAction,
   legacyActionEffectDigest,
-  parseWorkflowAction,
-  type WorkflowAction,
   type WorkflowActionSource,
 } from "../actions/contracts.js";
+import {
+  actionRegistry,
+  executeRegisteredAction,
+  type AnyActionDescriptor,
+  type ActionFailureStatus,
+  type ActionRegistry,
+  type RegisteredAction,
+} from "../actions/registry.js";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
-import { pipelineStage } from "../pipeline/repository.js";
 
 export type ApprovalStatus =
   | "pending"
@@ -31,55 +35,41 @@ type ExecutionStatus =
 
 const executionLeaseMs = 5 * 60 * 1_000;
 
-type ApprovalScope = {
-  contactId: string | null;
-  callId: string;
-  caseId: string | null;
+export type ApprovalDependencies = {
+  database: FirebaseFirestore.Firestore;
+  registry: ActionRegistry;
+  resolveActiveMember: typeof activeMember;
 };
 
-function scopeForAction(value: unknown): ApprovalScope {
-  if (!value || typeof value !== "object") {
-    return { contactId: null, callId: "", caseId: null };
-  }
-  const action = value as {
-    kind?: unknown;
-    contactId?: unknown;
-    callId?: unknown;
-    caseId?: unknown;
-  };
-  const caseId = (
-    (action.kind === "case.move" || action.kind === "task.create")
-    && typeof action.caseId === "string"
-    && action.caseId
-  )
-    ? action.caseId
-    : null;
+const defaultApprovalDependencies: ApprovalDependencies = {
+  database: db,
+  registry: actionRegistry,
+  resolveActiveMember: activeMember,
+};
+
+function dependencies(
+  overrides?: Partial<ApprovalDependencies>,
+): ApprovalDependencies {
   return {
-    contactId: typeof action.contactId === "string" && action.contactId
-      ? action.contactId
-      : null,
-    callId: typeof action.callId === "string" ? action.callId : "",
-    caseId,
+    ...defaultApprovalDependencies,
+    ...overrides,
   };
 }
 
-function caseIdForApproval(data: FirebaseFirestore.DocumentData): string | null {
+function caseIdForApproval(
+  data: FirebaseFirestore.DocumentData,
+  registry: ActionRegistry,
+): string | null {
   if (typeof data.scope?.caseId === "string" && data.scope.caseId) {
     return data.scope.caseId;
   }
-  const action = data.action as { kind?: unknown; caseId?: unknown } | undefined;
-  if (
-    (action?.kind === "case.move" || action?.kind === "task.create")
-    && typeof action.caseId === "string"
-    && action.caseId
-  ) return action.caseId;
+  try {
+    const resolved = registry.resolve(data.action);
+    return resolved.descriptor.scope(resolved.action).caseId;
+  } catch {
+    // Historical or malformed approvals without scope have no safe case link.
+  }
   return null;
-}
-
-function resultForAction(action: WorkflowAction): { kind: string; id: string } {
-  if (action.kind === "task.create") return { kind: "task", id: action.taskId };
-  if (action.kind === "case.create") return { kind: "case", id: action.caseId };
-  return { kind: "case_movement", id: action.movementId };
 }
 
 function inferredDecision(data: FirebaseFirestore.DocumentData): DecisionStatus {
@@ -113,116 +103,41 @@ export async function requestWorkflowActionApproval(input: {
   approvalId: string;
   approverUid: string;
   approverName: string;
-  action: WorkflowAction;
+  action: unknown;
   source: WorkflowActionSource;
-}) {
-  const approver = await activeMember(input.companyId, input.approverUid);
-  let action = parseWorkflowAction(input.action);
-  let linkedCaseRef: FirebaseFirestore.DocumentReference | null = null;
-  let matchingCasesQuery: FirebaseFirestore.Query | null = null;
-  if (action.kind === "task.create") {
-    const assignee = await activeMember(input.companyId, action.assigneeUid);
-    action = { ...action, assigneeName: assignee.displayName };
-    if (action.caseId) {
-      linkedCaseRef = db.doc(
-        companyDocumentPath(input.companyId, "cases", action.caseId),
-      );
-    }
-    if (action.subject?.kind === "matching_case" && action.contactId) {
-      matchingCasesQuery = db.collection(
-        companyCollectionPath(input.companyId, "cases"),
-      ).where("contactId", "==", action.contactId);
-    }
-  } else if (action.kind === "case.create") {
-    const [owner, stage] = await Promise.all([
-      activeMember(input.companyId, action.ownerUid),
-      pipelineStage(input.companyId, action.stageId),
-    ]);
-    action = { ...action, ownerName: owner.displayName, stageName: stage.name };
-  } else {
-    const [from, to] = await Promise.all([
-      pipelineStage(input.companyId, action.fromStageId),
-      pipelineStage(input.companyId, action.toStageId),
-    ]);
-    action = {
-      ...action,
-      fromStageName: from.name,
-      toStageName: to.name,
-    };
-    linkedCaseRef = db.doc(
-      companyDocumentPath(input.companyId, "cases", action.caseId),
-    );
-  }
-  const approvalRef = db.doc(
+}, overrides?: Partial<ApprovalDependencies>) {
+  const deps = dependencies(overrides);
+  const approver = await deps.resolveActiveMember(
+    input.companyId,
+    input.approverUid,
+  );
+  const resolved = deps.registry.resolve(input.action);
+  const prepared = await resolved.descriptor.prepareForApproval({
+    companyId: input.companyId,
+    actorUid: input.actorUid,
+    database: deps.database,
+    resolveActiveMember: deps.resolveActiveMember,
+  }, resolved.action);
+  const action = resolved.descriptor.inputSchema.parse(prepared);
+  const approvalRef = deps.database.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
   );
-  const auditRef = db.collection(
+  const auditRef = deps.database.collection(
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
   const digest = actionEffectDigest(action);
-  const scope = scopeForAction(action);
+  const scope = resolved.descriptor.scope(action);
   const caseId = scope.caseId;
-  const taskMatchingSubject = action.kind === "task.create"
-    && action.subject?.kind === "matching_case"
-    ? action.subject
-    : null;
-  return db.runTransaction(async (transaction) => {
+  return deps.database.runTransaction(async (transaction) => {
     const existing = await transaction.get(approvalRef);
     if (existing.exists) {
       return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
     }
-    const linkedCase = linkedCaseRef && !matchingCasesQuery
-      ? await transaction.get(linkedCaseRef)
-      : null;
-    const matchingCases = matchingCasesQuery
-      ? await transaction.get(matchingCasesQuery)
-      : null;
-    if (action.kind === "task.create" && action.caseId) {
-      const selectedCase = matchingCases
-        ? matchingCases.docs.find((document) => document.id === action.caseId) || null
-        : linkedCase;
-      const activeMatches = matchingCases?.docs.filter((document) => {
-        const data = document.data();
-        return data.objectType === "case"
-          && data.archived !== true
-          && String(data.pipelineId || "default") === taskMatchingSubject?.pipelineId
-          && data.stageId === taskMatchingSubject?.stageId;
-      });
-      if (
-        !selectedCase?.exists
-        || selectedCase.data()?.objectType !== "case"
-        || selectedCase.data()?.archived === true
-        || selectedCase.data()?.contactId !== action.contactId
-        || (
-          taskMatchingSubject
-          && (
-            activeMatches?.length !== 1
-            || activeMatches[0]?.id !== action.caseId
-          )
-        )
-      ) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "The task's selected case is no longer an active unique match.",
-        });
-      }
-    }
-    if (action.kind === "case.move") {
-      if (
-        !linkedCase?.exists
-        || linkedCase.data()?.objectType !== "case"
-        || linkedCase.data()?.archived === true
-        || linkedCase.data()?.contactId !== action.contactId
-        || String(linkedCase.data()?.pipelineId || "default") !== action.pipelineId
-        || linkedCase.data()?.stageId !== action.fromStageId
-        || Number(linkedCase.data()?.revision || 0) !== action.expectedRevision
-      ) {
-        throw new TRPCError({
-          code: "PRECONDITION_FAILED",
-          message: "The selected case changed before the approval could be requested.",
-        });
-      }
-    }
+    await resolved.descriptor.assertRequestPreconditions({
+      companyId: input.companyId,
+      database: deps.database,
+      transaction,
+    }, action);
     const now = Timestamp.now();
     const approval = {
       objectType: "action_approval",
@@ -232,6 +147,8 @@ export async function requestWorkflowActionApproval(input: {
       approverUid: approver.uid,
       approverName: approver.displayName,
       action,
+      actionCapabilityId: resolved.descriptor.capabilityId,
+      actionContractVersion: resolved.descriptor.contractVersion,
       scope,
       result: null,
       effectDigest: digest,
@@ -253,6 +170,8 @@ export async function requestWorkflowActionApproval(input: {
         executionStatus: "not_started",
         approverUid: approver.uid,
         actionKind: action.kind,
+        actionCapabilityId: resolved.descriptor.capabilityId,
+        actionContractVersion: resolved.descriptor.contractVersion,
         effectDigest: digest,
         source: input.source,
       },
@@ -289,12 +208,14 @@ async function claimApproval(input: {
   companyId: string;
   actorUid: string;
   approvalId: string;
-}) {
-  const approvalRef = db.doc(
+}, deps: ApprovalDependencies) {
+  const approvalRef = deps.database.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
   );
-  const auditRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
-  return db.runTransaction(async (transaction) => {
+  const auditRef = deps.database.collection(
+    companyCollectionPath(input.companyId, "auditEvents"),
+  ).doc();
+  return deps.database.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(approvalRef);
     if (!snapshot.exists) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
@@ -333,7 +254,7 @@ async function claimApproval(input: {
 
     const attemptId = randomUUID();
     const now = Timestamp.now();
-    const caseId = caseIdForApproval(data);
+    const caseId = caseIdForApproval(data, deps.registry);
     transaction.update(approvalRef, {
       status: "executing",
       decisionStatus: "approved",
@@ -371,22 +292,24 @@ async function markExecutionFailed(input: {
   ref: FirebaseFirestore.DocumentReference;
   attemptId: string | null;
   error: unknown;
-}) {
+  executionStatus: ActionFailureStatus;
+}, deps: ApprovalDependencies) {
   if (!input.attemptId) return;
-  const auditRef = db.collection(
+  const auditRef = deps.database.collection(
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
-  await db.runTransaction(async (transaction) => {
+  await deps.database.runTransaction(async (transaction) => {
     const latest = await transaction.get(input.ref);
     if (latest.data()?.executionAttemptId !== input.attemptId) return;
     const message = input.error instanceof Error
       ? input.error.message.slice(0, 500)
       : "Action execution failed.";
     const now = Timestamp.now();
+    const caseId = caseIdForApproval(latest.data() || {}, deps.registry);
     transaction.update(input.ref, {
       status: "execution_failed",
       decisionStatus: "approved",
-      executionStatus: "failed_safe_to_retry",
+      executionStatus: input.executionStatus,
       executionError: message,
       executionLeaseExpiresAt: null,
       updatedAt: now,
@@ -394,15 +317,13 @@ async function markExecutionFailed(input: {
     transaction.create(auditRef, {
       aggregateType: "action_approval",
       aggregateId: input.approvalId,
-      ...(caseIdForApproval(latest.data() || {}) ? {
-        caseId: caseIdForApproval(latest.data() || {}),
-      } : {}),
+      ...(caseId ? { caseId } : {}),
       type: "approval_execution_failed",
       actor: { kind: "user", id: input.actorUid },
       before: { executionStatus: "executing" },
       after: {
         decisionStatus: "approved",
-        executionStatus: "failed_safe_to_retry",
+        executionStatus: input.executionStatus,
         error: message,
       },
       createdAt: now,
@@ -414,15 +335,31 @@ export async function approveAction(input: {
   companyId: string;
   actorUid: string;
   approvalId: string;
-}) {
-  const claimed = await claimApproval(input);
+}, overrides?: Partial<ApprovalDependencies>) {
+  const deps = dependencies(overrides);
+  const claimed = await claimApproval(input, deps);
   if (claimed.alreadyApproved) {
     return jsonSafe({ id: input.approvalId, ...claimed.data, duplicate: true });
   }
 
-  let action: WorkflowAction;
+  let action: RegisteredAction;
+  let descriptor: AnyActionDescriptor;
   try {
-    action = parseWorkflowAction(claimed.data.action);
+    const resolved = deps.registry.resolve(claimed.data.action);
+    action = resolved.action;
+    descriptor = resolved.descriptor;
+    if (
+      claimed.data.actionCapabilityId
+      && claimed.data.actionCapabilityId !== descriptor.capabilityId
+    ) {
+      throw new Error("The approved action capability no longer matches its record.");
+    }
+    if (
+      claimed.data.actionContractVersion !== undefined
+      && Number(claimed.data.actionContractVersion) !== descriptor.contractVersion
+    ) {
+      throw new Error("The approved action contract version is not supported.");
+    }
     const expectedDigest = claimed.data.effectDigestVersion === "canonical-v1"
       ? actionEffectDigest(action)
       : legacyActionEffectDigest(action);
@@ -437,7 +374,8 @@ export async function approveAction(input: {
       ref: claimed.ref,
       attemptId: claimed.attemptId,
       error: error instanceof Error ? error : new Error("Invalid action."),
-    });
+      executionStatus: "failed_safe_to_retry",
+    }, deps);
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
       message: "The approved action payload failed integrity validation.",
@@ -445,21 +383,27 @@ export async function approveAction(input: {
   }
 
   try {
-    const execution = await executeWorkflowAction({
-      companyId: input.companyId,
-      actorUid: input.actorUid,
-      approvalId: input.approvalId,
+    const execution = await executeRegisteredAction({
+      registry: deps.registry,
       action,
-      source: claimed.data.source as WorkflowActionSource,
+      context: {
+        companyId: input.companyId,
+        actorUid: input.actorUid,
+        approvalId: input.approvalId,
+        approvedBy: claimed.data.approvedBy || input.actorUid,
+        attemptId: claimed.attemptId!,
+        source: claimed.data.source as WorkflowActionSource,
+      },
     });
-    const auditRef = db.collection(
+    const auditRef = deps.database.collection(
       companyCollectionPath(input.companyId, "auditEvents"),
     ).doc();
     const now = Timestamp.now();
-    const caseId = caseIdForApproval({ action, scope: claimed.data.scope })
-      || (action.kind === "case.create" ? action.caseId : null);
-    const result = resultForAction(action);
-    await db.runTransaction(async (transaction) => {
+    const caseId = caseIdForApproval(
+      { action, scope: claimed.data.scope },
+      deps.registry,
+    ) || (execution.result.kind === "case" ? execution.result.id : null);
+    await deps.database.runTransaction(async (transaction) => {
       const latest = await transaction.get(claimed.ref);
       if (latest.data()?.executionAttemptId !== claimed.attemptId) {
         throw new TRPCError({
@@ -472,7 +416,8 @@ export async function approveAction(input: {
         decisionStatus: "approved",
         executionStatus: "succeeded",
         resultId: execution.resultId,
-        result,
+        result: execution.result,
+        executionResult: execution.executionResult,
         executedAt: now,
         executionLeaseExpiresAt: null,
         executionError: null,
@@ -489,6 +434,8 @@ export async function approveAction(input: {
           decisionStatus: "approved",
           executionStatus: "succeeded",
           actionKind: action.kind,
+          actionCapabilityId: descriptor.capabilityId,
+          actionContractVersion: descriptor.contractVersion,
           resultId: execution.resultId,
           effectDigest: latest.data()?.effectDigest || null,
         },
@@ -500,8 +447,8 @@ export async function approveAction(input: {
       status: "approved",
       actionKind: action.kind,
       resultId: execution.resultId,
-      result,
-      executionResult: execution.result,
+      result: execution.result,
+      executionResult: execution.executionResult,
       duplicate: false,
     });
   } catch (error) {
@@ -515,7 +462,8 @@ export async function approveAction(input: {
       ref: claimed.ref,
       attemptId: claimed.attemptId,
       error,
-    });
+      executionStatus: descriptor.classifyFailure(error, "execution"),
+    }, deps);
     throw error;
   }
 }
@@ -525,14 +473,15 @@ export async function rejectAction(input: {
   actorUid: string;
   approvalId: string;
   note?: string;
-}) {
-  const approvalRef = db.doc(
+}, overrides?: Partial<ApprovalDependencies>) {
+  const deps = dependencies(overrides);
+  const approvalRef = deps.database.doc(
     companyDocumentPath(input.companyId, "actionApprovals", input.approvalId),
   );
-  const auditRef = db.collection(
+  const auditRef = deps.database.collection(
     companyCollectionPath(input.companyId, "auditEvents"),
   ).doc();
-  return db.runTransaction(async (transaction) => {
+  return deps.database.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(approvalRef);
     if (!snapshot.exists) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
@@ -555,7 +504,7 @@ export async function rejectAction(input: {
     }
     const now = Timestamp.now();
     const note = String(input.note || "").trim().slice(0, 2_000) || null;
-    const caseId = caseIdForApproval(data);
+    const caseId = caseIdForApproval(data, deps.registry);
     transaction.update(approvalRef, {
       status: "rejected",
       decisionStatus: "rejected",

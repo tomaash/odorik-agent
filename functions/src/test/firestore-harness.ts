@@ -206,12 +206,76 @@ class MemoryDocumentReference {
     this.database.write(this.path, data, options?.merge === true);
   }
 
+  async create(data: DocumentData): Promise<void> {
+    this.database.create(this.path, data);
+  }
+
   async update(...fieldsAndValues: unknown[]): Promise<void> {
     this.database.update(this.path, fieldsAndValues);
   }
 
   async delete(): Promise<void> {
     this.database.remove(this.path);
+  }
+}
+
+class MemoryTransaction {
+  private readonly writes: Array<() => void> = [];
+
+  constructor(private readonly database: MemoryFirestore) {}
+
+  async get(
+    target: { get(): Promise<unknown> },
+  ): Promise<unknown> {
+    return target.get();
+  }
+
+  create(
+    reference: MemoryDocumentReference,
+    data: DocumentData,
+  ): MemoryTransaction {
+    this.writes.push(() => this.database.create(reference.path, data));
+    return this;
+  }
+
+  set(
+    reference: MemoryDocumentReference,
+    data: DocumentData,
+    options?: { merge?: boolean },
+  ): MemoryTransaction {
+    this.writes.push(() => this.database.write(
+      reference.path,
+      data,
+      options?.merge === true,
+    ));
+    return this;
+  }
+
+  update(
+    reference: MemoryDocumentReference,
+    dataOrField: DocumentData | string,
+    ...fieldsAndValues: unknown[]
+  ): MemoryTransaction {
+    this.writes.push(() => {
+      if (typeof dataOrField === "string") {
+        this.database.update(
+          reference.path,
+          [dataOrField, ...fieldsAndValues],
+        );
+      } else {
+        this.database.patch(reference.path, dataOrField);
+      }
+    });
+    return this;
+  }
+
+  delete(reference: MemoryDocumentReference): MemoryTransaction {
+    this.writes.push(() => this.database.remove(reference.path));
+    return this;
+  }
+
+  async commit(): Promise<void> {
+    for (const write of this.writes) write();
   }
 }
 
@@ -299,18 +363,47 @@ export class MemoryFirestore {
     return new MemoryWriteBatch(this);
   }
 
+  async runTransaction<T>(
+    updateFunction: (transaction: FirebaseFirestore.Transaction) => Promise<T>,
+  ): Promise<T> {
+    const transaction = new MemoryTransaction(this);
+    const result = await updateFunction(
+      transaction as unknown as FirebaseFirestore.Transaction,
+    );
+    await transaction.commit();
+    return result;
+  }
+
   asFirestore(): FirebaseFirestore.Firestore {
     return this as unknown as FirebaseFirestore.Firestore;
   }
 
   write(path: string, data: DocumentData, merge: boolean): void {
+    const current = this.documents.get(path) || {};
+    if (merge) {
+      this.documents.set(path, mergeDocument(current, data));
+      return;
+    }
     const materialized = materialize(data);
     if (!isPlainObject(materialized)) throw new Error("Document data must be an object");
-    const current = this.documents.get(path) || {};
-    this.documents.set(
-      path,
-      merge ? mergeDocument(current, materialized) : clone(materialized),
-    );
+    this.documents.set(path, clone(materialized));
+  }
+
+  create(path: string, data: DocumentData): void {
+    if (this.documents.has(path)) {
+      const error = new Error(`Document ${path} already exists`) as Error & {
+        code?: number | string;
+      };
+      error.code = 6;
+      throw error;
+    }
+    this.write(path, data, false);
+  }
+
+  patch(path: string, data: DocumentData): void {
+    const current = this.documents.get(path);
+    if (!current) throw new Error(`Document ${path} does not exist`);
+    this.documents.set(path, mergeDocument(current, data));
   }
 
   update(path: string, fieldsAndValues: unknown[]): void {

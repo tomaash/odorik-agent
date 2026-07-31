@@ -239,7 +239,7 @@ Every action capability must define:
 | --- | --- | --- | --- |
 | C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
 | C1 | Replace split Google connectors with one Workspace account and capability configurations | Completed | Scoped Google reset succeeds and one real account reconnects |
-| C2 | Put internal actions behind an extensible typed action registry | Ready | Existing workflow approvals behave unchanged |
+| C2 | Put internal actions behind an extensible typed action registry | In progress | Existing workflow approvals behave unchanged |
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Pending | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
@@ -404,31 +404,205 @@ Exit criteria:
 **Usable outcome:** the approval kernel can add an external executor without
 turning into a growing provider-specific conditional.
 
+#### Design boundary
+
+C2 is a static application registry, not a connector marketplace, runtime
+plugin system, generic action endpoint, or dynamic workflow UI. The production
+registry contains exactly the three action kinds that already execute:
+`task.create`, `case.create`, and `case.move`.
+
+Workflow block kinds remain `action.task.create`, `action.case.create`, and
+`action.case.move`; their evaluated approval payloads retain the existing
+shorter action kinds. Source capability descriptors remain separate from the
+action registry. This avoids forcing observe and execute behavior into one
+misleading abstraction.
+
+Direct task/case interactions also remain direct user authorizations: the
+initiating human is the recorded approver. The registry is the only dispatch
+path for workflow-proposed effects, but it is not exposed as a browser-callable
+“execute any action” API.
+
+#### Registry contract
+
+Each descriptor owns the complete semantics that currently leak into
+`approvals/repository.ts`:
+
+```ts
+type ActionDescriptor = {
+  kind: string
+  capabilityId: string
+  contractVersion: 1
+  category: "company.write" | "external.write"
+  inputSchema: ZodType
+  resultSchema: ZodType
+  authorization: {
+    requiresApproval: true
+    providerCapabilityId?: string
+  }
+  reversibility: "compensatable" | "irreversible"
+  idempotency: "deterministic_internal" | "provider_aware"
+  reconciliation: "deterministic_lookup" | "required_before_retry"
+  prepareForApproval(...)
+  assertRequestPreconditions(...)
+  scope(...)
+  execute(...)
+  resultReference(...)
+  classifyFailure(...)
+}
+```
+
+The registry constructor rejects duplicate kinds, duplicate capability IDs,
+any descriptor that does not require approval, and an `external.write`
+descriptor without a provider capability, provider-aware idempotency, and a
+reconciliation declaration. It returns an immutable map; production code
+cannot register actions after startup.
+
+`prepareForApproval` resolves authoritative member and stage names before the
+effect digest is calculated. `assertRequestPreconditions` retains transaction-
+aware validation for a selected case and exact case movement. `scope` owns
+contact/call/case linkage. `execute` receives an approval-bound context
+containing company, approval ID, approver, attempt ID, and immutable workflow
+provenance. `resultSchema` validates the sanitized result before success is
+recorded, while `resultReference` produces the generic task/case/movement link
+already used by the UI.
+
+All three internal effects are compensatable rather than automatically
+reversible. Their deterministic IDs make retry safe and provide their current
+reconciliation strategy. A future external descriptor must name its required
+provider capability and use provider-aware idempotency; merely adding it to
+the registry does not grant access or bypass approval.
+
+#### Approval-kernel cutover
+
+After the cutover, the approval repository performs one generic sequence:
+
+1. resolve and verify the named active approver;
+2. look up the action descriptor and parse its strict input schema;
+3. let the descriptor normalize the disclosed action and validate request-time
+   preconditions;
+4. persist the action kind, capability ID, contract version, exact payload,
+   canonical digest, scope, and workflow provenance;
+5. on approval, verify actor, payload, digest, lease, and attempt ID;
+6. invoke only the descriptor returned by the immutable production registry;
+7. validate and persist the typed execution result plus its generic result
+   reference; and
+8. classify failure as safe to retry or outcome unknown before writing the
+   audit event.
+
+Existing approval documents remain executable. Missing contract-version and
+capability fields infer version 1 from the registered action kind, and the
+legacy digest fallback remains until no deployed approval relies on it. C2
+does not migrate or rewrite historical approvals.
+
+Registry metadata is not part of the effect digest: the digest continues to
+cover the exact disclosed action payload only. Persisted contract version and
+capability ID select its interpreter but cannot silently change what was
+approved.
+
+The refactor removes action-specific branches for preparation, scope,
+preconditions, execution, and result mapping from the approval kernel.
+Action-specific rendering in `ApprovalCard.vue` remains explicit; building a
+generic schema-driven form or renderer before an external proposal exists
+would add machinery without user value.
+
 Build:
 
-- register action kind, schema, authorization class, executor, result schema,
-  reversibility, and reconciliation support in one application-owned registry;
-- move `task.create`, `case.create`, and `case.move` behind the registry without
-  changing their workflow schemas;
+- keep action schemas, canonical digest, and legacy digest compatibility in
+  `actions/contracts.ts`;
+- add the descriptor types, immutable registry constructor, and production
+  lookup in `actions/registry.ts`;
+- implement the three current descriptors in `actions/internal-actions.ts`,
+  reusing the existing task and pipeline repositories rather than copying
+  their mutation logic;
+- move request preparation, transactional preconditions, scope derivation,
+  execution, result validation, result linking, and failure classification
+  behind those descriptors;
+- keep approval decision, effect-integrity, lease, retry, unknown-outcome, and
+  audit mechanics generic in `approvals/repository.ts`;
+- add one narrow dependency boundary around the approval kernel—database,
+  immutable registry, and active-member resolution—so tests can use an
+  isolated registry and store without making production registration mutable;
 - keep the existing canonical effect digest and named approver contract;
-- make the approval executor dispatch only registered action kinds;
-- require external action registrations to declare the provider-connection
-  capability grant and reconciliation strategy they need; and
-- reject unknown action kinds before an approval record can be created.
+- persist additive `actionCapabilityId`, `actionContractVersion`, and sanitized
+  `executionResult` fields on new approvals;
+- make test registry injection explicit without exposing mutable registration
+  in the production runtime; and
+- update `INTERNAL_WORKFLOW.md` and `PLATFORM_ARCHITECTURE.md` to match the
+  deployed contract after acceptance.
+
+Implementation order:
+
+1. Add golden action/digest fixtures and registry-construction tests.
+2. Introduce the registry and the three internal descriptors while the old
+   dispatcher still exists.
+3. Cut approval creation over to descriptor preparation, preconditions, and
+   scope, then compare persisted fixture projections.
+4. Cut approval execution over to descriptor dispatch and typed results; delete
+   the old dispatcher only after parity tests pass.
+5. Run one test-only external descriptor through the approval harness with a
+   spy executor; it must remain unreachable without the named approval.
+6. Deploy and exercise current internal actions in test production before
+   naming C3 as current.
 
 Not included:
 
 - an external executor;
 - a generic connector action;
-- approval policy rules; or
+- a runtime extension API or provider-authored descriptor;
+- a schema-driven approval-card renderer;
+- changes to workflow block schemas or the editor;
+- changes to direct human task/case actions;
+- approval policy rules or a new policy language; or
 - autonomous actions.
+
+Tests:
+
+- registry construction fails for duplicate, malformed, or approval-optional
+  descriptors, and lookup rejects every unregistered action kind;
+- strict input and result schemas reject extra or malformed fields;
+- golden canonical and legacy digests for all three current actions remain
+  unchanged;
+- existing approval projections remain readable with no contract-version
+  field;
+- actor mismatch, payload tampering, and an active execution lease call no
+  executor;
+- two approval/retry requests for the same deterministic effect produce one
+  task, case, or movement;
+- a stale case movement still changes nothing and returns a precondition
+  failure;
+- a malformed executor result cannot be recorded as success;
+- an external descriptor without a provider-capability declaration is rejected;
+- the registered fake external executor's call count remains zero without its
+  named approval;
+- a simulated uncertain external result becomes `outcome_unknown`, cannot be
+  blindly retried, and calls the fake provider only once; and
+- the complete redesign suite remains green.
+
+Test-production acceptance:
+
+- use one disposable completed-call/contact/case fixture and a workflow version
+  that proposes the existing internal actions;
+- approve a task, case creation, and exact case move from the current Work and
+  case-detail surfaces;
+- confirm their existing result links, authorization envelopes, effect
+  digests, and audit events;
+- repeat an already succeeded approval and observe the same result with no
+  duplicate object; and
+- make one movement stale before approval and verify that neither the case
+  stage nor revision changes.
 
 Exit criteria:
 
-- all existing workflow and approval tests pass unchanged;
+- the production approval kernel contains no action-kind conditional;
+- all existing workflow payloads, approval cards, and result links behave
+  unchanged;
 - duplicate approvals still produce exactly one internal effect;
-- stale case movements still fail closed; and
-- a test-only external action cannot execute without a named approval.
+- stale case movements still fail closed;
+- unknown or unregistered actions cannot create approvals;
+- a test-only external action cannot execute without a named approval and
+  declared provider capability; and
+- the live task/create-case/move-case acceptance scenario passes with no
+  duplicate effects.
 
 ### C3 — Durable synchronization and operator recovery
 

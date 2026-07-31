@@ -25,7 +25,13 @@ const rejectionNote = ref('')
 
 const canAct = computed(() => (
   props.approval.approverUid === props.currentUid
-  && (props.approval.status === 'pending' || props.approval.status === 'execution_failed')
+  && (
+    props.approval.status === 'pending'
+    || (
+      props.approval.status === 'execution_failed'
+      && props.approval.executionStatus !== 'outcome_unknown'
+    )
+  )
 ))
 
 const relatedCaseId = computed(() => {
