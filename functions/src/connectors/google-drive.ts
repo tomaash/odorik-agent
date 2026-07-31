@@ -220,6 +220,9 @@ export async function selectGoogleDriveFolders(input: {
   const folders = await fetchDriveFolders(accessToken);
   const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
   const selectedSet = new Set(input.folderIds);
+  if ([...selectedSet].some((folderId) => !folderMap.has(folderId))) {
+    throw new Error("One or more selected folders are no longer accessible");
+  }
 
   const resourceCollection = connection.ref.collection("resources");
   const existingResources = await resourceCollection
@@ -233,11 +236,10 @@ export async function selectGoogleDriveFolders(input: {
 
   const now = Timestamp.now();
   const batch = db.batch();
-  const foldersToSync: string[] = [];
 
   for (const folderId of selectedSet) {
-    const folder = folderMap.get(folderId);
-    const displayName = folder?.name || `Folder ${folderId}`;
+    const folder = folderMap.get(folderId)!;
+    const displayName = folder.name || `Folder ${folderId}`;
     const resourceRef = resourceCollection.doc(folderResourceId(folderId));
     const existing = existingMap.get(folderId);
     if (!existing) {
@@ -252,10 +254,8 @@ export async function selectGoogleDriveFolders(input: {
         createdAt: now,
         updatedAt: now,
       });
-      foldersToSync.push(folderId);
     } else if (existing.data().status !== "enabled") {
       batch.update(existing.ref, { status: "enabled", updatedAt: now });
-      foldersToSync.push(folderId);
     }
   }
 
@@ -272,16 +272,7 @@ export async function selectGoogleDriveFolders(input: {
   }
 
   await batch.commit();
-
-  for (const folderId of foldersToSync) {
-    await syncDriveFolder({
-      companyId: input.companyId,
-      connectionId: input.connectionId,
-      folderId,
-      accessToken,
-    });
-  }
-
+  await syncGoogleDriveConnection(input);
   return listGoogleDriveFolders(input);
 }
 
