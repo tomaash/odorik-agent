@@ -399,13 +399,15 @@ export async function selectGoogleCalendars(input: {
   if (selectedIds.some((id) => !byId.has(id))) {
     throw new Error("One or more selected calendars are no longer accessible");
   }
+  const selectedSet = new Set(selectedIds);
   const connection = connectionRef(input.companyId, input.connectionId);
   const resources = await connection.collection("resources")
     .where("capabilityId", "==", calendarCapabilityId)
     .get();
   const batch = db.batch();
   const now = Timestamp.now();
-  for (const calendar of calendars) {
+  for (const calendarId of selectedIds) {
+    const calendar = byId.get(calendarId)!;
     const resourceRef = connection.collection("resources").doc(
       calendarResourceId(calendar.id),
     );
@@ -419,7 +421,7 @@ export async function selectGoogleCalendars(input: {
       primary: calendar.primary,
       accessRole: calendar.accessRole,
       timeZone: calendar.timeZone,
-      status: selectedIds.includes(calendar.id) ? "enabled" : "disabled",
+      status: "enabled",
       updatedBy: input.actorUid,
       ...(!resources.docs.some((resource) => resource.id === resourceRef.id)
         ? { createdAt: now }
@@ -427,15 +429,16 @@ export async function selectGoogleCalendars(input: {
       updatedAt: now,
     }, { merge: true });
   }
+  const removedResources = resources.docs.filter(
+    (resource) => !selectedSet.has(String(resource.data().externalId)),
+  );
+  for (const resource of removedResources) batch.delete(resource.ref);
   await batch.commit();
 
-  const disabledResources = calendars
-    .filter((calendar) => !selectedIds.includes(calendar.id))
-    .map((calendar) => calendarResourceId(calendar.id));
-  for (const resourceId of disabledResources) {
+  for (const resource of removedResources) {
     const items = await contextItems(input.companyId)
       .where("source.connectionId", "==", input.connectionId)
-      .where("source.resourceId", "==", resourceId)
+      .where("source.resourceId", "==", resource.id)
       .get();
     for (let offset = 0; offset < items.docs.length; offset += 400) {
       const deleteBatch = db.batch();
