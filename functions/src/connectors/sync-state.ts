@@ -20,6 +20,9 @@ export async function writeResourceSyncState(input: {
   extra?: Record<string, unknown>;
 }): Promise<void> {
   await input.resource.set({
+    // A successful adapter sync has rebuilt any context that was deliberately
+    // removed while its subsystem was disabled.
+    requiresFullSync: FieldValue.delete(),
     ...input.extra,
     itemCount: input.itemCount,
     lastSyncAt: FieldValue.serverTimestamp(),

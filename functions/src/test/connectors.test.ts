@@ -6,6 +6,7 @@ import {
   calendarEventContextItem,
   calendarEventsUrl,
   calendarResourceId,
+  calendarSyncTokenForRun,
   type CalendarEvent,
 } from "../connectors/google-calendar.js";
 import {
@@ -416,6 +417,22 @@ test("Calendar incremental sync keeps stable identity and deletes cancellations"
   assert.equal(incremental.searchParams.get("syncToken"), "sync-token-1");
   assert.equal(incremental.searchParams.get("timeMin"), null);
   assert.equal(incremental.searchParams.get("pageToken"), "page-2");
+
+  assert.equal(
+    calendarSyncTokenForRun({ syncToken: "sync-token-1" }),
+    "sync-token-1",
+  );
+  assert.equal(
+    calendarSyncTokenForRun({
+      syncToken: "sync-token-1",
+      requiresFullSync: true,
+    }),
+    "",
+  );
+  assert.equal(
+    calendarSyncTokenForRun({ syncToken: "sync-token-1" }, true),
+    "",
+  );
 });
 
 test("Drive sync characterizes direct-child selection and normalized provenance", () => {
@@ -626,6 +643,8 @@ test("Workspace capability lifecycle is isolated from the account and sibling se
   assert.equal(memory.read(connectionPath)?.status, "active");
   assert.equal(memory.read(calendarCapabilityPath)?.status, "disabled");
   assert.equal(memory.read(calendarResourcePath)?.status, "disabled");
+  assert.equal(memory.read(calendarResourcePath)?.itemCount, 0);
+  assert.equal(memory.read(calendarResourcePath)?.requiresFullSync, true);
   assert.equal(memory.read(calendarContextPath), undefined);
   assert.equal(memory.read(driveCapabilityPath)?.status, "active");
   assert.equal(memory.read(driveResourcePath)?.status, "enabled");
