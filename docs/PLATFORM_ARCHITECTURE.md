@@ -240,26 +240,45 @@ The proposal, decision, execution, external result, and audit events remain
 separate records. This makes responsibility and operational status visible
 without pretending that approval and execution are the same event.
 
-## Capability registry
+## Action capability registry
 
-The workflow language and action layer share an application-owned registry.
-An initial capability descriptor contains:
+The workflow language emits exact typed proposals. The approval layer resolves
+their shorter execution kinds through a static, application-owned action
+registry. Source connector capabilities remain a separate contract because
+observing context and executing effects have different lifecycle and safety
+requirements.
+
+An action descriptor contains:
 
 ```ts
-type Capability = {
+type ActionDescriptor = {
   kind: string
-  category: 'context.read' | 'agent.compute' | 'company.write' | 'external.write'
+  capabilityId: string
+  contractVersion: number
+  category: 'company.write' | 'external.write'
   inputSchema: unknown
-  outputSchema: unknown
-  requiredRole: string
-  requiresApproval: boolean
+  resultSchema: unknown
+  authorization: {
+    requiresApproval: true
+    providerCapabilityId?: string
+  }
   reversibility: 'reversible' | 'compensatable' | 'irreversible'
+  idempotency: 'deterministic_internal' | 'provider_aware'
+  reconciliation: 'deterministic_lookup' | 'required_before_retry'
 }
 ```
 
-For the first platform slice, the only consequential action should be
-`work_item.create`. Calls are read context. This is deliberately small enough
-to test the entire governance path.
+The registry also owns preparation, transactional preconditions, scope,
+execution, typed result validation, result references, and failure
+classification. The approval kernel remains generic: named actor, effect
+digest, execution lease, attempt identity, decision state, audit, and outcome
+state.
+
+The production registry contains `task.create`, `case.create`, and
+`case.move`. It rejects duplicate or approval-optional descriptors and is
+immutable after startup. It is not a runtime plugin system or a generic action
+API. Future external effects must declare the provider capability and
+reconciliation contract they require before they can be registered.
 
 ## Agent execution
 

@@ -402,8 +402,11 @@ export type ActionApprovalItem = {
     runId: string
     blockId: string
   }
+  actionCapabilityId?: string
+  actionContractVersion?: number
   effectDigest: string
   resultId?: string | null
+  executionResult?: unknown
   executionError?: string | null
   rejectionNote?: string | null
   createdAt?: string | null
