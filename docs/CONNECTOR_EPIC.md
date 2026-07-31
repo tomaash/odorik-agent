@@ -1098,12 +1098,13 @@ YYYY-MM-DD — Slice
 
 ### 2026-07-31 — C2 completed
 
-- **Commit/deployment:** implementation commit `328601e`; GitHub Actions run
+- **Commit/deployment:** implementation commit `328601e` and completion
+  hardening commit `f87ae65`; GitHub Actions runs
   [30619069809](https://github.com/tomaash/odorik-agent/actions/runs/30619069809)
-  completed successfully and deployed Functions, Firestore configuration, and
-  both application targets. The completion hardening also makes the deploy
-  workflow idempotently preserve private Eventarc invocation for every
-  Firestore-triggered service.
+  and
+  [30620593141](https://github.com/tomaash/odorik-agent/actions/runs/30620593141)
+  completed successfully and deployed Functions, Firestore configuration, both
+  application targets, and the verified private Eventarc bindings.
 - **Acceptance:** the existing call-follow-up workflow was upgraded from its
   legacy implicit task subject, previewed against six completed calls, and
   deployed as versions 3 and 4. A supported call backfill created typed
