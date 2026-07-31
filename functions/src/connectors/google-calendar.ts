@@ -254,6 +254,14 @@ export function calendarEventsUrl(input: {
   return url;
 }
 
+export function calendarSyncTokenForRun(
+  resource: Record<string, unknown>,
+  forceFullSync = false,
+): string {
+  if (forceFullSync || resource.requiresFullSync === true) return "";
+  return typeof resource.syncToken === "string" ? resource.syncToken : "";
+}
+
 async function syncCalendarResource(input: {
   companyId: string;
   connectionId: string;
@@ -267,9 +275,7 @@ async function syncCalendarResource(input: {
   let pageToken = "";
   let nextSyncToken = "";
   let synced = 0;
-  const storedSyncToken = !input.forceFullSync && typeof data.syncToken === "string"
-    ? data.syncToken
-    : "";
+  const storedSyncToken = calendarSyncTokenForRun(data, input.forceFullSync);
   do {
     const url = calendarEventsUrl({
       calendarId,
@@ -333,7 +339,12 @@ async function syncCalendarResource(input: {
   await writeResourceSyncState({
     resource: input.resource.ref,
     itemCount,
-    extra: { syncToken: nextSyncToken || data.syncToken || null },
+    extra: {
+      // Never restore the obsolete cursor after a forced rebuild. Google
+      // normally returns nextSyncToken on the last full-sync page; null keeps
+      // the following run full if it does not.
+      syncToken: nextSyncToken || (storedSyncToken ? data.syncToken : null),
+    },
   });
   return synced;
 }

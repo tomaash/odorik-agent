@@ -488,6 +488,11 @@ export async function setCapabilityStatus(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.set(resource.ref, {
       status: "disabled",
+      // Disabling a whole subsystem deletes its materialized context. Any
+      // incremental cursor is therefore no longer sufficient to rebuild it:
+      // the next successful sync must start from a full provider snapshot.
+      itemCount: 0,
+      requiresFullSync: true,
       updatedBy: input.actorUid,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true })) : []),
