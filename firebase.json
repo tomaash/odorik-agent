@@ -17,6 +17,13 @@
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
         {
+          "source": "/webhooks/github",
+          "function": {
+            "functionId": "githubWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/oauth/google/callback",
           "function": {
             "functionId": "googleOAuthCallback",
@@ -53,6 +60,13 @@
       "public": "frontend/dist",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
+        {
+          "source": "/webhooks/github",
+          "function": {
+            "functionId": "githubWebhook",
+            "region": "europe-west3"
+          }
+        },
         {
           "source": "/oauth/google/callback",
           "function": {

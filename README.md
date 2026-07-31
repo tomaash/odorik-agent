@@ -218,14 +218,25 @@ Connector deployments additionally use:
   `https://odorik-tx-260720-c58d.web.app/oauth/google/callback`; and
 - a private `syncCalendarSources` scheduled function invoked every 30 minutes.
 
-The GitHub observe connector additionally binds `GITHUB_APP_PRIVATE_KEY` to
-the authenticated API. Upload or rotate the ignored `infra/*.pem` key with
-`infra/configure-github-app.sh`; the script validates the key, refuses tracked
-files, and grants only the control-plane service account access. App ID,
-client ID, slug, and the development installation ID are public identifiers
-with environment overrides; no installation token or private key is stored in
-Firestore or returned to the browser. The current App has webhooks disabled,
-so issue synchronization is an explicit admin action in Sources.
+The GitHub observe connector binds `GITHUB_APP_PRIVATE_KEY` to the authenticated
+API, webhook worker, and reconciliation worker. Upload or rotate the ignored
+`infra/*.pem` key with `infra/configure-github-app.sh`; the script validates the
+key, refuses tracked files, and grants only the control-plane service account
+access. App ID, client ID, slug, and the development installation ID are public
+identifiers with environment overrides; no installation token or private key is
+stored in Firestore or returned to the browser.
+
+Signed GitHub deliveries arrive at
+`https://agent-erik-app.web.app/webhooks/github`. Prepare its high-entropy
+`GITHUB_WEBHOOK_SECRET` with `infra/configure-github-webhook.sh`, then copy the
+value once into the GitHub App webhook settings and subscribe to Issues and
+Issue comments. Installation repository changes are sent automatically by
+GitHub Apps. The endpoint derives the company and connection from a
+server-owned installation map, deduplicates the GitHub delivery ID, and queues
+only a minimized payload. A retryable Firestore worker fetches the canonical
+issue and comments with a short-lived installation token. The Sources UI shows
+webhook health; manual synchronization remains available, and
+`syncGitHubSources` reconciles enabled repositories every 30 minutes.
 
 Team invitation delivery additionally binds `RESEND_API_KEY` to the API
 function, as does `sendPartnerForm`, which delivers the website's contact form.

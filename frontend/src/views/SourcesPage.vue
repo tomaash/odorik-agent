@@ -288,6 +288,18 @@ function connectionStatusSeverity(connection: SourceConnection) {
   return 'secondary'
 }
 
+function webhookStatusLabel(connection: SourceConnection) {
+  if (connection.webhook?.status === 'active') return t('sources.github.webhook.active')
+  if (connection.webhook?.status === 'attention') return t('sources.github.webhook.attention')
+  return t('sources.github.webhook.pending')
+}
+
+function webhookStatusSeverity(connection: SourceConnection) {
+  if (connection.webhook?.status === 'active') return 'success'
+  if (connection.webhook?.status === 'attention') return 'warn'
+  return 'secondary'
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -1168,6 +1180,34 @@ onUnmounted(() => {
                   class="mt-3 w-full sm:w-auto"
                   @click="openWorkspaceAuthorization(connection)"
                 />
+              </div>
+
+              <div
+                v-if="connection.connectorId === 'github'"
+                class="mb-3 rounded-xl border border-surface-200 bg-white p-3"
+              >
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm font-semibold text-surface-800">{{ t('sources.github.webhook.title') }}</div>
+                    <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">
+                      {{ t(`sources.github.webhook.${connection.webhook?.status === 'active' ? 'activeDescription' : connection.webhook?.status === 'attention' ? 'attentionDescription' : 'pendingDescription'}`) }}
+                    </p>
+                  </div>
+                  <Tag
+                    :value="webhookStatusLabel(connection)"
+                    :severity="webhookStatusSeverity(connection)"
+                    rounded
+                  />
+                </div>
+                <div v-if="connection.webhook?.lastDeliveryAt" class="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-surface-500">
+                  <span>{{ t('sources.github.webhook.lastDelivery') }}: <strong>{{ formatDate(connection.webhook.lastDeliveryAt) }}</strong></span>
+                  <span v-if="connection.webhook.lastEvent">
+                    {{ t('sources.github.webhook.event') }}: <strong>{{ connection.webhook.lastEvent }}{{ connection.webhook.lastAction ? ` · ${connection.webhook.lastAction}` : '' }}</strong>
+                  </span>
+                </div>
+                <p v-if="connection.webhook?.lastError" class="m-0 mt-2 text-xs text-amber-800 break-words">
+                  {{ connection.webhook.lastError }}
+                </p>
               </div>
 
               <template v-if="connection.connectorId === 'odorik'">

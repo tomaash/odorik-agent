@@ -2,6 +2,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db, jsonSafe } from "../firestore.js";
 import { capabilityDescriptor, connectorCatalog } from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
+import { githubInstallationRoutingPath } from "./github.js";
 import {
   legacyOdorikConnectionId,
   odorikContextItem,
@@ -89,6 +90,7 @@ export async function listSources(
     const capabilitySnapshots = await document.ref.collection("capabilities").get();
     const stats = (data.stats || {}) as Record<string, unknown>;
     const auth = (data.auth || {}) as Record<string, unknown>;
+    const webhook = (data.webhook || {}) as Record<string, unknown>;
     const capabilities: CapabilityConfigurationPublicView[] = connectorId === "odorik"
       ? [{
         id: "calls",
@@ -167,6 +169,18 @@ export async function listSources(
           ? stats.lastSyncAt
           : null,
       lastError: typeof stats.lastError === "string" ? stats.lastError : null,
+      webhook: connectorId === "github" ? {
+        status: ["active", "attention"].includes(String(webhook.status))
+          ? webhook.status as "active" | "attention"
+          : "pending",
+        lastDeliveryAt: typeof webhook.lastDeliveryAt === "string"
+          ? webhook.lastDeliveryAt
+          : null,
+        lastEvent: typeof webhook.lastEvent === "string" ? webhook.lastEvent : null,
+        lastAction: typeof webhook.lastAction === "string" ? webhook.lastAction : null,
+        lastOutcome: typeof webhook.lastOutcome === "string" ? webhook.lastOutcome : null,
+        lastError: typeof webhook.lastError === "string" ? webhook.lastError : null,
+      } : undefined,
       reauthorizationRequired: data.reauthorizationRequired === true,
       itemCount: Number(stats.itemCount || resources.reduce((sum, item) => sum + item.itemCount, 0)),
       resourceCount: resources.length,
@@ -385,6 +399,10 @@ export async function deleteSourceConnection(
     occurredAt: FieldValue.serverTimestamp(),
     createdAt: FieldValue.serverTimestamp(),
   });
+  const githubInstallationId = Number(connection.data()?.installationId);
+  if (input.connectorId === "github" && Number.isSafeInteger(githubInstallationId)) {
+    batch.delete(database.doc(githubInstallationRoutingPath(githubInstallationId)));
+  }
   batch.delete(connectionRef);
   await batch.commit();
   return {

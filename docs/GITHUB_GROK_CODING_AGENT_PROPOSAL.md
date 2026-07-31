@@ -146,10 +146,15 @@ action.github.pr.request_review    optional later
 **Webhook endpoint:**
 
 ```text
-POST /webhooks/github/{companyId}/{connectionId}
+POST /webhooks/github
 ```
 
-Verify signature with the App webhook secret (encrypted on the connection). Normalize issue opened/edited/labeled/closed and PR events into ContextItems and run the eligibility worker.
+Verify the signature with the App webhook secret from Secret Manager. Resolve
+the tenant exclusively through a server-owned installation-to-connection map,
+deduplicate `X-GitHub-Delivery`, persist a minimized queue record, and return
+quickly. A retryable worker revalidates the route and fetches the canonical
+issue/comments with a short-lived installation token before updating
+ContextItems. A periodic full read sync reconciles missed deliveries.
 
 ### 7.2 Grok subscription
 
@@ -444,7 +449,10 @@ The auth-only worker must use a different service account from the coding runner
 
 ## 13. Security and tenancy
 
-- All procedures derive `companyId` from membership; webhook paths include company + connection and verify signature + connection ownership.
+- All user procedures derive `companyId` from membership. The public webhook
+  accepts no tenant identifier; it verifies the signature and resolves the
+  company + connection through a server-owned installation mapping, which the
+  async worker verifies again.
 - Browser never receives GitHub App private keys, installation tokens, or the Grok subscription session.
 - Installation tokens are job-scoped and short-lived.
 - Repo contents in the job are company data — logs/redaction policy for secrets detected in agent output (basic pattern scrubbing v1).
@@ -455,7 +463,7 @@ The auth-only worker must use a different service account from the coding runner
 
 Align with the connector epic style: one complete loop per slice.
 
-**Implementation status (2026-07-31):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 read foundation now authenticates the configured GitHub App from Secret Manager, lists the installation's repositories, requires a separate Erik-side repository opt-in, and manually projects selected repositories' issues/comments into tenant-scoped ContextItems from the Sources UI. Installation tokens remain memory-only and the adapter rejects write permissions. CG1 is not complete until webhook ingestion/reconciliation and citation acceptance are verified in the deployed product. CG3 still lacks the authenticated control-plane run record, GitHub branch publisher, and web run surfaces. The manual Grok auth script is deliberately operator scaffolding; CG2 is complete only when the web connection flow exists.
+**Implementation status (2026-07-31):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 read connector authenticates the configured GitHub App from Secret Manager, lists the installation's repositories, requires a separate Erik-side repository opt-in, and projects selected repositories' issues/comments into tenant-scoped ContextItems. Its signed webhook path is tenant-routed by installation, delivery-deduplicated, asynchronously processed, health-visible in Sources, and backed by 30-minute reconciliation. Installation tokens remain memory-only and the adapter rejects write permissions. CG1 is complete after the deployed webhook receives a live issue delivery and the product agent cites that issue. CG3 still lacks the authenticated control-plane run record, GitHub branch publisher, and web run surfaces. The manual Grok auth script is deliberately operator scaffolding; CG2 is complete only when the web connection flow exists.
 
 | Slice | Outcome | Exit criteria |
 | --- | --- | --- |
