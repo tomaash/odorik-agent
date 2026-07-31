@@ -2,7 +2,7 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C2 — Typed action capability registry
+**Current implementation slice:** C3 — Durable synchronization and operator recovery
 
 **Last plan revision:** 2026-07-31
 
@@ -137,7 +137,7 @@ The baseline was inspected in the deployed test environment on 2026-07-31.
 | Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, cancellation deletion, and 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
 | Google Drive | Workspace subsystem with least-privilege consent, explicit direct-folder selection, Google Docs/text extraction, manual sync, and consistent internal resource identity | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction |
 | Context | Provider/capability/connection/resource identity, provenance, indexing, citations, and `company`/`restricted` envelope | Google capabilities still write `company`; provider ACLs are not projected |
-| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states | Dispatch is hard-coded to `task.create`, `case.create`, and `case.move` |
+| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; C3–G3 must prove provider recovery and execution |
 | Connector catalog | Only working Odorik and Google Workspace capabilities are shown | Gmail remains deliberately absent until G1 has a complete operating loop |
 
 The first slices protect and improve this baseline rather than immediately
@@ -239,8 +239,8 @@ Every action capability must define:
 | --- | --- | --- | --- |
 | C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
 | C1 | Replace split Google connectors with one Workspace account and capability configurations | Completed | Scoped Google reset succeeds and one real account reconnects |
-| C2 | Put internal actions behind an extensible typed action registry | In progress | Existing workflow approvals behave unchanged |
-| C3 | Add durable sync runs, leases, retries, replay, and useful health | Pending | Failures are recoverable and freshness is measurable |
+| C2 | Put internal actions behind an extensible typed action registry | Completed | Existing workflow approvals behave unchanged |
+| C3 | Add durable sync runs, leases, retries, replay, and useful health | In progress | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Pending | Cross-source call + email answer succeeds |
@@ -399,7 +399,7 @@ Exit criteria:
   A destructive live disconnect is repeated only when the acceptance account
   can be reauthorized without another manual unverified-app safety handoff.
 
-### C2 — Typed action capability registry
+### C2 — Typed action capability registry — completed 2026-07-31
 
 **Usable outcome:** the approval kernel can add an external executor without
 turning into a growing provider-specific conditional.
@@ -1095,3 +1095,51 @@ YYYY-MM-DD — Slice
   extraction to C5.
 - **Decision:** C1 passed. Keep the accepted Workspace account connected and
   continue to C2.
+
+### 2026-07-31 — C2 completed
+
+- **Commit/deployment:** implementation commit `328601e`; GitHub Actions run
+  [30619069809](https://github.com/tomaash/odorik-agent/actions/runs/30619069809)
+  completed successfully and deployed Functions, Firestore configuration, and
+  both application targets. The completion hardening also makes the deploy
+  workflow idempotently preserve private Eventarc invocation for every
+  Firestore-triggered service.
+- **Acceptance:** the existing call-follow-up workflow was upgraded from its
+  legacy implicit task subject, previewed against six completed calls, and
+  deployed as versions 3 and 4. A supported call backfill created typed
+  `task.create`, `case.create`, and `case.move` requests with capability IDs,
+  contract version 1, exact named approver, immutable call/workflow provenance,
+  and no target effect before approval. Approving the first two produced one
+  open task and one case. Approving the exact `New → Follow-up` movement
+  produced one movement and revision 1; the Work queue and case workspace
+  showed the task, result links, stage, revision, authorization, and audit
+  history. Repeated task, case, and movement approvals returned their stored
+  typed results with `duplicate: true`, and repeating the workflow backfill
+  retained one version-4 run, three approvals, and one movement.
+- **Failure acceptance:** repeated version-4 task and case proposals were
+  rejected and created no objects. A separate exact movement was requested at
+  `Follow-up`, the case was changed directly to `In progress`, and approval of
+  the stale proposal failed safe to retry without changing stage or revision.
+  Registry tests also prove payload tamper, actor mismatch, active lease,
+  malformed result, unknown action, and simulated provider-uncertainty
+  behavior.
+- **Infrastructure finding:** the first backfill exposed a missing
+  `roles/run.invoker` binding between the declared `odorik-crm` Eventarc
+  delivery identity and the private `processCallWorkflows` Cloud Run service.
+  The service returned authenticated-invocation warnings and performed no
+  work. The narrow private binding was restored; the next delivery succeeded.
+  Deployment now reapplies the same binding idempotently to all three private
+  Firestore-triggered services.
+- **Metrics observed:** 72 tests pass: 11 shared workflow, 53 Functions, and
+  8 frontend tests. The nine registry tests cover construction, golden
+  digests, approval-only dispatch, legacy approvals, uncertain outcomes,
+  malformed results, tamper/lease behavior, and stale movement preconditions.
+  Live acceptance produced exactly one task, one case, and one successful
+  movement; rejected and duplicate paths produced no additional effect.
+- **Known limitations:** the production registry deliberately contains only
+  the three honest internal effects. Approval cards remain explicitly rendered
+  by action kind, and no external executor exists until G3. The disposable C2
+  task, case, approvals, run records, and stale-failure record remain visible
+  in the test-production account as inspectable acceptance evidence.
+- **Decision:** C2 passed. Keep mandatory named approval and the immutable
+  registry boundary; continue to C3 before adding Gmail or an external write.

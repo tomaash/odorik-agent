@@ -43,7 +43,19 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_DEPLOY_SERVICE_ACCOUNT }}
 
+      - uses: google-github-actions/setup-gcloud@v2
+
       # Hosting targets are named explicitly: a bare `hosting` would also pick up
       # the marketing site, whose build output this job never produces.
       - name: Deploy Firebase resources
         run: npx firebase-tools@15.14.0 deploy --only functions:crm,firestore:odorik,hosting:frontend,hosting:odorik-tx-260720-c58d --project odorik-tx-260720-c58d --force
+
+      # Firebase creates private Gen-2 trigger services, but a newly introduced
+      # service does not reliably inherit the Eventarc invoker binding used by
+      # the existing services. Re-applying it is idempotent and keeps triggers
+      # private while allowing their declared delivery identity to invoke them.
+      - name: Preserve private Eventarc invocation
+        run: |
+          gcloud run services add-iam-policy-binding processcallworkflows --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
+          gcloud run services add-iam-policy-binding projectcallcontext --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
+          gcloud run services add-iam-policy-binding syncknowledgeindex --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet

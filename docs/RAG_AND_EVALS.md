@@ -164,8 +164,10 @@ The Gen-2 Firestore trigger is delivered by Eventarc to a private Cloud Run
 service. Because this project uses the custom `odorik-crm` service account as
 both the trigger delivery and runtime identity, the generated
 `syncKnowledgeIndex` service grants that account `roles/run.invoker`. This is a
-private service-to-service permission, not public invocation. A new project
-must establish the equivalent binding after the first function deployment.
+private service-to-service permission, not public invocation. The same
+contract applies to `processCallWorkflows` and `projectCallContext`. Deployment
+idempotently establishes the binding for all three services after Firebase
+creates or updates them.
 
 Operators can perform the same rebuild with application-default Google Cloud
 credentials and receive a count/checksum/retrieval reconciliation report:
