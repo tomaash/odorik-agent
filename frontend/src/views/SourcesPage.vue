@@ -557,11 +557,12 @@ onMounted(async () => {
   document.addEventListener('pointerdown', handleDocumentClick)
   const params = new URLSearchParams(window.location.search)
   const workspaceResult = params.get('workspace')
+  await load()
   if (workspaceResult === 'connected') notice.value = t('sources.workspaceConnected')
   else if (workspaceResult === 'partial') error.value = t('sources.workspacePartial')
   else if (workspaceResult === 'denied') error.value = t('sources.googleDenied')
   else if (workspaceResult === 'failed' || workspaceResult === 'invalid') error.value = t('sources.googleFailed')
-  await load()
+  if (workspaceResult) window.history.replaceState({}, '', window.location.pathname)
 })
 
 onUnmounted(() => {
@@ -1226,7 +1227,16 @@ onUnmounted(() => {
                         @click="synchronizeDrive(connection)"
                       />
                       <Button
-                        v-if="capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
+                        v-if="['attention', 'reauthorization_required'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
+                        :label="t('sources.workspace.grantPermission')"
+                        icon="pi pi-refresh"
+                        severity="warn"
+                        text
+                        size="small"
+                        @click="openWorkspaceAuthorization(connection, descriptor.id)"
+                      />
+                      <Button
+                        v-else-if="capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
                         :label="t('sources.workspace.enableService')"
                         icon="pi pi-check-circle"
                         severity="success"
