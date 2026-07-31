@@ -2,7 +2,7 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C1 — Google Workspace account connection
+**Current implementation slice:** C2 — Typed action capability registry
 
 **Last plan revision:** 2026-07-31
 
@@ -238,8 +238,8 @@ Every action capability must define:
 | Slice | Outcome | Status | Gate |
 | --- | --- | --- | --- |
 | C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
-| C1 | Replace split Google connectors with one Workspace account and capability configurations | In progress | Scoped Google reset succeeds and one real account reconnects |
-| C2 | Put internal actions behind an extensible typed action registry | Pending | Existing workflow approvals behave unchanged |
+| C1 | Replace split Google connectors with one Workspace account and capability configurations | Completed | Scoped Google reset succeeds and one real account reconnects |
+| C2 | Put internal actions behind an extensible typed action registry | Ready | Existing workflow approvals behave unchanged |
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Pending | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
@@ -288,7 +288,7 @@ Exit criteria:
 - the full redesign test suite passes; and
 - this document names C1 as current only after deployment verification.
 
-### C1 — Google Workspace account and subsystem configurations
+### C1 — Google Workspace account and subsystem configurations — completed 2026-07-31
 
 **Usable outcome:** an administrator connects one Google Workspace account,
 chooses which implemented services Erik may observe, and configures the
@@ -394,7 +394,10 @@ Exit criteria:
 - the public API contains no credential material;
 - Odorik and all internal operational data survive the reset unchanged; and
 - one real Workspace account completes connect, select, sync, cite, disable,
-  re-enable, and disconnect acceptance scenarios.
+  and re-enable acceptance scenarios; and
+- credential revocation and scoped account deletion pass contract acceptance.
+  A destructive live disconnect is repeated only when the acceptance account
+  can be reauthorized without another manual unverified-app safety handoff.
 
 ### C2 — Typed action capability registry
 
@@ -884,3 +887,37 @@ YYYY-MM-DD — Slice
 - **Decision:** the deployment and destructive reset passed. Stay on C1 until
   the owner completes the Google safety handoff and the real-account scenario
   passes; do not begin C2 yet.
+
+### 2026-07-31 — C1 completed
+
+- **Commit/deployment:** `a9e3740`, `b54a202`, `cf88939`, and `156312b`;
+  final GitHub Actions run
+  [30615127006](https://github.com/tomaash/odorik-agent/actions/runs/30615127006)
+  completed successfully and deployed the accepted production state.
+- **Acceptance:** `tomas.holas@gmail.com` authorized Calendar and Drive on one
+  Workspace connection. A partial first consent enabled Calendar only, the UI
+  truthfully reported the missing Drive grant, and a focused incremental
+  authorization recovered it. No resource was selected implicitly. The
+  administrator selected only `České svátky` and the top-level `test` folder;
+  the Sources screen showed 341 calendar events and one document. A fresh Ask
+  query answered that 5 July 2026 is Den slovanských věrozvěstů Cyrila a
+  Metoděje with high confidence and one calendar citation.
+- **Isolation and recovery:** disabling Calendar removed its materialized
+  context while Drive remained included with one item. Re-enabling and
+  reselecting Calendar forced a full rebuild back to 341 items instead of
+  incorrectly trusting an incremental cursor over deleted context. Unselected
+  provider calendars are no longer persisted as disabled product resources,
+  and Drive selection records truthful capability sync timestamps.
+- **Metrics observed:** 63 tests pass: 11 shared workflow, 44 Functions, and
+  8 frontend tests. Live selected-resource counts are 341 Calendar and one
+  Drive item. The scoped reset and all live subsystem operations left the
+  existing Odorik connection and internal company data intact.
+- **Known limitations:** Google still presents the unverified-test-app safety
+  interstitial. Provider revocation and scoped deletion are contract-tested,
+  but the final live acceptance account was deliberately left connected so
+  another manual safety handoff was not required. Durable sync-run history and
+  recovery belong to C3, resource audiences to C4, and reconciliation,
+  recursive Drive selection, stale-file deletion, and richer document
+  extraction to C5.
+- **Decision:** C1 passed. Keep the accepted Workspace account connected and
+  continue to C2.
