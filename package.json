@@ -9,6 +9,8 @@
   "scripts": {
     "build:redesign": "npm --prefix functions/shared run build && npm --prefix functions run build && npm --prefix frontend run build",
     "test:redesign": "npm --prefix functions/shared test && npm --prefix functions test && npm --prefix frontend test",
+    "build:coding-runner": "npm --prefix coding-runner run build",
+    "test:coding-runner": "npm --prefix coding-runner test",
     "build": "tsc -p tsconfig.json",
     "start:api": "node dist/api.js",
     "start:ingest": "node dist/ingest.js",

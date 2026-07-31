@@ -74,7 +74,9 @@ export async function listSources(
     if (!connectorId) return null;
     const fallbackCapabilityId: SourceCapabilityId = connectorId === "odorik"
       ? "context.call.read"
-      : "context.document.read";
+      : connectorId === "github"
+        ? "context.github.issue.read"
+        : "context.document.read";
     const resourcesSnapshot = await document.ref.collection("resources")
       .orderBy("displayName", "asc")
       .get();
@@ -140,7 +142,11 @@ export async function listSources(
       id: document.id,
       companyId,
       connectorId,
-      providerId: connectorId === "google_workspace" ? "google" : "odorik",
+      providerId: connectorId === "google_workspace"
+        ? "google"
+        : connectorId === "github"
+          ? "github"
+          : "odorik",
       providerAccountId: typeof data.providerAccountId === "string"
         ? data.providerAccountId
         : undefined,

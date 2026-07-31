@@ -1,0 +1,50 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: __CODING_JOB__
+  labels:
+    cloud.googleapis.com/location: __CODING_REGION__
+  annotations:
+    run.googleapis.com/launch-stage: BETA
+spec:
+  template:
+    spec:
+      taskCount: 1
+      parallelism: 1
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: "3600"
+          serviceAccountName: __CODING_SERVICE_ACCOUNT__
+          containers:
+            - name: coding-runner
+              image: __CODING_IMAGE__
+              env:
+                - name: GROK_AUTH_SOURCE
+                  value: /secrets/grok/auth.json
+                - name: GROK_HOME
+                  value: /home/grok/.grok
+                - name: WORKSPACE_ROOT
+                  value: /workspace
+              resources:
+                limits:
+                  cpu: "2"
+                  memory: 4Gi
+              volumeMounts:
+                - name: workspace
+                  mountPath: /workspace
+                - name: grok-subscription-auth
+                  mountPath: /secrets/grok
+                  readOnly: true
+          volumes:
+            - name: workspace
+              emptyDir:
+                medium: Disk
+                sizeLimit: 10Gi
+            - name: grok-subscription-auth
+              secret:
+                secretName: grok-subscription-auth
+                items:
+                  - key: latest
+                    path: auth.json
+                    mode: 0400

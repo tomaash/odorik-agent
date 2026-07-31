@@ -77,6 +77,10 @@ The existing vertical slice remains useful as a proving ground:
   receive isolated encrypted credentials and callback URLs.
 - Google Calendar has read-only OAuth, explicit calendar selection,
   incremental sync tokens, deletion propagation, and scheduled reconciliation.
+- GitHub uses the `Agent Erik Development` GitHub App with a private key held
+  in Secret Manager. Administrators connect the configured installation in
+  Sources, explicitly include repositories (none are selected by default),
+  and manually synchronize read-only issues and comments into `ContextItem`s.
 - Calls and calendar events normalize into company-scoped `ContextItem`
   documents before the same Qdrant indexing pipeline processes them.
 - All CRM, agent, connector, recording, and derived-search data is scoped to
@@ -149,12 +153,14 @@ of enabled company members.
   condition evaluator, template renderer, and preview contract
 - `functions/`: Firebase Auth context, tRPC, CRM extraction and review
 - `functions/src/connectors/`: adapter registry, encrypted connection
-  credentials, Odorik projection, Calendar OAuth and incremental sync
+  credentials, Odorik projection, Calendar OAuth and incremental sync, and
+  GitHub App installation-token authentication plus issue projection
 - `functions/src/agent/`: factual agent loop, safe company-data tools, and
   Qdrant/Firestore retrieval
 - `functions/evals/`: versioned factual and retrieval evaluation cases
 - `frontend/`: Vue 3, TypeScript, Pinia, PrimeVue, Tailwind, and Firebase Auth
 - `docs/`: target product, platform contracts, and implementation sequence
+- `coding-runner/`: isolated Cloud Run Job worker using Grok subscription OAuth
 - `firestore.rules`, `firestore.indexes.json`: named-database rules and indexes
 
 ## Local verification
@@ -169,6 +175,9 @@ npm --prefix functions test
 npm --prefix frontend ci
 npm --prefix frontend run typecheck
 npm --prefix frontend run build
+
+npm --prefix coding-runner install
+npm --prefix coding-runner test
 ```
 
 Google connector OAuth in the emulator uses the deterministic frontend origin
@@ -208,6 +217,15 @@ Connector deployments additionally use:
 - the exact hosted callback
   `https://odorik-tx-260720-c58d.web.app/oauth/google/callback`; and
 - a private `syncCalendarSources` scheduled function invoked every 30 minutes.
+
+The GitHub observe connector additionally binds `GITHUB_APP_PRIVATE_KEY` to
+the authenticated API. Upload or rotate the ignored `infra/*.pem` key with
+`infra/configure-github-app.sh`; the script validates the key, refuses tracked
+files, and grants only the control-plane service account access. App ID,
+client ID, slug, and the development installation ID are public identifiers
+with environment overrides; no installation token or private key is stored in
+Firestore or returned to the browser. The current App has webhooks disabled,
+so issue synchronization is an explicit admin action in Sources.
 
 Team invitation delivery additionally binds `RESEND_API_KEY` to the API
 function, as does `sendPartnerForm`, which delivers the website's contact form.

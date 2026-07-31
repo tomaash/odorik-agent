@@ -416,17 +416,18 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type ConnectorId = 'odorik' | 'google_workspace'
+export type ConnectorId = 'odorik' | 'google_workspace' | 'github'
 export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
   | 'context.document.read'
+  | 'context.github.issue.read'
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId
-  serviceId: 'calls' | 'calendar' | 'drive'
+  serviceId: 'calls' | 'calendar' | 'drive' | 'issues'
   direction: 'observe'
-  resourceType: 'phone_line' | 'calendar' | 'folder'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
   requiredScopes: string[]
   syncMode: 'webhook' | 'incremental' | 'manual'
   requiresApproval: false
@@ -441,7 +442,7 @@ export type SourceConnector = {
 }
 
 export type SourceCapability = {
-  id: 'calls' | 'calendar' | 'drive'
+  id: 'calls' | 'calendar' | 'drive' | 'issues'
   capabilityId: SourceCapabilityId
   status: 'active' | 'attention' | 'reauthorization_required' | 'disabled'
   grantedScopes: string[]
@@ -457,7 +458,7 @@ export type SourceResource = {
   id: string
   connectionId: string
   capabilityId: SourceCapabilityId
-  resourceType: 'phone_line' | 'calendar' | 'folder'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
   externalId: string
   displayName: string
   status: 'enabled' | 'disabled'
@@ -469,13 +470,13 @@ export type SourceConnection = {
   id: string
   companyId: string
   connectorId: ConnectorId
-  providerId: 'odorik' | 'google'
+  providerId: 'odorik' | 'google' | 'github'
   providerAccountId?: string
   tenantId?: string
   displayName: string
   status: 'configuring' | 'active' | 'attention' | 'disconnected'
-  authKind: 'basic_upload' | 'oauth2'
-  credentialMode: 'encrypted' | 'legacy_secret' | 'none'
+  authKind: 'basic_upload' | 'oauth2' | 'github_app'
+  credentialMode: 'encrypted' | 'legacy_secret' | 'shared_secret' | 'none'
   uploadUrl?: string
   accountLabel?: string
   grantedScopes: string[]
@@ -747,7 +748,7 @@ export async function setSourceConnectionStatus(
 
 export async function setSourceCapabilityStatus(
   connectionId: string,
-  capabilityId: Exclude<SourceCapabilityId, 'context.call.read'>,
+  capabilityId: 'context.calendar.read' | 'context.document.read',
   enabled: boolean,
 ) {
   return trpc.sources.setCapabilityStatus.mutate({
@@ -779,7 +780,7 @@ export type SelectableFolder = {
 }
 
 export async function startGoogleWorkspaceAuthorization(
-  capabilityIds: Array<Exclude<SourceCapabilityId, 'context.call.read'>>,
+  capabilityIds: Array<'context.calendar.read' | 'context.document.read'>,
   connectionId?: string,
 ) {
   return trpc.sources.googleWorkspace.authorizationUrl.mutate({
@@ -811,4 +812,12 @@ export async function selectGoogleDriveFolders(connectionId: string, folderIds: 
 
 export async function syncGoogleDrive(connectionId: string) {
   return trpc.sources.googleDrive.sync.mutate({ connectionId })
+}
+
+export async function connectConfiguredGitHubInstallation() {
+  return trpc.sources.github.connectConfiguredInstallation.mutate()
+}
+
+export async function syncGitHubIssues(connectionId: string) {
+  return trpc.sources.github.sync.mutate({ connectionId })
 }

@@ -1,10 +1,11 @@
 export const connectorIds = [
   "odorik",
   "google_workspace",
+  "github",
 ] as const;
 
 export type ConnectorId = typeof connectorIds[number];
-export type ProviderId = "odorik" | "google";
+export type ProviderId = "odorik" | "google" | "github";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
 export type CapabilityStatus =
@@ -17,11 +18,12 @@ export const sourceCapabilityIds = [
   "context.call.read",
   "context.calendar.read",
   "context.document.read",
+  "context.github.issue.read",
 ] as const;
 
 export type SourceCapabilityId = typeof sourceCapabilityIds[number];
-export type CapabilityServiceId = "calls" | "calendar" | "drive";
-export type ResourceType = "phone_line" | "calendar" | "folder";
+export type CapabilityServiceId = "calls" | "calendar" | "drive" | "issues";
+export type ResourceType = "phone_line" | "calendar" | "folder" | "repository";
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId;
@@ -57,8 +59,8 @@ export type ConnectionPublicView = {
   tenantId?: string;
   displayName: string;
   status: ConnectionStatus;
-  authKind: "basic_upload" | "oauth2";
-  credentialMode: "encrypted" | "legacy_secret" | "none";
+  authKind: "basic_upload" | "oauth2" | "github_app";
+  credentialMode: "encrypted" | "legacy_secret" | "shared_secret" | "none";
   uploadUrl?: string;
   accountLabel?: string;
   grantedScopes: string[];
