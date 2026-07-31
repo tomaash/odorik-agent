@@ -4,30 +4,15 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
+import { capabilityDescriptor } from "./registry.js";
+import type { CapabilityServiceId, SourceCapabilityId } from "./types.js";
 import {
   defaultGoogleRedirectUri,
   googleOAuthRedirectUri,
   googleOAuthReturnUrl,
 } from "./google-oauth-return.js";
 
-/**
- * The Google OAuth spine shared by every Google adapter.
- *
- * Calendar and Drive previously carried their own byte-identical copies of the
- * authorization, exchange, refresh, and revocation flows — to the point that
- * Drive imported a helper from Calendar. Adding a third Google source should
- * cost a scope list, an account-label lookup, and a `normalize`, not another
- * copy of this file.
- */
-
-export type GoogleAdapterId = "google_calendar" | "google_drive";
-
-/** One Google adapter's identity: what it is called and what it may read. */
-export type GoogleConnector = {
-  adapterId: GoogleAdapterId;
-  displayName: string;
-  scopes: readonly string[];
-};
+export const googleIdentityScopes = ["openid", "email"] as const;
 
 export type GoogleTokens = {
   access_token?: string;
@@ -46,23 +31,26 @@ export type GoogleCredential = {
   scope: string;
 };
 
-// The consent warning for an unverified test app can require a manual handoff.
-// Keep the state short-lived, but leave enough time for the user to review it.
-export const googleAuthorizationLifetimeMs = 60 * 60 * 1000;
+type GoogleUserInfo = {
+  sub?: string;
+  email?: string;
+  email_verified?: boolean;
+  hd?: string;
+};
 
-/** Refresh this long before expiry so an in-flight request cannot race it. */
+export type GoogleAuthorizationResult = {
+  connectionId: string;
+  enabledCapabilityIds: SourceCapabilityId[];
+  missingCapabilityIds: SourceCapabilityId[];
+};
+
+export const googleAuthorizationLifetimeMs = 60 * 60 * 1000;
 const refreshSkewMs = 60_000;
 
-/**
- * The grant itself is gone — the user revoked access, or the refresh token
- * expired. No retry can fix this; only a fresh consent can. Google reports it
- * as `invalid_grant`, and an unverified app in testing mode hits it every
- * seven days, so it needs to be a first-class state rather than a stray 400.
- */
 export class GoogleReauthorizationRequiredError extends Error {
   readonly code = "GOOGLE_REAUTHORIZATION_REQUIRED";
-  constructor(public readonly displayName: string) {
-    super(`${displayName} access has expired. Reconnect the account to continue.`);
+  constructor() {
+    super("Google Workspace access has expired. Reconnect the account to continue.");
     this.name = "GoogleReauthorizationRequiredError";
   }
 }
@@ -77,6 +65,45 @@ export function connectionRef(companyId: string, connectionId: string) {
 
 export function connectionCollection(companyId: string) {
   return db.collection(companyCollectionPath(companyId, "connections"));
+}
+
+export function capabilityConfigRef(
+  companyId: string,
+  connectionId: string,
+  serviceId: CapabilityServiceId,
+) {
+  return connectionRef(companyId, connectionId).collection("capabilities").doc(serviceId);
+}
+
+export function googleWorkspaceConnectionId(providerAccountId: string): string {
+  return `google_${sha256Hex(providerAccountId).slice(0, 32)}`;
+}
+
+export function scopesForCapabilities(
+  capabilityIds: readonly SourceCapabilityId[],
+): string[] {
+  return [...new Set([
+    ...googleIdentityScopes,
+    ...capabilityIds.flatMap((id) => capabilityDescriptor(id).requiredScopes),
+  ])];
+}
+
+export function capabilityGrantState(
+  requestedCapabilityIds: readonly SourceCapabilityId[],
+  grantedScopes: readonly string[],
+): {
+  enabledCapabilityIds: SourceCapabilityId[];
+  missingCapabilityIds: SourceCapabilityId[];
+} {
+  const granted = new Set(grantedScopes);
+  const enabledCapabilityIds: SourceCapabilityId[] = [];
+  const missingCapabilityIds: SourceCapabilityId[] = [];
+  for (const capabilityId of requestedCapabilityIds) {
+    const complete = capabilityDescriptor(capabilityId).requiredScopes
+      .every((scope) => granted.has(scope));
+    (complete ? enabledCapabilityIds : missingCapabilityIds).push(capabilityId);
+  }
+  return { enabledCapabilityIds, missingCapabilityIds };
 }
 
 export function requireGoogleSuccess<T>(
@@ -113,30 +140,53 @@ export async function revokeGoogleToken(token: string): Promise<boolean> {
     signal: AbortSignal.timeout(30_000),
   });
   if (response.ok) return true;
-  // Google returns 400 when the token is already invalid or revoked. Either
-  // way, it no longer grants this application access.
   if (response.status === 400) return false;
   throw new Error(`Google token revocation failed (${response.status})`);
 }
 
-/** Start an authorization: persist opaque state, then hand back the consent URL. */
-export async function createGoogleAuthorization(
-  connector: GoogleConnector,
-  input: {
-    companyId: string;
-    uid: string;
-    email: string;
-    displayName: string;
-    clientId: string;
-    returnOrigin?: string;
-  },
-): Promise<{ authorizationUrl: string }> {
+async function googleUserInfo(accessToken: string): Promise<GoogleUserInfo> {
+  const response = await fetch("https://openidconnect.googleapis.com/v1/userinfo", {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  return requireGoogleSuccess(
+    "Google identity",
+    response,
+    await response.json() as GoogleUserInfo & { error?: unknown },
+  );
+}
+
+/** Start initial or incremental authorization for explicitly selected capabilities. */
+export async function createGoogleWorkspaceAuthorization(input: {
+  companyId: string;
+  uid: string;
+  email: string;
+  displayName: string;
+  clientId: string;
+  capabilityIds: SourceCapabilityId[];
+  connectionId?: string;
+  returnOrigin?: string;
+}): Promise<{ authorizationUrl: string }> {
+  const capabilityIds = [...new Set(input.capabilityIds)];
+  if (capabilityIds.length === 0) {
+    throw new Error("Choose at least one Google Workspace service");
+  }
   const state = randomBytes(32).toString("base64url");
   const now = Timestamp.now();
   const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
+  let loginHint = "";
+  if (input.connectionId) {
+    const existing = await connectionRef(input.companyId, input.connectionId).get();
+    if (!existing.exists || existing.data()?.connectorId !== "google_workspace") {
+      throw new Error("Google Workspace connection not found");
+    }
+    loginHint = String(existing.data()?.accountLabel || "");
+  }
   await db.doc(`oauthStates/${sha256Hex(state)}`).set({
     companyId: input.companyId,
-    provider: connector.adapterId,
+    provider: "google_workspace",
+    requestedCapabilityIds: capabilityIds,
+    connectionId: input.connectionId || null,
     uid: input.uid,
     email: input.email,
     displayName: input.displayName,
@@ -150,47 +200,44 @@ export async function createGoogleAuthorization(
     redirect_uri: redirectUri,
     response_type: "code",
     access_type: "offline",
-    prompt: "consent select_account",
+    prompt: input.connectionId ? "consent" : "consent select_account",
     include_granted_scopes: "true",
-    scope: connector.scopes.join(" "),
+    scope: scopesForCapabilities(capabilityIds).join(" "),
     state,
   });
+  if (loginHint) query.set("login_hint", loginHint);
   return {
     authorizationUrl: `https://accounts.google.com/o/oauth2/v2/auth?${query.toString()}`,
   };
 }
 
-/**
- * Complete an authorization: verify state, exchange the code, and store one
- * connection per provider account.
- *
- * `resolveAccountLabel` is the only adapter-specific step — Calendar reads the
- * primary calendar, Drive reads `about?fields=user`.
- */
-export async function completeGoogleAuthorization(
-  connector: GoogleConnector,
-  input: {
-    code: string;
-    state: string;
-    clientId: string;
-    clientSecret: string;
-    credentialKey: string;
-    resolveAccountLabel: (accessToken: string) => Promise<string | null>;
-  },
-): Promise<{ connectionId: string }> {
+export async function completeGoogleWorkspaceAuthorization(input: {
+  code: string;
+  state: string;
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+}): Promise<GoogleAuthorizationResult> {
   const stateRef = db.doc(`oauthStates/${sha256Hex(input.state)}`);
   const stateSnapshot = await stateRef.get();
   const stateData = stateSnapshot.data();
   const expiresAt = stateData?.expiresAt instanceof Timestamp
     ? stateData.expiresAt.toMillis()
     : 0;
+  const requestedCapabilityIds = Array.isArray(stateData?.requestedCapabilityIds)
+    ? stateData.requestedCapabilityIds.filter(
+      (value): value is SourceCapabilityId =>
+        value === "context.calendar.read" || value === "context.document.read",
+    )
+    : [];
   if (
     !stateSnapshot.exists
-    || stateData?.provider !== connector.adapterId
+    || stateData?.provider !== "google_workspace"
     || typeof stateData?.companyId !== "string"
+    || requestedCapabilityIds.length === 0
     || expiresAt < Date.now()
   ) {
-    throw new Error(`The ${connector.displayName} authorization request is invalid or expired`);
+    throw new Error("The Google Workspace authorization request is invalid or expired");
   }
 
   const response = await fetch("https://oauth2.googleapis.com/token", {
@@ -206,78 +253,123 @@ export async function completeGoogleAuthorization(
     signal: AbortSignal.timeout(30_000),
   });
   const tokenBody = requireGoogleSuccess(
-    connector.displayName,
+    "Google Workspace",
     response,
     await response.json() as GoogleTokens,
   );
-  if (!tokenBody.access_token || !tokenBody.refresh_token) {
-    throw new Error("Google did not return the required offline refresh token");
+  if (!tokenBody.access_token) {
+    throw new Error("Google did not return an access token");
   }
 
-  const providerAccountId = String(
-    await input.resolveAccountLabel(tokenBody.access_token)
-    || stateData.email
-    || `unknown ${connector.displayName} account`,
-  );
+  const identity = await googleUserInfo(tokenBody.access_token);
+  if (!identity.sub || !identity.email) {
+    throw new Error("Google did not return a stable account identity");
+  }
   const companyId = String(stateData.companyId);
-  const connections = connectionCollection(companyId);
-  const existingConnections = await connections
-    .where("adapterId", "==", connector.adapterId)
-    .get();
-  const existingConnection = existingConnections.docs.find(
-    (document) => document.data().providerAccountId === providerAccountId,
-  );
-  const connection = existingConnection?.ref || connections.doc();
-  const now = Timestamp.now();
+  const connectionId = googleWorkspaceConnectionId(identity.sub);
+  if (stateData.connectionId && stateData.connectionId !== connectionId) {
+    throw new Error("Choose the same Google account when enabling another service");
+  }
+  const connection = connectionRef(companyId, connectionId);
+  const existing = await connection.get();
+  const existingData = existing.data();
+  let existingCredential: GoogleCredential | null = null;
+  if (typeof existingData?.credentialCiphertext === "string") {
+    existingCredential = decryptCredentials(
+      existingData.credentialCiphertext,
+      input.credentialKey,
+    ) as GoogleCredential;
+  }
+  const refreshToken = tokenBody.refresh_token || existingCredential?.refreshToken;
+  if (!refreshToken) {
+    throw new Error("Google did not return the required offline refresh token");
+  }
+  const grantedScopes = (tokenBody.scope || existingCredential?.scope || "")
+    .split(/\s+/)
+    .filter(Boolean);
+  const grants = capabilityGrantState(requestedCapabilityIds, grantedScopes);
   const credentials: GoogleCredential = {
     accessToken: tokenBody.access_token,
-    refreshToken: tokenBody.refresh_token,
+    refreshToken,
     expiresAt: new Date(Date.now() + Number(tokenBody.expires_in || 3600) * 1000).toISOString(),
-    scope: tokenBody.scope || connector.scopes.join(" "),
+    scope: grantedScopes.join(" "),
   };
+  const now = Timestamp.now();
+  const existingCapabilities = new Map(await Promise.all(
+    requestedCapabilityIds.map(async (capabilityId) => {
+      const descriptor = capabilityDescriptor(capabilityId);
+      const snapshot = await connection
+        .collection("capabilities")
+        .doc(descriptor.serviceId)
+        .get();
+      return [capabilityId, snapshot.exists] as const;
+    }),
+  ));
   const batch = db.batch();
   batch.delete(stateRef);
   batch.set(connection, {
+    schemaVersion: 2,
     companyId,
-    adapterId: connector.adapterId,
-    displayName: connector.displayName,
-    accountLabel: providerAccountId,
-    providerAccountId,
-    status: "active",
+    connectorId: "google_workspace",
+    providerId: "google",
+    providerAccountId: identity.sub,
+    tenantId: identity.hd || null,
+    displayName: "Google Workspace",
+    accountLabel: identity.email,
+    status: grants.enabledCapabilityIds.length > 0 ? "active" : "attention",
     reauthorizationRequired: false,
     auth: {
       kind: "oauth2",
       credentialMode: "encrypted",
-      scopes: connector.scopes,
+      scopes: grantedScopes,
     },
     credentialCiphertext: encryptCredentials(credentials, input.credentialKey),
-    stats: { itemCount: 0, lastError: null },
-    createdBy: existingConnection?.data().createdBy || stateData.uid,
+    stats: {
+      ...(existingData?.stats || {}),
+      lastError: grants.missingCapabilityIds.length > 0
+        ? "Google did not grant every requested permission"
+        : null,
+    },
+    createdBy: existingData?.createdBy || stateData.uid,
     authorizedBy: {
       email: stateData.email || null,
       displayName: stateData.displayName || null,
     },
-    ...(!existingConnection ? { createdAt: now } : { reauthorizedAt: now }),
+    ...(!existing.exists ? { createdAt: now } : { reauthorizedAt: now }),
     updatedAt: now,
   }, { merge: true });
+  for (const capabilityId of requestedCapabilityIds) {
+    const descriptor = capabilityDescriptor(capabilityId);
+    const granted = grants.enabledCapabilityIds.includes(capabilityId);
+    batch.set(connection.collection("capabilities").doc(descriptor.serviceId), {
+      capabilityId,
+      serviceId: descriptor.serviceId,
+      direction: "observe",
+      status: granted ? "active" : "attention",
+      grantedScopes: descriptor.requiredScopes.filter((scope) => grantedScopes.includes(scope)),
+      requiredScopes: descriptor.requiredScopes,
+      missingScopes: descriptor.requiredScopes.filter((scope) => !grantedScopes.includes(scope)),
+      stats: granted ? { lastError: null } : {
+        lastError: "Google did not grant every required permission",
+      },
+      ...(!existingCapabilities.get(capabilityId) ? { createdAt: now } : {}),
+      updatedAt: now,
+    }, { merge: true });
+  }
   await batch.commit();
-  return { connectionId: connection.id };
+  return { connectionId, ...grants };
 }
 
-/** Revoke this connection's grant at Google. Safe to call on an absent connection. */
-export async function revokeGoogleAuthorization(
-  connector: GoogleConnector,
-  input: {
-    companyId: string;
-    connectionId: string;
-    credentialKey: string;
-  },
-): Promise<boolean> {
+export async function revokeGoogleWorkspaceAuthorization(input: {
+  companyId: string;
+  connectionId: string;
+  credentialKey: string;
+}): Promise<boolean> {
   const connection = await connectionRef(input.companyId, input.connectionId).get();
   const data = connection.data();
   if (
     !connection.exists
-    || data?.adapterId !== connector.adapterId
+    || data?.connectorId !== "google_workspace"
     || typeof data.credentialCiphertext !== "string"
   ) return false;
   const credentials = decryptCredentials(
@@ -288,12 +380,34 @@ export async function revokeGoogleAuthorization(
   return token ? revokeGoogleToken(token) : false;
 }
 
-/**
- * Resolve a usable access token for one connection, refreshing and re-encrypting
- * it when the stored token is at or near expiry.
- */
-export async function authorizedGoogleConnection(
-  connector: GoogleConnector,
+async function markGoogleReauthorizationRequired(
+  connection: FirebaseFirestore.DocumentSnapshot,
+): Promise<void> {
+  const capabilities = await connection.ref.collection("capabilities").get();
+  const batch = db.batch();
+  batch.set(connection.ref, {
+    status: "attention",
+    reauthorizationRequired: true,
+    stats: {
+      lastError: "Google Workspace access has expired. Reconnect the account to continue.",
+    },
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  for (const capability of capabilities.docs) {
+    batch.set(capability.ref, {
+      status: "reauthorization_required",
+      stats: {
+        lastError: "Google Workspace access has expired. Reconnect the account to continue.",
+      },
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+  }
+  await batch.commit();
+}
+
+/** Resolve a usable token and prove the requested Workspace capability is active. */
+export async function authorizedGoogleCapability(
+  capabilityId: SourceCapabilityId,
   input: {
     companyId: string;
     connectionId: string;
@@ -301,26 +415,42 @@ export async function authorizedGoogleConnection(
     clientSecret: string;
     credentialKey: string;
   },
-): Promise<{ accessToken: string; connection: FirebaseFirestore.DocumentSnapshot }> {
-  const connection = await connectionRef(input.companyId, input.connectionId).get();
+): Promise<{
+  accessToken: string;
+  connection: FirebaseFirestore.DocumentSnapshot;
+  capability: FirebaseFirestore.DocumentSnapshot;
+}> {
+  const descriptor = capabilityDescriptor(capabilityId);
+  const [connection, capability] = await Promise.all([
+    connectionRef(input.companyId, input.connectionId).get(),
+    capabilityConfigRef(input.companyId, input.connectionId, descriptor.serviceId).get(),
+  ]);
   const data = connection.data();
+  const capabilityData = capability.data();
   if (
     !connection.exists
-    || data?.adapterId !== connector.adapterId
+    || data?.connectorId !== "google_workspace"
     || !["active", "attention"].includes(String(data?.status))
+    || !capability.exists
+    || capabilityData?.capabilityId !== capabilityId
+    || capabilityData?.status !== "active"
     || typeof data.credentialCiphertext !== "string"
   ) {
-    throw new Error(`Active ${connector.displayName} connection not found`);
+    throw new Error(`Active ${descriptor.serviceId} capability not found`);
   }
   const credentials = decryptCredentials(
     data.credentialCiphertext,
     input.credentialKey,
   ) as GoogleCredential;
+  const grantedScopes = new Set(credentials.scope.split(/\s+/).filter(Boolean));
+  if (!descriptor.requiredScopes.every((scope) => grantedScopes.has(scope))) {
+    throw new Error(`Google Workspace ${descriptor.serviceId} permission is incomplete`);
+  }
   if (
     credentials.accessToken
     && Date.parse(credentials.expiresAt) > Date.now() + refreshSkewMs
   ) {
-    return { accessToken: credentials.accessToken, connection };
+    return { accessToken: credentials.accessToken, connection, capability };
   }
   if (!credentials.refreshToken) throw new Error("Google refresh token is missing");
 
@@ -337,19 +467,11 @@ export async function authorizedGoogleConnection(
   });
   const refreshBody = await response.json() as GoogleTokens;
   if (!response.ok && isInvalidGrant(refreshBody)) {
-    const error = new GoogleReauthorizationRequiredError(connector.displayName);
-    // Park the connection in a state the Sources screen can act on, instead of
-    // leaving a generic 400 that looks like a transient provider fault.
-    await connection.ref.set({
-      status: "attention",
-      reauthorizationRequired: true,
-      stats: { lastError: error.message },
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-    throw error;
+    await markGoogleReauthorizationRequired(connection);
+    throw new GoogleReauthorizationRequiredError();
   }
 
-  const tokenBody = requireGoogleSuccess(connector.displayName, response, refreshBody);
+  const tokenBody = requireGoogleSuccess("Google Workspace", response, refreshBody);
   if (!tokenBody.access_token) throw new Error("Google access token refresh failed");
   const updated: GoogleCredential = {
     ...credentials,
@@ -362,5 +484,5 @@ export async function authorizedGoogleConnection(
     reauthorizationRequired: false,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
-  return { accessToken: updated.accessToken, connection };
+  return { accessToken: updated.accessToken, connection, capability };
 }

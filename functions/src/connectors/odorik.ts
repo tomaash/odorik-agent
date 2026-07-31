@@ -90,7 +90,8 @@ export function odorikContextItem(
     companyId,
     kind: "call",
     source: {
-      adapterId: "odorik",
+      providerId: "odorik",
+      capabilityId: "context.call.read",
       connectionId,
       resourceId,
       externalId: externalCallId,

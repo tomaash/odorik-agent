@@ -23,17 +23,26 @@ import {
   deleteSourceConnection,
   listSources,
   prepareConnectionDeletion,
+  resetGoogleConnectorData,
+  setCapabilityStatus,
   setConnectionStatus,
   setResourceStatus,
 } from "../connectors/repository.js";
+import {
+  capabilityGrantState,
+  googleWorkspaceConnectionId,
+  scopesForCapabilities,
+} from "../connectors/google-oauth.js";
 import { MemoryFirestore } from "./firestore-harness.js";
 
 test("source public views retain operational state and exclude credentials", async () => {
   const memory = new MemoryFirestore();
-  memory.seed("companies/explorers/connections/drive-a", {
+  memory.seed("companies/explorers/connections/google-a", {
     companyId: "explorers",
-    adapterId: "google_drive",
-    displayName: "Shared Drive",
+    connectorId: "google_workspace",
+    providerId: "google",
+    providerAccountId: "google-sub-1",
+    displayName: "Google Workspace",
     accountLabel: "operator@example.com",
     status: "active",
     reauthorizationRequired: false,
@@ -56,8 +65,21 @@ test("source public views retain operational state and exclude credentials", asy
     createdAt: "2026-07-29T10:00:00.000Z",
     updatedAt: "2026-07-30T10:00:00.000Z",
   });
-  memory.seed("companies/explorers/connections/drive-a/resources/folder-a", {
-    connectionId: "drive-a",
+  memory.seed("companies/explorers/connections/google-a/capabilities/drive", {
+    capabilityId: "context.document.read",
+    serviceId: "drive",
+    status: "active",
+    grantedScopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    stats: {
+      itemCount: 3,
+      lastSyncAt: "2026-07-30T10:00:00.000Z",
+      lastObservedAt: "2026-07-30T09:59:00.000Z",
+      lastError: null,
+    },
+  });
+  memory.seed("companies/explorers/connections/google-a/resources/folder-a", {
+    connectionId: "google-a",
+    capabilityId: "context.document.read",
     resourceType: "folder",
     externalId: "provider-folder-a",
     displayName: "Customers",
@@ -75,7 +97,9 @@ test("source public views retain operational state and exclude credentials", asy
   assert.deepEqual({
     id: connection.id,
     companyId: connection.companyId,
-    adapterId: connection.adapterId,
+    connectorId: connection.connectorId,
+    providerId: connection.providerId,
+    providerAccountId: connection.providerAccountId,
     displayName: connection.displayName,
     status: connection.status,
     authKind: connection.authKind,
@@ -87,10 +111,12 @@ test("source public views retain operational state and exclude credentials", asy
     itemCount: connection.itemCount,
     resourceCount: connection.resourceCount,
   }, {
-    id: "drive-a",
+    id: "google-a",
     companyId: "explorers",
-    adapterId: "google_drive",
-    displayName: "Shared Drive",
+    connectorId: "google_workspace",
+    providerId: "google",
+    providerAccountId: "google-sub-1",
+    displayName: "Google Workspace",
     status: "active",
     authKind: "oauth2",
     credentialMode: "encrypted",
@@ -103,7 +129,8 @@ test("source public views retain operational state and exclude credentials", asy
   });
   assert.deepEqual(connection.resources[0], {
     id: "folder-a",
-    connectionId: "drive-a",
+    connectionId: "google-a",
+    capabilityId: "context.document.read",
     resourceType: "folder",
     externalId: "provider-folder-a",
     displayName: "Customers",
@@ -120,19 +147,37 @@ test("source public views retain operational state and exclude credentials", asy
   assert.doesNotMatch(publicJson, /private-operator/);
   assert.doesNotMatch(publicJson, /resource-secret/);
   assert.deepEqual(
-    result.adapters.map((adapter) => ({
-      id: adapter.id,
-      availability: adapter.availability,
-      readOnly: adapter.readOnly,
+    result.connectors.map((connector) => ({
+      id: connector.id,
+      availability: connector.availability,
+      capabilities: connector.capabilities.map((capability) => capability.id),
     })),
     [
-      { id: "odorik", availability: "available", readOnly: true },
-      { id: "google_calendar", availability: "available", readOnly: true },
-      { id: "google_drive", availability: "available", readOnly: true },
-      { id: "gmail", availability: "planned", readOnly: true },
-      { id: "github", availability: "planned", readOnly: true },
+      {
+        id: "odorik",
+        availability: "available",
+        capabilities: ["context.call.read"],
+      },
+      {
+        id: "google_workspace",
+        availability: "available",
+        capabilities: ["context.calendar.read", "context.document.read"],
+      },
     ],
   );
+  assert.deepEqual(connection.capabilities.map((capability) => ({
+    id: capability.id,
+    capabilityId: capability.capabilityId,
+    status: capability.status,
+    grantedScopes: capability.grantedScopes,
+    resourceCount: capability.resourceCount,
+  })), [{
+    id: "drive",
+    capabilityId: "context.document.read",
+    status: "active",
+    grantedScopes: ["https://www.googleapis.com/auth/drive.readonly"],
+    resourceCount: 1,
+  }]);
 });
 
 test("connection and resource lifecycle preserves or removes context intentionally", async () => {
@@ -147,13 +192,15 @@ test("connection and resource lifecycle preserves or removes context intentional
 
   memory.seed(connectionPath, {
     companyId: "explorers",
-    adapterId: "odorik",
+    connectorId: "odorik",
+    providerId: "odorik",
     displayName: "Odorik sales",
     status: "active",
     credentialCiphertext: "encrypted-credential",
   });
   memory.seed(resourcePath, {
     connectionId: "odorik-a",
+    capabilityId: "context.call.read",
     resourceType: "phone_line",
     externalId: "line:Sales",
     displayName: "Sales",
@@ -231,7 +278,7 @@ test("connection and resource lifecycle preserves or removes context intentional
       database,
     ),
     {
-      adapterId: "odorik",
+      connectorId: "odorik",
       displayName: "Odorik sales",
     },
   );
@@ -243,7 +290,7 @@ test("connection and resource lifecycle preserves or removes context intentional
     companyId: "explorers",
     connectionId: "odorik-a",
     actorUid: "admin-1",
-    adapterId: "odorik",
+    connectorId: "odorik",
     displayName: "Odorik sales",
     providerAccessRevoked: null,
   }, database);
@@ -269,7 +316,7 @@ test("connection and resource lifecycle preserves or removes context intentional
     eventType: auditEvents[0]?.eventType,
     actorUid: auditEvents[0]?.actorUid,
     connectionId: auditEvents[0]?.connectionId,
-    adapterId: auditEvents[0]?.adapterId,
+    connectorId: auditEvents[0]?.connectorId,
     resourcesDeleted: auditEvents[0]?.resourcesDeleted,
     contextItemsDeleted: auditEvents[0]?.contextItemsDeleted,
     sourceRecordsDisabled: auditEvents[0]?.sourceRecordsDisabled,
@@ -277,7 +324,7 @@ test("connection and resource lifecycle preserves or removes context intentional
     eventType: "source.connection_deleted",
     actorUid: "admin-1",
     connectionId: "odorik-a",
-    adapterId: "odorik",
+    connectorId: "odorik",
     resourcesDeleted: 1,
     contextItemsDeleted: 1,
     sourceRecordsDisabled: 1,
@@ -323,7 +370,8 @@ test("Calendar incremental sync keeps stable identity and deletes cancellations"
     calendarContextItemId("other-connection", "primary@example.com", "event-1"),
   );
   assert.deepEqual(initial.source, {
-    adapterId: "google_calendar",
+    providerId: "google",
+    capabilityId: "context.calendar.read",
     connectionId: "calendar-connection",
     resourceId: calendarResourceId("primary@example.com"),
     externalId: "event-1",
@@ -423,9 +471,10 @@ test("Drive sync characterizes direct-child selection and normalized provenance"
     driveContextItemId("drive-connection", "folder-b", "doc-1"),
   );
   assert.deepEqual(item.source, {
-    adapterId: "google_drive",
+    providerId: "google",
+    capabilityId: "context.document.read",
     connectionId: "drive-connection",
-    resourceId: "folder-a",
+    resourceId: folderResourceId("folder-a"),
     externalId: "doc-1",
     version: "2026-07-30T10:00:00.000Z",
   });
@@ -470,4 +519,217 @@ test("Odorik context identity is connection-scoped and provenance is stable", ()
     (first.provenance as Record<string, unknown>).rawRef,
     "companies/explorers/calls/call-1",
   );
+});
+
+test("Workspace scope planning enables only explicitly requested complete grants", () => {
+  assert.deepEqual(
+    scopesForCapabilities(["context.calendar.read"]),
+    [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+    ],
+  );
+  assert.deepEqual(
+    scopesForCapabilities([
+      "context.calendar.read",
+      "context.document.read",
+      "context.calendar.read",
+    ]),
+    [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+  );
+  assert.deepEqual(capabilityGrantState(
+    ["context.calendar.read", "context.document.read"],
+    [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+    ],
+  ), {
+    enabledCapabilityIds: ["context.calendar.read"],
+    missingCapabilityIds: ["context.document.read"],
+  });
+  assert.equal(
+    googleWorkspaceConnectionId("google-sub-1"),
+    googleWorkspaceConnectionId("google-sub-1"),
+  );
+  assert.notEqual(
+    googleWorkspaceConnectionId("google-sub-1"),
+    googleWorkspaceConnectionId("google-sub-2"),
+  );
+});
+
+test("Workspace capability lifecycle is isolated from the account and sibling service", async () => {
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  const connectionPath = "companies/explorers/connections/google-a";
+  const calendarCapabilityPath = `${connectionPath}/capabilities/calendar`;
+  const driveCapabilityPath = `${connectionPath}/capabilities/drive`;
+  const calendarResourcePath = `${connectionPath}/resources/calendar-a`;
+  const driveResourcePath = `${connectionPath}/resources/folder-a`;
+  const calendarContextPath = "companies/explorers/contextItems/calendar-a";
+  const driveContextPath = "companies/explorers/contextItems/drive-a";
+
+  memory.seed(connectionPath, {
+    companyId: "explorers",
+    connectorId: "google_workspace",
+    providerId: "google",
+    status: "active",
+  });
+  memory.seed(calendarCapabilityPath, {
+    capabilityId: "context.calendar.read",
+    serviceId: "calendar",
+    status: "active",
+  });
+  memory.seed(driveCapabilityPath, {
+    capabilityId: "context.document.read",
+    serviceId: "drive",
+    status: "active",
+  });
+  memory.seed(calendarResourcePath, {
+    capabilityId: "context.calendar.read",
+    status: "enabled",
+  });
+  memory.seed(driveResourcePath, {
+    capabilityId: "context.document.read",
+    status: "enabled",
+  });
+  memory.seed(calendarContextPath, {
+    source: {
+      connectionId: "google-a",
+      capabilityId: "context.calendar.read",
+    },
+  });
+  memory.seed(driveContextPath, {
+    source: {
+      connectionId: "google-a",
+      capabilityId: "context.document.read",
+    },
+  });
+
+  await setCapabilityStatus({
+    companyId: "explorers",
+    connectionId: "google-a",
+    capabilityId: "context.calendar.read",
+    enabled: false,
+    actorUid: "admin-1",
+  }, database);
+
+  assert.equal(memory.read(connectionPath)?.status, "active");
+  assert.equal(memory.read(calendarCapabilityPath)?.status, "disabled");
+  assert.equal(memory.read(calendarResourcePath)?.status, "disabled");
+  assert.equal(memory.read(calendarContextPath), undefined);
+  assert.equal(memory.read(driveCapabilityPath)?.status, "active");
+  assert.equal(memory.read(driveResourcePath)?.status, "enabled");
+  assert.ok(memory.read(driveContextPath));
+
+  await setCapabilityStatus({
+    companyId: "explorers",
+    connectionId: "google-a",
+    capabilityId: "context.calendar.read",
+    enabled: true,
+    actorUid: "admin-1",
+  }, database);
+
+  assert.equal(memory.read(calendarCapabilityPath)?.status, "active");
+  assert.equal(memory.read(calendarResourcePath)?.status, "disabled");
+  assert.equal(memory.read(calendarContextPath), undefined);
+  await assert.rejects(
+    setConnectionStatus(
+      "explorers",
+      "google-a",
+      "disconnected",
+      "admin-1",
+      database,
+    ),
+    /managed through authorization and revocation/,
+  );
+});
+
+test("Google reset dry-runs and deletes only Google connector state", async () => {
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  memory.seed("companies/explorers/connections/odorik-a", {
+    connectorId: "odorik",
+    credentialCiphertext: "odorik-secret",
+  });
+  memory.seed("companies/explorers/connections/odorik-a/resources/phone-a", {
+    capabilityId: "context.call.read",
+  });
+  memory.seed("companies/explorers/connections/calendar-old", {
+    adapterId: "google_calendar",
+    credentialCiphertext: "old-google-secret",
+  });
+  memory.seed("companies/explorers/connections/calendar-old/resources/calendar-a", {
+    resourceType: "calendar",
+  });
+  memory.seed("companies/explorers/connections/google-new", {
+    connectorId: "google_workspace",
+    credentialCiphertext: "new-google-secret",
+  });
+  memory.seed("companies/explorers/connections/google-new/capabilities/drive", {
+    capabilityId: "context.document.read",
+  });
+  memory.seed("companies/explorers/connections/google-new/resources/folder-a", {
+    capabilityId: "context.document.read",
+  });
+  memory.seed("companies/explorers/contextItems/calendar-item", {
+    source: { adapterId: "google_calendar", connectionId: "calendar-old" },
+  });
+  memory.seed("companies/explorers/contextItems/drive-item", {
+    source: { providerId: "google", connectionId: "google-new" },
+  });
+  memory.seed("companies/explorers/contextItems/call-item", {
+    source: { providerId: "odorik", connectionId: "odorik-a" },
+  });
+  memory.seed("companies/explorers/cases/case-a", { title: "Preserve me" });
+  memory.seed("oauthStates/google-state", {
+    companyId: "explorers",
+    provider: "google_workspace",
+  });
+  memory.seed("oauthStates/other-company", {
+    companyId: "other",
+    provider: "google_workspace",
+  });
+
+  assert.deepEqual(await resetGoogleConnectorData({
+    companyId: "explorers",
+    actorUid: "admin-1",
+    apply: false,
+  }, database), {
+    applied: false,
+    companyId: "explorers",
+    connections: 2,
+    capabilities: 1,
+    resources: 2,
+    contextItems: 2,
+    oauthStates: 1,
+  });
+  assert.ok(memory.read("companies/explorers/connections/google-new"));
+
+  const applied = await resetGoogleConnectorData({
+    companyId: "explorers",
+    actorUid: "admin-1",
+    apply: true,
+  }, database);
+  assert.equal(applied.applied, true);
+  assert.equal(memory.read("companies/explorers/connections/calendar-old"), undefined);
+  assert.equal(memory.read("companies/explorers/connections/google-new"), undefined);
+  assert.equal(memory.read("companies/explorers/contextItems/calendar-item"), undefined);
+  assert.equal(memory.read("companies/explorers/contextItems/drive-item"), undefined);
+  assert.equal(memory.read("oauthStates/google-state"), undefined);
+  assert.ok(memory.read("companies/explorers/connections/odorik-a"));
+  assert.ok(memory.read("companies/explorers/connections/odorik-a/resources/phone-a"));
+  assert.ok(memory.read("companies/explorers/contextItems/call-item"));
+  assert.ok(memory.read("companies/explorers/cases/case-a"));
+  assert.ok(memory.read("oauthStates/other-company"));
+  assert.equal(memory.list("companies/explorers/auditEvents").length, 1);
 });

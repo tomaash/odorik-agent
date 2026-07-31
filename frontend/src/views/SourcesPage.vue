@@ -18,13 +18,15 @@ import {
   listSources,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
+  setSourceCapabilityStatus,
   setSourceConnectionStatus,
   setSourceResourceEnabled,
-  startGoogleCalendarAuthorization,
-  startGoogleDriveAuthorization,
+  startGoogleWorkspaceAuthorization,
   syncGoogleCalendars,
   syncGoogleDrive,
-  type SourceAdapter,
+  type SourceCapabilityDescriptor,
+  type SourceCapabilityId,
+  type SourceConnector,
   type SourceConnection,
   type SelectableCalendar,
   type SelectableFolder,
@@ -55,6 +57,12 @@ const currentFolderId = ref<string | null>(null)
 const loadingFolders = ref(false)
 const searchContainerRef = ref<HTMLElement | null>(null)
 const synchronizingId = ref('')
+const workspaceDialogVisible = ref(false)
+const workspaceConnection = ref<SourceConnection | null>(null)
+const selectedWorkspaceCapabilities = ref<Array<'context.calendar.read' | 'context.document.read'>>([
+  'context.calendar.read',
+  'context.document.read',
+])
 const pendingDeleteId = ref('')
 const deletingId = ref('')
 const isAdmin = computed(() => auth.access?.admin === true)
@@ -81,10 +89,10 @@ const deleteConfirmVisible = computed({
     if (!visible && !deletingId.value) pendingDeleteId.value = ''
   },
 })
-const connectionsByAdapter = computed(() => {
+const connectionsByConnector = computed(() => {
   const grouped = new Map<string, SourceConnection[]>()
   for (const connection of data.value?.connections || []) {
-    grouped.set(connection.adapterId, [...(grouped.get(connection.adapterId) || []), connection])
+    grouped.set(connection.connectorId, [...(grouped.get(connection.connectorId) || []), connection])
   }
   return grouped
 })
@@ -124,14 +132,11 @@ function formatDate(value?: string | null) {
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
 
-function adapterIcon(adapter: SourceAdapter) {
+function connectorIcon(connector: SourceConnector) {
   return {
     odorik: 'pi pi-phone',
-    google_calendar: 'pi pi-calendar',
-    google_drive: 'pi pi-folder',
-    gmail: 'pi pi-envelope',
-    github: 'pi pi-github',
-  }[adapter.id]
+    google_workspace: 'pi pi-google',
+  }[connector.id]
 }
 
 function resourceIcon(resourceType: string) {
@@ -150,16 +155,61 @@ function resourceName(resource: { externalId: string; displayName: string }) {
     : resource.displayName
 }
 
-function emptyResourceMessage(connection: SourceConnection) {
-  if (connection.adapterId === 'google_calendar') return t('sources.emptyCalendars')
-  if (connection.adapterId === 'google_drive') return t('sources.emptyFolders')
-  if (connection.adapterId === 'odorik') return t('sources.emptyPhoneLines')
+function capabilityConfiguration(
+  connection: SourceConnection,
+  descriptor: SourceCapabilityDescriptor,
+) {
+  return connection.capabilities.find(
+    (capability) => capability.capabilityId === descriptor.id,
+  )
+}
+
+function capabilityResources(
+  connection: SourceConnection,
+  capabilityId: string,
+) {
+  return connection.resources.filter((resource) => resource.capabilityId === capabilityId)
+}
+
+function capabilityName(capabilityId: string) {
+  return t(`sources.capabilities.${capabilityId}.name`)
+}
+
+function capabilityDescription(capabilityId: string) {
+  return t(`sources.capabilities.${capabilityId}.description`)
+}
+
+function capabilityStatusLabel(status?: string) {
+  if (status === 'active') return t('sources.enabled')
+  if (status === 'reauthorization_required') return t('sources.reauthorize.title')
+  if (status === 'attention') return t('sources.attention')
+  return t('sources.notEnabled')
+}
+
+function capabilityStatusSeverity(status?: string) {
+  if (status === 'active') return 'success'
+  if (status === 'attention' || status === 'reauthorization_required') return 'warn'
+  return 'secondary'
+}
+
+function scopeLabel(scope: string) {
+  return {
+    'https://www.googleapis.com/auth/calendar.calendarlist.readonly': t('sources.scopes.calendarList'),
+    'https://www.googleapis.com/auth/calendar.events.readonly': t('sources.scopes.calendarEvents'),
+    'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
+  }[scope] || scope
+}
+
+function emptyResourceMessage(capabilityId: string) {
+  if (capabilityId === 'context.calendar.read') return t('sources.emptyCalendars')
+  if (capabilityId === 'context.document.read') return t('sources.emptyFolders')
+  if (capabilityId === 'context.call.read') return t('sources.emptyPhoneLines')
   return t('sources.emptyResources')
 }
 
 function connectionStatusLabel(connection: SourceConnection) {
   if (
-    connection.adapterId === 'odorik'
+    connection.connectorId === 'odorik'
     && connection.status === 'active'
     && !connection.lastObservedAt
   ) return t('sources.waitingForRecording')
@@ -170,7 +220,7 @@ function connectionStatusLabel(connection: SourceConnection) {
 
 function connectionStatusSeverity(connection: SourceConnection) {
   if (
-    connection.adapterId === 'odorik'
+    connection.connectorId === 'odorik'
     && connection.status === 'active'
     && !connection.lastObservedAt
   ) return 'warn'
@@ -209,22 +259,18 @@ async function createOdorik() {
   }
 }
 
-async function addConnection(adapter: SourceAdapter) {
-  if (adapter.id === 'google_calendar') {
-    await connectCalendar()
+async function addConnection(connector: SourceConnector) {
+  if (connector.id === 'google_workspace') {
+    openWorkspaceAuthorization()
     return
   }
-  if (adapter.id === 'google_drive') {
-    await connectDrive()
-    return
-  }
-  if (adapter.id === 'odorik') {
+  if (connector.id === 'odorik') {
     await createOdorik()
   }
 }
 
-function canAddConnection(adapter: SourceAdapter) {
-  return adapter.available && ['odorik', 'google_calendar', 'google_drive'].includes(adapter.id)
+function canAddConnection(connector: SourceConnector) {
+  return connector.availability === 'available'
 }
 
 async function toggleConnection(connection: SourceConnection) {
@@ -268,6 +314,21 @@ async function toggleResource(connection: SourceConnection, resourceId: string, 
   }
 }
 
+async function toggleCapability(
+  connection: SourceConnection,
+  capabilityId: SourceCapabilityId,
+  enabled: boolean,
+) {
+  if (capabilityId === 'context.call.read') return
+  error.value = ''
+  try {
+    await setSourceCapabilityStatus(connection.id, capabilityId, enabled)
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
 async function copyUrl(url: string) {
   await navigator.clipboard.writeText(url)
   notice.value = t('sources.copied')
@@ -286,13 +347,44 @@ async function revealOdorikSetup(connection: SourceConnection) {
   }
 }
 
-async function connectCalendar() {
+function openWorkspaceAuthorization(
+  connection: SourceConnection | null = null,
+  capabilityId?: SourceCapabilityId,
+) {
+  if (capabilityId === 'context.call.read') return
+  workspaceConnection.value = connection
+  selectedWorkspaceCapabilities.value = capabilityId
+    ? [capabilityId]
+    : connection
+      ? connection.capabilities
+        .filter((capability) => capability.status !== 'disabled')
+        .map((capability) => capability.capabilityId)
+        .filter((id): id is 'context.calendar.read' | 'context.document.read' => id !== 'context.call.read')
+      : ['context.calendar.read', 'context.document.read']
+  workspaceDialogVisible.value = true
+}
+
+function toggleWorkspaceCapability(
+  capabilityId: 'context.calendar.read' | 'context.document.read',
+) {
+  selectedWorkspaceCapabilities.value = selectedWorkspaceCapabilities.value.includes(capabilityId)
+    ? selectedWorkspaceCapabilities.value.filter((id) => id !== capabilityId)
+    : [...selectedWorkspaceCapabilities.value, capabilityId]
+}
+
+async function connectWorkspace() {
+  if (selectedWorkspaceCapabilities.value.length === 0) return
+  saving.value = true
   error.value = ''
   try {
-    const result = await startGoogleCalendarAuthorization()
+    const result = await startGoogleWorkspaceAuthorization(
+      selectedWorkspaceCapabilities.value,
+      workspaceConnection.value?.id,
+    )
     window.location.assign(result.authorizationUrl)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
+    saving.value = false
   }
 }
 
@@ -337,7 +429,7 @@ async function saveCalendarSelection() {
 }
 
 async function synchronizeCalendar(connection: SourceConnection) {
-  synchronizingId.value = connection.id
+  synchronizingId.value = `${connection.id}:calendar`
   error.value = ''
   try {
     await syncGoogleCalendars(connection.id)
@@ -346,16 +438,6 @@ async function synchronizeCalendar(connection: SourceConnection) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
     synchronizingId.value = ''
-  }
-}
-
-async function connectDrive() {
-  error.value = ''
-  try {
-    const result = await startGoogleDriveAuthorization()
-    window.location.assign(result.authorizationUrl)
-  } catch (cause) {
-    error.value = cause instanceof Error ? cause.message : String(cause)
   }
 }
 
@@ -459,7 +541,7 @@ async function saveFolderSelection() {
 }
 
 async function synchronizeDrive(connection: SourceConnection) {
-  synchronizingId.value = connection.id
+  synchronizingId.value = `${connection.id}:drive`
   error.value = ''
   try {
     await syncGoogleDrive(connection.id)
@@ -474,17 +556,11 @@ async function synchronizeDrive(connection: SourceConnection) {
 onMounted(async () => {
   document.addEventListener('pointerdown', handleDocumentClick)
   const params = new URLSearchParams(window.location.search)
-  const calendarResult = params.get('calendar')
-  const driveResult = params.get('drive')
-  const authResult = params.get('auth')
-  if (calendarResult === 'connected') notice.value = t('sources.calendarConnected')
-  else if (calendarResult === 'denied') error.value = t('sources.calendarDenied')
-  else if (calendarResult === 'failed' || calendarResult === 'invalid') error.value = t('sources.calendarFailed')
-  else if (driveResult === 'connected') notice.value = t('sources.driveConnected')
-  else if (driveResult === 'denied') error.value = t('sources.driveDenied')
-  else if (driveResult === 'failed' || driveResult === 'invalid') error.value = t('sources.driveFailed')
-  else if (authResult === 'denied') error.value = t('sources.googleDenied')
-  else if (authResult === 'failed' || authResult === 'invalid') error.value = t('sources.googleFailed')
+  const workspaceResult = params.get('workspace')
+  if (workspaceResult === 'connected') notice.value = t('sources.workspaceConnected')
+  else if (workspaceResult === 'partial') error.value = t('sources.workspacePartial')
+  else if (workspaceResult === 'denied') error.value = t('sources.googleDenied')
+  else if (workspaceResult === 'failed' || workspaceResult === 'invalid') error.value = t('sources.googleFailed')
   await load()
 })
 
@@ -506,6 +582,62 @@ onUnmounted(() => {
     <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
+
+    <Dialog
+      v-model:visible="workspaceDialogVisible"
+      modal
+      blockScroll
+      :draggable="false"
+      :header="workspaceConnection ? t('sources.workspace.enableTitle') : t('sources.workspace.connectTitle')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(36rem,calc(100vw-4rem))] my-auto"
+      contentClass="!p-0 flex flex-col min-w-0 overflow-hidden"
+    >
+      <form @submit.prevent="connectWorkspace">
+        <div class="grid gap-3 px-4 py-4 sm:px-6">
+          <p class="m-0 text-sm leading-relaxed text-surface-500">
+            {{ t('sources.workspace.chooseDescription') }}
+          </p>
+          <p v-if="workspaceConnection?.accountLabel" class="m-0 text-sm font-semibold text-surface-800 break-all">
+            {{ workspaceConnection.accountLabel }}
+          </p>
+          <label
+            v-for="capabilityId in (['context.calendar.read', 'context.document.read'] as const)"
+            :key="capabilityId"
+            class="flex cursor-pointer items-start gap-3 rounded-2xl border border-surface-200 bg-surface-50 p-4"
+          >
+            <input
+              type="checkbox"
+              class="mt-1 h-5 w-5 shrink-0 accent-emerald-700"
+              :checked="selectedWorkspaceCapabilities.includes(capabilityId)"
+              :disabled="Boolean(workspaceConnection?.capabilities.some((capability) => capability.capabilityId === capabilityId && capability.status === 'active'))"
+              @change="toggleWorkspaceCapability(capabilityId)"
+            />
+            <span class="min-w-0">
+              <span class="block font-semibold text-surface-900">{{ capabilityName(capabilityId) }}</span>
+              <span class="mt-1 block text-sm leading-relaxed text-surface-500">{{ capabilityDescription(capabilityId) }}</span>
+            </span>
+          </label>
+          <Message severity="info" :closable="false">{{ t('sources.workspace.permissionHint') }}</Message>
+        </div>
+        <div class="flex flex-col-reverse gap-2 border-t border-surface-200 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+          <Button
+            :label="t('common.cancel')"
+            severity="secondary"
+            text
+            type="button"
+            :disabled="saving"
+            @click="workspaceDialogVisible = false"
+          />
+          <Button
+            :label="t('sources.workspace.continueToGoogle')"
+            icon="pi pi-external-link"
+            type="submit"
+            :loading="saving"
+            :disabled="selectedWorkspaceCapabilities.length === 0"
+          />
+        </div>
+      </form>
+    </Dialog>
 
     <Dialog
       v-model:visible="calendarPickerVisible"
@@ -786,7 +918,9 @@ onUnmounted(() => {
       :dismissableMask="!deletingId"
       :closable="!deletingId"
       :draggable="false"
-      :header="t('sources.deleteConnection')"
+      :header="pendingDeleteConnection?.connectorId === 'google_workspace'
+        ? t('sources.workspace.disconnectAccount')
+        : t('sources.deleteConnection')"
       class="w-[calc(100vw-2rem)] sm:w-[min(32rem,calc(100vw-4rem))] my-auto"
       contentClass="!p-0 flex flex-col min-w-0 overflow-hidden"
     >
@@ -796,7 +930,11 @@ onUnmounted(() => {
             name: pendingDeleteConnection.accountLabel || pendingDeleteConnection.displayName,
           }) }}
         </div>
-        <p class="m-0 text-sm text-red-900/80 leading-relaxed">{{ t('sources.deleteConfirmDescription') }}</p>
+        <p class="m-0 text-sm text-red-900/80 leading-relaxed">
+          {{ t(pendingDeleteConnection.connectorId === 'google_workspace'
+            ? 'sources.workspace.disconnectDescription'
+            : 'sources.deleteConfirmDescription') }}
+        </p>
       </div>
       <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
         <Button
@@ -808,7 +946,9 @@ onUnmounted(() => {
           @click="pendingDeleteId = ''"
         />
         <Button
-          :label="t('sources.deletePermanently')"
+          :label="pendingDeleteConnection?.connectorId === 'google_workspace'
+            ? t('sources.workspace.disconnectAccount')
+            : t('sources.deletePermanently')"
           icon="pi pi-trash"
           severity="danger"
           :loading="Boolean(deletingId)"
@@ -821,109 +961,79 @@ onUnmounted(() => {
 
     <div v-else class="grid gap-5 lg:grid-cols-2">
       <Card
-        v-for="adapter in data?.adapters"
-        :key="adapter.id"
+        v-for="connector in data?.connectors"
+        :key="connector.id"
         class="min-w-0 rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
       >
         <template #title>
           <div class="min-w-0 flex items-start justify-between gap-3">
             <div class="min-w-0 flex items-center gap-3">
               <span class="w-10 h-10 rounded-md bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
-                <i :class="[adapterIcon(adapter), 'text-lg']" />
+                <i :class="[connectorIcon(connector), 'text-lg']" />
               </span>
               <div class="min-w-0">
-                <div class="truncate">{{ adapter.name }}</div>
+                <div class="truncate">{{ connector.name }}</div>
                 <div class="text-xs font-normal text-surface-400 mt-0.5">
-                  {{ connectionsByAdapter.get(adapter.id)?.length || 0 }}
-                  {{ (connectionsByAdapter.get(adapter.id)?.length || 0) === 1 ? t('sources.connection') : t('sources.connections') }}
+                  {{ connectionsByConnector.get(connector.id)?.length || 0 }}
+                  {{ (connectionsByConnector.get(connector.id)?.length || 0) === 1 ? t('sources.connection') : t('sources.connections') }}
                 </div>
               </div>
             </div>
             <Tag
-              :value="adapter.id === 'odorik' ? t('sources.receivesRecordings') : adapter.availability === 'available' ? t('sources.readOnly') : adapter.availability === 'needs_configuration' ? t('sources.needsConfiguration') : t('sources.planned')"
-              :severity="adapter.availability === 'available' ? 'success' : 'secondary'"
+              :value="connector.id === 'odorik' ? t('sources.receivesRecordings') : t('sources.workspace.services')"
+              severity="success"
               rounded
             />
           </div>
         </template>
-        <template #subtitle><span class="leading-relaxed">{{ t(`sources.adapters.${adapter.id}`) }}</span></template>
+        <template #subtitle><span class="leading-relaxed">{{ t(`sources.connectors.${connector.id}`) }}</span></template>
         <template #content>
           <div
-            v-if="isAdmin && adapter.id === 'odorik' && canAddConnection(adapter)"
+            v-if="isAdmin && connector.id === 'odorik' && canAddConnection(connector)"
             class="min-w-0 rounded-2xl border border-emerald-200 bg-emerald-50/70 p-4 mb-4"
           >
-            <div class="flex items-start gap-3">
-              <span class="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-800 shadow-xs">
-                <i class="pi pi-arrow-right-arrow-left" />
-              </span>
-              <div class="min-w-0 grow">
-                <div class="font-semibold text-sm text-emerald-950">{{ t('sources.odorikSetup.title') }}</div>
-                <p class="text-xs text-emerald-900/75 mt-1 mb-0 leading-relaxed">{{ t('sources.odorikSetup.description') }}</p>
-              </div>
-            </div>
-            <ol class="grid gap-2 my-4 pl-0 list-none text-sm text-emerald-950">
-              <li class="flex items-start gap-2">
-                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">1</span>
-                <span>{{ t('sources.odorikSetup.createStep') }}</span>
-              </li>
-              <li class="flex items-start gap-2">
-                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">2</span>
-                <span>{{ t('sources.odorikSetup.pasteStep') }}</span>
-              </li>
-              <li class="flex items-start gap-2">
-                <span class="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-emerald-700 text-[.65rem] font-bold text-white">3</span>
-                <span>{{ t('sources.odorikSetup.recordStep') }}</span>
-              </li>
-            </ol>
+            <div class="font-semibold text-sm text-emerald-950">{{ t('sources.odorikSetup.title') }}</div>
+            <p class="text-xs text-emerald-900/75 mt-1 mb-4 leading-relaxed">{{ t('sources.odorikSetup.description') }}</p>
             <Button
               :label="t('sources.odorikSetup.createButton')"
               icon="pi pi-plus"
               class="w-full"
               :loading="saving"
-              @click="addConnection(adapter)"
+              @click="addConnection(connector)"
             />
           </div>
 
           <div
-            v-else-if="isAdmin && canAddConnection(adapter)"
+            v-else-if="isAdmin && canAddConnection(connector)"
             class="min-w-0 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 rounded-2xl border border-dashed border-emerald-200 bg-emerald-50/60 p-3.5 sm:p-4 mb-4"
           >
             <div class="min-w-0">
-              <div class="font-semibold text-sm text-emerald-950">{{ t('sources.multipleAccounts') }}</div>
-              <div class="text-xs text-emerald-800/80 mt-1 leading-relaxed">{{ t('sources.multipleAccountsHint') }}</div>
+              <div class="font-semibold text-sm text-emerald-950">{{ t('sources.workspace.addAccountTitle') }}</div>
+              <div class="text-xs text-emerald-800/80 mt-1 leading-relaxed">{{ t('sources.workspace.addAccountHint') }}</div>
             </div>
             <Button
-              :label="t('sources.addAccount')"
+              :label="t('sources.workspace.connectAccount')"
               icon="pi pi-plus"
               class="w-full sm:w-auto shrink-0"
-              @click="addConnection(adapter)"
+              @click="addConnection(connector)"
             />
           </div>
 
           <div
-            v-if="adapter.id === 'odorik' && createdUrl"
+            v-if="connector.id === 'odorik' && createdUrl"
             class="rounded-2xl border border-emerald-300 bg-emerald-50 p-4 sm:p-5 mb-4"
           >
-            <div class="flex items-start gap-3 mb-3">
-              <i class="pi pi-check-circle mt-0.5 text-lg text-emerald-700" />
-              <div>
-                <div class="text-sm font-semibold text-emerald-950">{{ t('sources.odorikSetup.readyTitle') }}</div>
-                <p class="m-0 mt-1 text-xs leading-relaxed text-emerald-900/75">{{ t('sources.odorikSetup.readyDescription') }}</p>
-              </div>
-            </div>
+            <div class="text-sm font-semibold text-emerald-950">{{ t('sources.odorikSetup.readyTitle') }}</div>
+            <p class="m-0 mt-1 mb-3 text-xs leading-relaxed text-emerald-900/75">{{ t('sources.odorikSetup.readyDescription') }}</p>
             <div class="min-w-0 flex flex-col sm:flex-row gap-2">
               <code class="min-w-0 grow rounded-xl bg-white border border-emerald-200 p-3 text-xs break-all">{{ createdUrl }}</code>
               <Button :label="t('common.copy')" icon="pi pi-copy" severity="secondary" @click="copyUrl(createdUrl)" />
             </div>
-            <p class="m-0 mt-2 text-xs text-emerald-900/70">
-              <i class="pi pi-lock mr-1" />
-              {{ t('sources.odorikSetup.secretHint') }}
-            </p>
           </div>
 
-          <div v-if="connectionsByAdapter.get(adapter.id)?.length" class="grid gap-4">
+          <div v-if="connectionsByConnector.get(connector.id)?.length" class="grid gap-4">
             <article
-              v-for="connection in connectionsByAdapter.get(adapter.id)"
+              v-for="connection in connectionsByConnector.get(connector.id)"
               :key="connection.id"
               :class="[
                 'min-w-0 rounded-2xl border bg-surface-50 p-3.5 sm:p-4',
@@ -932,8 +1042,12 @@ onUnmounted(() => {
             >
               <div class="min-w-0 flex items-start justify-between gap-3 mb-3">
                 <div class="min-w-0">
-                  <h3 class="text-base font-semibold m-0 break-words">{{ connection.displayName }}</h3>
-                  <p v-if="connection.accountLabel" class="text-sm text-surface-500 mt-1 mb-0 break-words">{{ connection.accountLabel }}</p>
+                  <h3 class="text-base font-semibold m-0 break-words">
+                    {{ connection.accountLabel || connection.displayName }}
+                  </h3>
+                  <p class="text-xs text-surface-400 mt-1 mb-0">
+                    {{ connection.connectorId === 'google_workspace' ? t('sources.workspace.account') : connection.displayName }}
+                  </p>
                 </div>
                 <Tag
                   :value="connectionStatusLabel(connection)"
@@ -946,146 +1060,207 @@ onUnmounted(() => {
                 v-if="connection.reauthorizationRequired"
                 class="mb-3 rounded-xl border border-amber-300 bg-amber-50 p-3"
               >
-                <div class="flex items-start gap-2">
-                  <i class="pi pi-exclamation-triangle mt-0.5 text-amber-700" />
-                  <div class="min-w-0">
-                    <div class="text-sm font-semibold text-amber-950">{{ t('sources.reauthorize.title') }}</div>
-                    <p class="m-0 mt-1 text-xs leading-relaxed text-amber-900/80">
-                      {{ t('sources.reauthorize.description') }}
-                    </p>
-                  </div>
-                </div>
+                <div class="text-sm font-semibold text-amber-950">{{ t('sources.reauthorize.title') }}</div>
+                <p class="m-0 mt-1 text-xs leading-relaxed text-amber-900/80">{{ t('sources.reauthorize.description') }}</p>
                 <Button
                   v-if="isAdmin"
                   :label="t('sources.reauthorize.action')"
                   icon="pi pi-refresh"
                   size="small"
                   class="mt-3 w-full sm:w-auto"
-                  @click="addConnection(adapter)"
+                  @click="openWorkspaceAuthorization(connection)"
                 />
               </div>
 
-              <dl class="grid grid-cols-2 gap-2 text-sm m-0 mb-3">
-                <div class="rounded-xl bg-white border border-surface-200 p-3">
-                  <dt class="text-xs text-surface-400">{{ t('sources.items') }}</dt>
-                  <dd class="font-semibold mt-1 ml-0">{{ connection.itemCount }}</dd>
-                </div>
-                <div class="rounded-xl bg-white border border-surface-200 p-3">
-                  <dt class="text-xs text-surface-400">{{ t('sources.lastObserved') }}</dt>
-                  <dd class="font-semibold text-xs mt-1 ml-0 break-words">{{ formatDate(connection.lastObservedAt) }}</dd>
-                </div>
-              </dl>
-
-              <div
-                v-if="connection.adapterId === 'odorik'"
-                class="mb-4 rounded-xl border border-surface-200 bg-white p-3"
-              >
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <div class="text-sm font-semibold text-surface-800">{{ t('sources.odorikSetup.connectionTitle') }}</div>
-                    <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">
-                      {{ t('sources.odorikSetup.connectionDescription') }}
-                    </p>
-                  </div>
-                  <Button
-                    v-if="isAdmin && connection.credentialMode === 'encrypted' && !odorikSetupUrls[connection.id]"
-                    :label="t('sources.odorikSetup.showButton')"
-                    icon="pi pi-eye"
-                    severity="secondary"
-                    outlined
-                    size="small"
-                    class="shrink-0"
-                    :loading="loadingOdorikSetupId === connection.id"
-                    @click="revealOdorikSetup(connection)"
-                  />
-                </div>
-                <div v-if="odorikSetupUrls[connection.id]" class="min-w-0 flex items-stretch gap-2 mt-3">
-                  <code class="min-w-0 grow rounded-xl bg-surface-50 border border-surface-200 p-2.5 text-[.7rem] break-all">{{ odorikSetupUrls[connection.id] }}</code>
-                  <Button
-                    icon="pi pi-copy"
-                    severity="secondary"
-                    outlined
-                    :aria-label="t('common.copy')"
-                    @click="copyUrl(odorikSetupUrls[connection.id]!)"
-                  />
-                </div>
-                <p v-if="connection.credentialMode === 'legacy_secret'" class="m-0 mt-2 text-xs text-surface-400">
-                  {{ t('sources.odorikSetup.legacyHint') }}
-                </p>
-              </div>
-
-              <div class="text-xs font-semibold uppercase tracking-[.12em] text-surface-400 mb-2">
-                {{ t('sources.accountSetup') }}
-              </div>
-              <div class="grid gap-2">
-                <div
-                  v-for="resource in connection.resources"
-                  :key="resource.id"
-                  class="min-w-0 flex items-center justify-between gap-3 rounded-xl bg-white border border-surface-200 p-3"
-                >
-                  <div class="min-w-0 flex items-center gap-2.5">
-                    <i :class="[resourceIcon(resource.resourceType), 'text-emerald-700 shrink-0']" />
+              <template v-if="connection.connectorId === 'odorik'">
+                <div class="mb-4 rounded-xl border border-surface-200 bg-white p-3">
+                  <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
-                      <div class="font-medium text-sm truncate">{{ resourceName(resource) }}</div>
-                      <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
+                      <div class="text-sm font-semibold text-surface-800">{{ t('sources.odorikSetup.connectionTitle') }}</div>
+                      <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">{{ t('sources.odorikSetup.connectionDescription') }}</p>
                     </div>
+                    <Button
+                      v-if="isAdmin && connection.credentialMode === 'encrypted' && !odorikSetupUrls[connection.id]"
+                      :label="t('sources.odorikSetup.showButton')"
+                      icon="pi pi-eye"
+                      severity="secondary"
+                      outlined
+                      size="small"
+                      :loading="loadingOdorikSetupId === connection.id"
+                      @click="revealOdorikSetup(connection)"
+                    />
                   </div>
-                  <Button
-                    v-if="isAdmin"
-                    :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
-                    :icon="resource.status === 'enabled' ? 'pi pi-minus-circle' : 'pi pi-check-circle'"
-                    :severity="resource.status === 'enabled' ? 'secondary' : 'success'"
-                    text
-                    size="small"
-                    @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
-                  />
-                  <Tag v-else :value="resource.status === 'enabled' ? t('sources.enabled') : t('sources.disabled')" severity="secondary" />
+                  <div v-if="odorikSetupUrls[connection.id]" class="min-w-0 flex items-stretch gap-2 mt-3">
+                    <code class="min-w-0 grow rounded-xl bg-surface-50 border border-surface-200 p-2.5 text-[.7rem] break-all">{{ odorikSetupUrls[connection.id] }}</code>
+                    <Button icon="pi pi-copy" severity="secondary" outlined :aria-label="t('common.copy')" @click="copyUrl(odorikSetupUrls[connection.id]!)" />
+                  </div>
                 </div>
-                <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">
-                  {{ emptyResourceMessage(connection) }}
-                </p>
+                <div class="grid gap-2">
+                  <div
+                    v-for="resource in connection.resources"
+                    :key="resource.id"
+                    class="min-w-0 flex items-center justify-between gap-3 rounded-xl bg-white border border-surface-200 p-3"
+                  >
+                    <div class="min-w-0 flex items-center gap-2.5">
+                      <i :class="[resourceIcon(resource.resourceType), 'text-emerald-700 shrink-0']" />
+                      <div class="min-w-0">
+                        <div class="font-medium text-sm truncate">{{ resourceName(resource) }}</div>
+                        <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
+                      </div>
+                    </div>
+                    <Button
+                      v-if="isAdmin"
+                      :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
+                      :icon="resource.status === 'enabled' ? 'pi pi-minus-circle' : 'pi pi-check-circle'"
+                      severity="secondary"
+                      text
+                      size="small"
+                      @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
+                    />
+                  </div>
+                  <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">{{ emptyResourceMessage('context.call.read') }}</p>
+                </div>
+              </template>
+
+              <div v-else class="grid gap-3">
+                <section
+                  v-for="descriptor in connector.capabilities"
+                  :key="descriptor.id"
+                  class="rounded-2xl border border-surface-200 bg-white p-3.5"
+                >
+                  <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                      <div class="flex items-center gap-2">
+                        <i :class="[resourceIcon(descriptor.resourceType), 'text-emerald-700']" />
+                        <h4 class="m-0 text-sm font-semibold text-surface-900">{{ capabilityName(descriptor.id) }}</h4>
+                      </div>
+                      <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">{{ capabilityDescription(descriptor.id) }}</p>
+                    </div>
+                    <Tag
+                      :value="capabilityStatusLabel(capabilityConfiguration(connection, descriptor)?.status)"
+                      :severity="capabilityStatusSeverity(capabilityConfiguration(connection, descriptor)?.status)"
+                      rounded
+                    />
+                  </div>
+
+                  <template v-if="capabilityConfiguration(connection, descriptor)">
+                    <div class="mt-3 flex items-center justify-between gap-3 rounded-xl bg-surface-50 px-3 py-2 text-xs">
+                      <span class="text-surface-500">{{ t('sources.lastObserved') }}</span>
+                      <span class="font-semibold text-surface-700">
+                        {{ formatDate(capabilityConfiguration(connection, descriptor)?.lastObservedAt) }}
+                      </span>
+                    </div>
+                    <details class="mt-2 rounded-xl bg-surface-50 px-3 py-2 text-xs text-surface-500">
+                      <summary class="cursor-pointer font-semibold text-surface-700">{{ t('sources.workspace.permissionDetails') }}</summary>
+                      <ul class="mb-0 mt-2 grid gap-1 pl-4">
+                        <li v-for="scope in capabilityConfiguration(connection, descriptor)?.grantedScopes" :key="scope">
+                          {{ scopeLabel(scope) }}
+                        </li>
+                      </ul>
+                    </details>
+
+                    <div
+                      v-if="capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                      class="mt-3 grid gap-2"
+                    >
+                      <div
+                        v-for="resource in capabilityResources(connection, descriptor.id)"
+                        :key="resource.id"
+                        class="min-w-0 flex items-center justify-between gap-3 rounded-xl border border-surface-200 p-3"
+                      >
+                        <div class="min-w-0">
+                          <div class="font-medium text-sm truncate">{{ resourceName(resource) }}</div>
+                          <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
+                        </div>
+                        <Button
+                          v-if="isAdmin"
+                          :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
+                          severity="secondary"
+                          text
+                          size="small"
+                          @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
+                        />
+                      </div>
+                      <p v-if="capabilityResources(connection, descriptor.id).length === 0" class="m-0 text-sm text-surface-400">
+                        {{ emptyResourceMessage(descriptor.id) }}
+                      </p>
+                    </div>
+
+                    <div v-if="isAdmin" class="mt-3 flex flex-wrap justify-end gap-1">
+                      <Button
+                        v-if="descriptor.id === 'context.calendar.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="t('sources.chooseCalendars')"
+                        icon="pi pi-list-check"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="openCalendarPicker(connection)"
+                      />
+                      <Button
+                        v-if="descriptor.id === 'context.calendar.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="synchronizingId === `${connection.id}:calendar` ? t('sources.syncing') : t('sources.syncNow')"
+                        icon="pi pi-refresh"
+                        severity="secondary"
+                        text
+                        size="small"
+                        :loading="synchronizingId === `${connection.id}:calendar`"
+                        @click="synchronizeCalendar(connection)"
+                      />
+                      <Button
+                        v-if="descriptor.id === 'context.document.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="t('sources.chooseFolders')"
+                        icon="pi pi-list-check"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="openDrivePicker(connection)"
+                      />
+                      <Button
+                        v-if="descriptor.id === 'context.document.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="synchronizingId === `${connection.id}:drive` ? t('sources.syncing') : t('sources.syncNow')"
+                        icon="pi pi-refresh"
+                        severity="secondary"
+                        text
+                        size="small"
+                        :loading="synchronizingId === `${connection.id}:drive`"
+                        @click="synchronizeDrive(connection)"
+                      />
+                      <Button
+                        v-if="capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
+                        :label="t('sources.workspace.enableService')"
+                        icon="pi pi-check-circle"
+                        severity="success"
+                        text
+                        size="small"
+                        @click="toggleCapability(connection, descriptor.id, true)"
+                      />
+                      <Button
+                        v-else-if="capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="t('sources.workspace.disableService')"
+                        icon="pi pi-minus-circle"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="toggleCapability(connection, descriptor.id, false)"
+                      />
+                    </div>
+                  </template>
+                  <Button
+                    v-else-if="isAdmin"
+                    :label="t('sources.workspace.enableService')"
+                    icon="pi pi-plus"
+                    severity="secondary"
+                    outlined
+                    size="small"
+                    class="mt-3 w-full"
+                    @click="openWorkspaceAuthorization(connection, descriptor.id)"
+                  />
+                </section>
               </div>
 
               <div v-if="isAdmin" class="flex flex-wrap justify-end mt-3">
                 <Button
-                  v-if="connection.adapterId === 'google_calendar' && connection.status !== 'disconnected'"
-                  :label="t('sources.chooseCalendars')"
-                  icon="pi pi-list-check"
-                  severity="secondary"
-                  text
-                  size="small"
-                  @click="openCalendarPicker(connection)"
-                />
-                <Button
-                  v-if="connection.adapterId === 'google_calendar' && connection.status !== 'disconnected'"
-                  :label="synchronizingId === connection.id ? t('sources.syncing') : t('sources.syncNow')"
-                  icon="pi pi-refresh"
-                  severity="secondary"
-                  text
-                  size="small"
-                  :loading="synchronizingId === connection.id"
-                  @click="synchronizeCalendar(connection)"
-                />
-                <Button
-                  v-if="connection.adapterId === 'google_drive' && connection.status !== 'disconnected'"
-                  :label="t('sources.chooseFolders')"
-                  icon="pi pi-list-check"
-                  severity="secondary"
-                  text
-                  size="small"
-                  @click="openDrivePicker(connection)"
-                />
-                <Button
-                  v-if="connection.adapterId === 'google_drive' && connection.status !== 'disconnected'"
-                  :label="synchronizingId === connection.id ? t('sources.syncing') : t('sources.syncNow')"
-                  icon="pi pi-refresh"
-                  severity="secondary"
-                  text
-                  size="small"
-                  :loading="synchronizingId === connection.id"
-                  @click="synchronizeDrive(connection)"
-                />
-                <Button
+                  v-if="connection.connectorId === 'odorik'"
                   :label="connection.status === 'disconnected' ? t('sources.reconnect') : t('sources.disconnect')"
                   :icon="connection.status === 'disconnected' ? 'pi pi-link' : 'pi pi-power-off'"
                   severity="secondary"
@@ -1094,7 +1269,7 @@ onUnmounted(() => {
                   @click="toggleConnection(connection)"
                 />
                 <Button
-                  :label="t('sources.deleteConnection')"
+                  :label="connection.connectorId === 'google_workspace' ? t('sources.workspace.disconnectAccount') : t('sources.deleteConnection')"
                   icon="pi pi-trash"
                   severity="danger"
                   text
@@ -1102,11 +1277,7 @@ onUnmounted(() => {
                   @click="pendingDeleteId = connection.id"
                 />
               </div>
-
             </article>
-          </div>
-          <div v-else-if="adapter.availability !== 'available'" class="rounded-2xl bg-surface-50 border border-dashed border-surface-300 p-4 text-sm text-surface-500">
-            {{ adapter.availability === 'needs_configuration' ? t('sources.needsConfiguration') : t('sources.planned') }}
           </div>
         </template>
       </Card>

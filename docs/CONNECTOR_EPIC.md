@@ -2,9 +2,9 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C1 — explicit source capabilities and grants
+**Current implementation slice:** C1 — Google Workspace account connection
 
-**Last code review:** 2026-07-30
+**Last plan revision:** 2026-07-31
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -59,9 +59,14 @@ For every slice:
 7. Observe logs and stored state, then record the result here.
 8. Start the next slice only when the exit criteria and decision gate are met.
 
-Production currently serves as a test environment, but schema changes must
-still be backward-compatible and reversible. A later slice may be reordered
-when usage evidence warrants it; it may not silently absorb another slice.
+The hosted environment currently serves as a test environment. Backward
+compatibility remains the default, but a slice may declare a tightly scoped,
+one-time destructive reset when preserving test data would cement the wrong
+contract. The reset must name exactly what is removed and prove that unrelated
+company data survives. C1 has approval to reset Google connector data only.
+
+A later slice may be reordered when usage evidence warrants it; it may not
+silently absorb another slice.
 
 ## Objective and core completion
 
@@ -80,7 +85,8 @@ selected external evidence
 
 The core epic is complete when:
 
-- Calendar, Drive, and Gmail meet the shared source contract;
+- the Calendar, Drive, and Gmail subsystems of one Google Workspace connection
+  meet the shared source contract;
 - source freshness, failures, access, and deletion are inspectable;
 - the workflow language can propose one honest external effect:
   `mail.draft.create`;
@@ -98,8 +104,9 @@ and sends the draft in the mailbox that owns it.
 
 1. **Explicit selection.** Connecting an account selects no resource
    implicitly.
-2. **Least privilege.** Read and write grants are separate. Adding a new
-   capability never silently expands an existing grant.
+2. **Least privilege.** Read and write grants are separate product records even
+   when a provider represents them in one token. Adding a new capability never
+   silently expands access.
 3. **Mandatory approval.** Every workflow action has one named approver.
    External effects have no executor bypass. A direct user may be the approver,
    but the decision is still recorded before execution.
@@ -125,7 +132,7 @@ The baseline was inspected in the repository on 2026-07-30.
 
 | Area | Working now | Important limitation |
 | --- | --- | --- |
-| Connection kernel | Multiple connections, encrypted credentials, selected resources, disconnect, revoke/delete, health summary | Registry is provider-shaped and reduces capability to `readOnly` |
+| Connection kernel | Multiple connections, encrypted credentials, selected resources, disconnect, revoke/delete, health summary | A connection is currently one Google service grant rather than one provider account; the registry reduces behavior to `readOnly` |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
 | Google Calendar | Explicit calendar selection, incremental sync tokens, cancellation deletion, 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
 | Google Drive | Explicit direct-folder selection, Google Docs/text extraction, manual sync | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction; normalized items use the provider folder ID while the resource document uses a hashed ID |
@@ -138,19 +145,41 @@ adding another provider.
 
 ## Target connector contracts
 
-An adapter ID remains an implementation routing detail. Product behavior is
-declared through capabilities.
+The product hierarchy is provider account → capability configuration →
+selected resource. A provider connection represents one authorized external
+identity. Calendar, files, and mail are capabilities of that connection, not
+separate accounts merely because their APIs have separate endpoints.
+
+Provider and service routing IDs remain implementation details. Product
+behavior is declared through capabilities.
 
 ```ts
 type ConnectorCapability = {
-  kind: string
+  id: string
   direction: "observe" | "execute"
   resourceType?: string
-  requiredGrant: string
+  requiredScopes: string[]
   syncMode?: "webhook" | "incremental" | "reconcile"
   inputSchema?: unknown
   resultSchema?: unknown
   requiresApproval: boolean
+}
+
+type ProviderConnection = {
+  connectorId: string
+  providerId: string
+  providerAccountId?: string
+  tenantId?: string
+  accountLabel: string
+  grantedScopes: string[]
+  status: "active" | "attention" | "disconnected"
+}
+
+type CapabilityConfiguration = {
+  capabilityId: string
+  enabled: boolean
+  grantedScopes: string[]
+  status: "active" | "attention" | "reauthorization_required" | "disabled"
 }
 ```
 
@@ -169,12 +198,18 @@ action.case.move
 action.mail.draft.create
 ```
 
-A connection continues to represent one authorization grant for one external
-account. It records provider identity, tenant identity where relevant, granted
-scopes, declared capabilities, lifecycle, and sync health. Connections for the
-same Google or Microsoft identity may be grouped visually, but their refresh
-tokens and grants are not merged merely to create a tidier card. This preserves
-least privilege and avoids a risky suite-account migration before it is needed.
+A connection records one provider identity, tenant identity where relevant,
+the encrypted credential envelope, all scopes actually granted to that
+credential, lifecycle, and aggregate health. Each capability has a separate
+configuration and logical grant even when the provider represents several
+grants in one token.
+
+Initial setup asks which implemented capabilities to enable before requesting
+their combined scopes. Adding a capability later uses explicit incremental
+authorization. It never silently expands access. Disabling a capability stops
+sync and removes its imported context; it must not claim to revoke one provider
+scope when the provider offers only account-level revocation. Disconnecting the
+provider connection revokes and removes the whole account.
 
 Every source capability must define:
 
@@ -203,15 +238,15 @@ Every action capability must define:
 | Slice | Outcome | Status | Gate |
 | --- | --- | --- | --- |
 | C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
-| C1 | Replace `readOnly` with explicit source capabilities and grants | Next | Existing sources behave unchanged |
+| C1 | Replace split Google connectors with one Workspace account and capability configurations | In progress | Scoped Google reset succeeds and one real account reconnects |
 | C2 | Put internal actions behind an extensible typed action registry | Pending | Existing workflow approvals behave unchanged |
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Pending | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
-| C5 | Bring Calendar and Drive fully onto the hardened contract | Pending | Real accounts meet source acceptance scenarios |
-| G1 | Read and cite email from selected Gmail labels | Pending | Cross-source call + email answer succeeds |
+| C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
+| G1 | Add selected-label Gmail evidence to Google Workspace | Pending | Cross-source call + email answer succeeds |
 | G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
-| M1 | Prove the same mail-read capability through Microsoft Graph | Gated | Microsoft decision gate passes |
+| M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
 | M2 | Prove `mail.draft.create` through Outlook | Gated | Same workflow needs no provider-specific semantics |
 | M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
@@ -253,40 +288,113 @@ Exit criteria:
 - the full redesign test suite passes; and
 - this document names C1 as current only after deployment verification.
 
-### C1 — Explicit source capabilities and grants
+### C1 — Google Workspace account and subsystem configurations
 
-**Usable outcome:** an administrator can see what each connection can observe,
-which provider grants enable it, and which resources are included.
+**Usable outcome:** an administrator connects one Google Workspace account,
+chooses which implemented services Erik may observe, and configures the
+resources included by each service from one coherent account workspace.
+
+This is an intentional pre-production contract reset. Preserving the current
+split Calendar and Drive connection records would add migration code around a
+model we no longer want.
+
+Connection model:
+
+```text
+Google Workspace account connection
+├── encrypted OAuth credential envelope
+├── Calendar capability configuration
+│   └── selected calendar resources
+├── Drive capability configuration
+│   └── selected folder resources
+└── future Gmail capability configuration
+    └── selected label resources
+```
 
 Build:
 
-- replace the `readOnly` descriptor with declared observe/execute
-  capabilities;
-- persist normalized provider, account, scopes, and capability grants;
-- make `source.resourceId` consistently reference the resource document ID,
-  retaining provider identity only in `externalId`, and migrate existing Drive
-  context safely;
-- infer backward-compatible grants for existing Odorik, Calendar, and Drive
-  records;
-- show capability, account, selection, and reauthorization state in Sources;
-- retain separate Calendar and Drive authorization grants even when their
-  account label matches; and
-- remove uncommitted planned provider cards from the primary catalog. A
-  connector request surface may replace them later.
+- replace the C0 public fixtures with target-contract tests before changing the
+  runtime, including reset-boundary and cross-capability isolation tests;
+- replace `google_calendar` and `google_drive` connection types with one
+  `google_workspace` connector;
+- identify the account by Google's stable OpenID `sub`, retain email as a
+  mutable display label, and leave room for hosted-domain or tenant identity;
+- derive the connection document identity from company and Google `sub` so
+  duplicate callbacks cannot create two Workspace connections for one account;
+- ask the administrator which currently implemented subsystems to enable
+  before OAuth, then request the union of only their required scopes;
+- persist the scopes Google actually granted and enable only explicitly
+  selected capabilities whose complete required scope set is present;
+- preserve the existing refresh token during incremental authorization when
+  Google returns only a new access token, and reject an attempted subsystem
+  expansion when the returned `sub` differs from the existing connection;
+- store one encrypted credential envelope on the provider connection;
+- store Calendar and Drive configuration, lifecycle, and aggregate sync state
+  independently at
+  `connections/{connectionId}/capabilities/{calendar|drive}`;
+- keep resources beneath the provider connection and require every resource to
+  name exactly one capability;
+- make provider operations accept the Workspace connection ID and reject calls
+  whose corresponding capability is absent, disabled, or insufficiently
+  granted;
+- normalize source identity as `providerId`, `capabilityId`, `connectionId`,
+  internal resource document ID, provider object `externalId`, and version;
+- correct Drive context so `source.resourceId` always references the internal
+  resource document ID;
+- update scheduled Calendar discovery, connection deletion, revocation,
+  resource exclusion, citations, and search metadata for the new identity;
+- replace the Calendar and Drive top-level cards with one Google Workspace card
+  per account and nested subsystem configuration;
+- show account identity, enabled capabilities, actual grants, selected
+  resources, aggregate connection state, per-capability state, and
+  reauthorization requirements;
+- distinguish **Disable service** from **Disconnect Google Workspace**:
+  disabling stops synchronization and removes that capability's imported
+  context, while disconnecting revokes the provider token and removes the
+  entire account;
+- remove Gmail and GitHub placeholders from the primary catalog; and
+- add a confirmation-protected reset command that deletes only Google
+  Calendar/Drive connections, resources, imported context, derived search
+  records, and unfinished Google OAuth state.
+
+The reset must preserve Odorik calls and connections, contacts, cases, tasks,
+approvals, workflows, companies, and memberships. After deployment, the test
+account is reconnected and its calendars and folders are selected again.
+
+Adding a future Google capability uses incremental consent on the same logical
+Workspace connection. It may replace the encrypted credential envelope and
+expand its physical token scopes, but the newly enabled capability and grant
+remain explicit product records.
 
 Not included:
 
-- provider actions;
-- combining Google OAuth grants;
-- Microsoft accounts; or
+- Gmail data or mail actions;
+- provider actions of any kind;
+- migration of current Google connector records or imported Google context;
+- merging distinct Google identities or organization-wide delegation;
+- claiming that disabling one service revokes only that scope at Google;
+- Microsoft 365 accounts; or
 - new workflow blocks.
 
 Exit criteria:
 
-- existing connections need no manual repair;
+- the scoped reset removes all and only existing Google connector data;
+- selecting Calendar and Drive during setup produces one consent flow, one
+  Workspace connection, and two independently configurable capabilities;
+- selecting one service requests no scopes for the other;
+- authorization selects no calendars or folders implicitly;
+- partial consent fails closed for any capability missing a required scope;
+- Calendar and Drive use the same connection ID without mixing resources,
+  cursors, errors, or counts;
+- every active resource and normalized context item maps to one declared
+  observe capability;
+- disabling one subsystem removes it from retrieval without disabling the
+  other;
+- disconnecting Workspace removes both subsystems and revokes the credential;
 - the public API contains no credential material;
-- every active resource maps to one declared observe capability; and
-- Calendar, Drive, and Odorik behavior is unchanged.
+- Odorik and all internal operational data survive the reset unchanged; and
+- one real Workspace account completes connect, select, sync, cite, disable,
+  re-enable, and disconnect acceptance scenarios.
 
 ### C2 — Typed action capability registry
 
@@ -301,8 +409,8 @@ Build:
   changing their workflow schemas;
 - keep the existing canonical effect digest and named approver contract;
 - make the approval executor dispatch only registered action kinds;
-- require external action registrations to declare a separate grant and
-  reconciliation strategy; and
+- require external action registrations to declare the provider-connection
+  capability grant and reconciliation strategy they need; and
 - reject unknown action kinds before an approval record can be created.
 
 Not included:
@@ -326,14 +434,14 @@ recovering sources and can safely replay a failed resource.
 
 Build:
 
-- durable per-resource sync runs with trigger, cursor, attempt, counts, timing,
-  outcome, and sanitized error;
+- durable per-capability and per-resource sync runs with trigger, cursor,
+  attempt, counts, timing, outcome, and sanitized error;
 - a lease that prevents concurrent runs for the same resource;
 - separate `lastAttemptAt`, `lastSuccessAt`, `lastChangeObservedAt`, and
   `lastReconciledAt` semantics;
 - bounded retry with backoff, then a visible dead-letter/attention state;
 - replay from the Sources screen;
-- continue syncing healthy resources when one resource fails;
+- continue syncing healthy capabilities and resources when one fails;
 - reconciliation that does not resurrect a disconnected/deleted connection;
   and
 - metrics for source-to-context and context-to-search freshness.
@@ -347,7 +455,9 @@ Exit criteria:
 - forced permanent failure becomes actionable rather than looping forever;
 - a stale lease is safely reclaimed;
 - a disconnected connection cannot be revived by an in-flight run; and
-- the Sources screen reports truthful times and state.
+- connection health is an honest aggregate of its capability configurations
+  rather than a last-writer-wins field; and
+- the Sources screen reports truthful account, subsystem, and resource state.
 
 ### C4 — Permission-aware resources and context
 
@@ -378,10 +488,11 @@ Exit criteria:
 - disabling a resource removes it from all retrieval; and
 - cross-company and cross-member isolation tests pass.
 
-### C5 — Harden Google Calendar and Drive
+### C5 — Harden Google Workspace Calendar and Drive
 
-**Usable outcome:** the existing Google sources are dependable enough to be the
-foundation for Gmail rather than permanent prototypes.
+**Usable outcome:** the Calendar and Drive subsystems of Google Workspace are
+dependable enough to be the foundation for Gmail rather than permanent
+prototypes.
 
 Calendar:
 
@@ -411,7 +522,7 @@ Initial service targets:
 - scheduled sources have a measured p95 source-to-search freshness below
   45 minutes; and
 - zero duplicate active context items for one provider object within one
-  connection.
+  Workspace connection and capability.
 
 Push notifications may later improve latency, but they are not an excuse to
 skip reconciliation. OAuth verification is an operational release gate before
@@ -419,22 +530,27 @@ general customer authorization.
 
 Exit criteria:
 
-- real Calendar and Drive accounts pass create/update/delete/move/deselect
-  scenarios;
+- real Calendar and Drive subsystems pass create/update/delete/move/deselect
+  scenarios within one Workspace account;
 - extracted and metadata-only documents are labeled honestly;
 - connection health remains correct through token expiry and recovery; and
 - the agent answers a cited question spanning one call, event, and document.
 
 ## Gmail slices
 
-### G1 — Scoped Gmail evidence
+### G1 — Scoped Gmail subsystem
 
 **Usable outcome:** a member can ask Erik about relevant email without giving
 the whole company an invisible mailbox import.
 
 Build:
 
-- a separate Gmail authorization using only the scopes required by this slice;
+- add `context.mail.read_scoped` as a capability configuration of an existing
+  Google Workspace connection;
+- request its required scopes through explicit incremental consent and record
+  the scopes actually granted;
+- preserve the same Workspace account identity and credential envelope rather
+  than creating a parallel Gmail connection;
 - explicit label discovery and selection with nothing selected by default;
 - a fixed 90-day initial import, followed by incremental changes;
 - normalized message and thread identity, sender/recipient headers, timestamps,
@@ -456,6 +572,9 @@ Not included:
 
 Exit criteria:
 
+- enabling Gmail does not alter Calendar or Drive configuration, resources, or
+  sync state;
+- a Workspace connection without the complete Gmail grant cannot import mail;
 - the agent answers a cited question requiring one call and one selected-label
   email;
 - removing the selected label removes that message from active context;
@@ -499,7 +618,10 @@ draft; rejecting it creates nothing.
 
 Build:
 
-- a separately authorized `action.mail.draft.create` grant;
+- explicitly expand the same Google Workspace connection with the separate
+  `action.mail.draft.create` capability grant and its minimum write scope;
+- keep mail-read and draft-write grants independently visible and enforceable
+  even though Google may represent both in the connection's credential;
 - a Gmail executor registered through the C2 action registry;
 - transactionally recorded approval before the provider call;
 - provider-aware idempotency and a deterministic reconciliation marker;
@@ -521,6 +643,8 @@ Not included:
 
 Exit criteria:
 
+- a Workspace account with mail-read permission but no draft-write grant
+  cannot execute the action;
 - rejection makes zero provider calls;
 - approval by anyone other than the named approver fails;
 - two approval/retry requests produce one provider draft;
@@ -561,18 +685,46 @@ Free price alone is not a selection criterion.
 Decision gate: at least one committed Microsoft 365 design partner, or clear
 evidence that Google-only support blocks the target segment.
 
+Microsoft 365 follows the same product hierarchy as Google Workspace:
+
+```text
+Microsoft 365 account connection
+├── provider account and tenant identity
+├── encrypted Microsoft Graph credential envelope
+├── Outlook Mail capability configuration
+├── future Outlook Calendar capability configuration
+└── future SharePoint/OneDrive capability configuration
+```
+
+It is not a collection of unrelated Outlook, OneDrive, SharePoint, and Teams
+connection cards. One connection represents one Microsoft account in one
+tenant; each enabled subsystem retains its own scopes, configuration,
+resources, sync state, and failures.
+
 Execute one resource family per slice:
 
-1. **M1:** Microsoft identity/tenant authorization plus selected Outlook mail
-   folders implementing `context.mail.read_scoped`.
-2. **M2:** Outlook implementation of the same approved
-   `action.mail.draft.create` contract.
-3. **M3+:** choose Outlook Calendar or SharePoint/OneDrive from observed demand,
-   then implement one before considering the other.
+1. **M1:** establish the Microsoft 365 connection kernel with stable account
+   and tenant identity, explicit subsystem selection, incremental Microsoft
+   Graph consent, and selected Outlook mail folders implementing
+   `context.mail.read_scoped`.
+2. **M2:** add the separate `action.mail.draft.create` capability grant to the
+   same connection and implement the existing approved draft contract through
+   Outlook.
+3. **M3+:** choose Outlook Calendar or SharePoint/OneDrive from observed
+   demand, then add one capability configuration before considering the other.
+
+Teams chat and meeting artifacts are not enabled merely because the account is
+already connected. They retain their own demand, privacy, permission, and
+acceptance gates.
+
+Use delegated, dynamically requested scopes where the tenant permits them.
+Tenant policy or an admin-restricted permission must become an explicit
+`admin_consent_required` setup state, never a reason to request broad
+organization-wide application permissions by default.
 
 The proof is provider neutrality: the workflow and approval semantics do not
-change, while grants, cursors, IDs, reconciliation, and deep links remain
-provider-specific.
+change, while account and tenant identity, grants, cursors, IDs,
+reconciliation, and deep links remain provider-specific.
 
 ### A1 — Meeting artifacts
 
@@ -658,11 +810,14 @@ Provider count is not a success metric.
 
 ## Reference material
 
+- [Google OAuth 2.0 for web server applications and incremental authorization](https://developers.google.com/identity/protocols/oauth2/web-server)
+- [Google OpenID Connect identity](https://developers.google.com/identity/openid-connect/openid-connect)
 - [Gmail push notifications](https://developers.google.com/workspace/gmail/api/guides/push)
 - [Google Calendar incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync)
 - [Google Drive changes](https://developers.google.com/workspace/drive/api/guides/manage-changes)
 - [Microsoft Graph Outlook mail API](https://learn.microsoft.com/en-us/graph/api/resources/mail-api-overview)
 - [Microsoft Graph calendar delta query](https://learn.microsoft.com/en-us/graph/delta-query-events)
+- [Microsoft identity platform scopes and incremental consent](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc)
 - [Google Workspace Events API](https://developers.google.com/workspace/events)
 - [Slack API rate limits](https://api.slack.com/apis/rate-limits)
 - [Discord message resource and privileged content intent](https://docs.discord.com/developers/resources/message)
@@ -698,5 +853,6 @@ YYYY-MM-DD — Slice
 - **Known limitations:** Drive normalized context uses the provider folder ID
   while the resource document uses a hashed ID, so generic resource
   enable/disable cannot match Drive items. Google source audiences remain
-  company-wide. C1 and C4 own those changes respectively.
+  company-wide. C1 will replace and reimport Google test data rather than
+  migrate the split connection model; C4 owns resource audiences.
 - **Decision:** C0 passed. Continue to C1.

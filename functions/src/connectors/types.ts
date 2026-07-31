@@ -1,41 +1,85 @@
-export const adapterIds = [
+export const connectorIds = [
   "odorik",
-  "google_calendar",
-  "google_drive",
-  "gmail",
-  "github",
+  "google_workspace",
 ] as const;
 
-export type AdapterId = typeof adapterIds[number];
+export type ConnectorId = typeof connectorIds[number];
+export type ProviderId = "odorik" | "google";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
+export type CapabilityStatus =
+  | "active"
+  | "attention"
+  | "reauthorization_required"
+  | "disabled";
+
+export const sourceCapabilityIds = [
+  "context.call.read",
+  "context.calendar.read",
+  "context.document.read",
+] as const;
+
+export type SourceCapabilityId = typeof sourceCapabilityIds[number];
+export type CapabilityServiceId = "calls" | "calendar" | "drive";
+export type ResourceType = "phone_line" | "calendar" | "folder";
+
+export type SourceCapabilityDescriptor = {
+  id: SourceCapabilityId;
+  serviceId: CapabilityServiceId;
+  direction: "observe";
+  resourceType: ResourceType;
+  requiredScopes: string[];
+  syncMode: "webhook" | "incremental" | "manual";
+  requiresApproval: false;
+};
+
+export type CapabilityConfigurationPublicView = {
+  id: CapabilityServiceId;
+  capabilityId: SourceCapabilityId;
+  status: CapabilityStatus;
+  grantedScopes: string[];
+  requiredScopes: string[];
+  itemCount: number;
+  resourceCount: number;
+  lastSyncAt?: string | null;
+  lastObservedAt?: string | null;
+  lastError?: string | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+};
 
 export type ConnectionPublicView = {
   id: string;
   companyId: string;
-  adapterId: AdapterId;
+  connectorId: ConnectorId;
+  providerId: ProviderId;
+  providerAccountId?: string;
+  tenantId?: string;
   displayName: string;
   status: ConnectionStatus;
-  authKind: "basic_upload" | "oauth2" | "github_app";
+  authKind: "basic_upload" | "oauth2";
   credentialMode: "encrypted" | "legacy_secret" | "none";
   uploadUrl?: string;
   accountLabel?: string;
+  grantedScopes: string[];
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;
   lastError?: string | null;
-  /** Google revoked or expired the grant; only a fresh consent restores it. */
+  /** The provider grant is gone; only fresh consent restores the connection. */
   reauthorizationRequired: boolean;
   itemCount: number;
   resourceCount: number;
   createdAt?: string | null;
   updatedAt?: string | null;
+  capabilities: CapabilityConfigurationPublicView[];
   resources: ConnectionResourcePublicView[];
 };
 
 export type ConnectionResourcePublicView = {
   id: string;
   connectionId: string;
-  resourceType: "phone_line" | "calendar" | "folder" | "label" | "repository";
+  capabilityId: SourceCapabilityId;
+  resourceType: ResourceType;
   externalId: string;
   displayName: string;
   status: ResourceStatus;
@@ -45,18 +89,15 @@ export type ConnectionResourcePublicView = {
   updatedAt?: string | null;
 };
 
-export type AdapterDescriptor = {
-  id: AdapterId;
+export type ConnectorDescriptor = {
+  id: ConnectorId;
   name: string;
   description: string;
-  resourceNoun: string;
-  available: boolean;
-  availability: "available" | "needs_configuration" | "planned";
-  readOnly: boolean;
+  availability: "available" | "needs_configuration";
+  capabilities: SourceCapabilityDescriptor[];
 };
 
 export interface SourceAdapter<TSource = unknown> {
-  readonly descriptor: AdapterDescriptor;
+  readonly descriptor: ConnectorDescriptor;
   normalize(source: TSource): Record<string, unknown>;
 }
-

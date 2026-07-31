@@ -3,30 +3,20 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import {
-  authorizedGoogleConnection,
-  completeGoogleAuthorization,
+  authorizedGoogleCapability,
   connectionRef,
-  createGoogleAuthorization,
   googleGet,
-  revokeGoogleAuthorization,
-  type GoogleConnector,
 } from "./google-oauth.js";
+import { calendarScopes } from "./registry.js";
 import {
-  markConnectionAttention,
-  markConnectionSynced,
+  markCapabilityAttention,
+  markCapabilitySynced,
   writeResourceSyncState,
 } from "./sync-state.js";
 
-export const calendarScopes = [
-  "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
-  "https://www.googleapis.com/auth/calendar.events.readonly",
-] as const;
-
-const calendarConnector: GoogleConnector = {
-  adapterId: "google_calendar",
-  displayName: "Google Calendar",
-  scopes: calendarScopes,
-};
+export { calendarScopes };
+const calendarCapabilityId = "context.calendar.read" as const;
+const calendarDisplayName = "Google Calendar";
 
 type CalendarListEntry = {
   id?: string;
@@ -112,7 +102,7 @@ async function allCalendarEntries(accessToken: string): Promise<CalendarListEntr
     url.searchParams.set("showDeleted", "false");
     if (pageToken) url.searchParams.set("pageToken", pageToken);
     const page = await googleGet<CalendarListResponse>(
-      calendarConnector.displayName,
+      calendarDisplayName,
       url,
       accessToken,
     );
@@ -122,41 +112,6 @@ async function allCalendarEntries(accessToken: string): Promise<CalendarListEntr
   return entries;
 }
 
-export async function createCalendarAuthorization(input: {
-  companyId: string;
-  uid: string;
-  email: string;
-  displayName: string;
-  clientId: string;
-  returnOrigin?: string;
-}): Promise<{ authorizationUrl: string }> {
-  return createGoogleAuthorization(calendarConnector, input);
-}
-
-export async function revokeGoogleCalendarAuthorization(input: {
-  companyId: string;
-  connectionId: string;
-  credentialKey: string;
-}): Promise<boolean> {
-  return revokeGoogleAuthorization(calendarConnector, input);
-}
-
-export async function exchangeGoogleAuthorization(input: {
-  code: string;
-  state: string;
-  clientId: string;
-  clientSecret: string;
-  credentialKey: string;
-}): Promise<{ connectionId: string }> {
-  return completeGoogleAuthorization(calendarConnector, {
-    ...input,
-    resolveAccountLabel: async (accessToken) => {
-      const entries = await allCalendarEntries(accessToken);
-      return entries.find((entry) => entry.primary)?.id || null;
-    },
-  });
-}
-
 async function authorizedConnection(input: {
   companyId: string;
   connectionId: string;
@@ -164,7 +119,7 @@ async function authorizedConnection(input: {
   clientSecret: string;
   credentialKey: string;
 }) {
-  return authorizedGoogleConnection(calendarConnector, input);
+  return authorizedGoogleCapability(calendarCapabilityId, input);
 }
 
 export async function listGoogleCalendars(input: {
@@ -177,7 +132,9 @@ export async function listGoogleCalendars(input: {
   const { accessToken, connection } = await authorizedConnection(input);
   const [entries, resources] = await Promise.all([
     allCalendarEntries(accessToken),
-    connection.ref.collection("resources").get(),
+    connection.ref.collection("resources")
+      .where("capabilityId", "==", calendarCapabilityId)
+      .get(),
   ]);
   const selectedIds = new Set(
     resources.docs
@@ -236,7 +193,8 @@ export function calendarEventContextItem(input: {
     companyId: input.companyId,
     kind: "calendar.event",
     source: {
-      adapterId: "google_calendar",
+      providerId: "google",
+      capabilityId: calendarCapabilityId,
       connectionId: input.connectionId,
       resourceId: input.resourceId,
       externalId: input.event.id,
@@ -323,7 +281,7 @@ async function syncCalendarResource(input: {
     let page: EventsResponse;
     try {
       page = await googleGet<EventsResponse>(
-        calendarConnector.displayName,
+        calendarDisplayName,
         url,
         input.accessToken,
       );
@@ -387,8 +345,9 @@ export async function syncGoogleCalendarConnection(input: {
   clientSecret: string;
   credentialKey: string;
 }): Promise<{ calendars: number; changes: number }> {
-  const { accessToken, connection } = await authorizedConnection(input);
+  const { accessToken, connection, capability } = await authorizedConnection(input);
   const resources = await connection.ref.collection("resources")
+    .where("capabilityId", "==", calendarCapabilityId)
     .where("status", "==", "enabled")
     .get();
   let changes = 0;
@@ -403,15 +362,24 @@ export async function syncGoogleCalendarConnection(input: {
     }
     const itemCount = (await contextItems(input.companyId)
       .where("source.connectionId", "==", input.connectionId)
+      .where("source.capabilityId", "==", calendarCapabilityId)
       .count()
       .get()).data().count;
-    const updated = await markConnectionSynced({ connection: connection.ref, itemCount });
+    const updated = await markCapabilitySynced({
+      connection: connection.ref,
+      capability: capability.ref,
+      itemCount,
+    });
     if (!updated) {
       throw new Error("Google Calendar connection was disconnected during synchronization");
     }
     return { calendars: resources.size, changes };
   } catch (error) {
-    await markConnectionAttention({ connection: connection.ref, error });
+    await markCapabilityAttention({
+      connection: connection.ref,
+      capability: capability.ref,
+      error,
+    });
     throw error;
   }
 }
@@ -432,7 +400,9 @@ export async function selectGoogleCalendars(input: {
     throw new Error("One or more selected calendars are no longer accessible");
   }
   const connection = connectionRef(input.companyId, input.connectionId);
-  const resources = await connection.collection("resources").get();
+  const resources = await connection.collection("resources")
+    .where("capabilityId", "==", calendarCapabilityId)
+    .get();
   const batch = db.batch();
   const now = Timestamp.now();
   for (const calendar of calendars) {
@@ -441,6 +411,7 @@ export async function selectGoogleCalendars(input: {
     );
     batch.set(resourceRef, {
       connectionId: input.connectionId,
+      capabilityId: calendarCapabilityId,
       resourceType: "calendar",
       externalId: calendar.id,
       displayName: calendar.displayName,
@@ -491,10 +462,12 @@ export async function syncAllGoogleCalendarConnections(input: {
   for (const company of companies.docs) {
     if (company.data().status !== "active") continue;
     const connections = await company.ref.collection("connections")
-      .where("adapterId", "==", "google_calendar")
+      .where("connectorId", "==", "google_workspace")
       .where("status", "in", ["active", "attention"])
       .get();
     for (const connection of connections.docs) {
+      const capability = await connection.ref.collection("capabilities").doc("calendar").get();
+      if (!capability.exists || capability.data()?.status !== "active") continue;
       try {
         await syncGoogleCalendarConnection({
           ...input,
