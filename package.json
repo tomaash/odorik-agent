@@ -11,6 +11,8 @@
     "test:redesign": "npm --prefix functions/shared test && npm --prefix functions test && npm --prefix frontend test",
     "build:coding-runner": "npm --prefix coding-runner run build",
     "test:coding-runner": "npm --prefix coding-runner test",
+    "build:coding-dispatcher": "npm --prefix coding-dispatcher run build",
+    "test:coding-dispatcher": "npm --prefix coding-dispatcher test",
     "build:grok-auth-worker": "npm --prefix grok-auth-worker run build",
     "test:grok-auth-worker": "npm --prefix grok-auth-worker test",
     "build": "tsc -p tsconfig.json",

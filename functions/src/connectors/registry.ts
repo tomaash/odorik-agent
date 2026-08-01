@@ -48,10 +48,10 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     direction: "observe",
     resourceType: "repository",
     requiredScopes: [
-      "contents:read",
+      "contents:write",
       "issues:read",
       "metadata:read",
-      "pull_requests:read",
+      "pull_requests:write",
     ],
     syncMode: "webhook",
     requiresApproval: false,

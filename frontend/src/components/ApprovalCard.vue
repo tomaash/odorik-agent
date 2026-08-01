@@ -50,6 +50,14 @@ const resultCaseId = computed(() => (
       ? props.approval.action.caseId
       : null
 ))
+const resultCodingRunId = computed(() => (
+  props.approval.result?.kind === 'coding_run'
+    ? props.approval.result.id
+    : props.approval.action.kind === 'coding.issue.implement'
+      && props.approval.status === 'approved'
+      ? props.approval.action.runId
+      : null
+))
 
 function severity(status: ActionApprovalItem['status']) {
   if (status === 'approved') return 'success'
@@ -66,12 +74,20 @@ function title() {
 }
 
 function actionLabel() {
+  if (props.approval.action.kind === 'coding.issue.implement') return t('approvals.codingAction')
   if (props.approval.action.kind === 'task.create') return t('approvals.taskAction')
   if (props.approval.action.kind === 'case.create') return t('approvals.createCaseAction')
-  return t('approvals.moveCaseAction')
+  if (props.approval.action.kind === 'case.move') return t('approvals.moveCaseAction')
+  return t('approvals.title')
 }
 
 function effect() {
+  if (props.approval.action.kind === 'coding.issue.implement') {
+    return t('approvals.implementAndOpenDraft', {
+      repository: `${props.approval.action.github.owner}/${props.approval.action.github.repo}`,
+      issue: props.approval.action.github.issueNumber,
+    })
+  }
   if (props.approval.action.kind === 'task.create') {
     return t('approvals.createTaskFor', { assignee: props.approval.action.assigneeName })
   }
@@ -81,10 +97,11 @@ function effect() {
       stage: props.approval.action.stageName,
     })
   }
-  return t('approvals.moveCaseFromTo', {
+  if (props.approval.action.kind === 'case.move') return t('approvals.moveCaseFromTo', {
     from: props.approval.action.fromStageName,
     to: props.approval.action.toStageName,
   })
+  return ''
 }
 
 function taskSubject() {
@@ -151,6 +168,17 @@ function confirmReject() {
       <div class="mt-3 rounded-md border border-violet-200 bg-white/80 p-3 grid gap-1.5 text-xs">
         <strong class="text-violet-950">{{ t('approvals.exactEffect') }}</strong>
         <span>{{ effect() }}</span>
+        <template v-if="approval.action.kind === 'coding.issue.implement'">
+          <span><i class="pi pi-code-branch mr-1" />{{ approval.action.git.baseBranch }} @ {{ approval.action.git.baseSha.slice(0, 12) }}</span>
+          <span><i class="pi pi-github mr-1" />{{ approval.action.git.resultBranch }} · {{ t('approvals.draftPrAutomatic') }}</span>
+          <span><i class="pi pi-sparkles mr-1" />{{ t('approvals.grokSubscriptionOnly') }}</span>
+          <span><i class="pi pi-clock mr-1" />{{ t('approvals.codingLimits', {
+            minutes: approval.action.limits.maxRuntimeMinutes,
+            turns: approval.action.limits.maxTurns,
+            files: approval.action.limits.maxChangedFiles,
+          }) }}</span>
+          <span><i class="pi pi-ban mr-1" />{{ t('approvals.noMergeDeploy') }}</span>
+        </template>
         <span v-if="approval.action.kind === 'task.create'">{{ taskSubject() }}</span>
         <span v-if="approval.action.kind === 'task.create'">
           <i class="pi pi-calendar mr-1" />{{ approval.action.dueAt ? new Date(approval.action.dueAt).toLocaleDateString() : t('tasks.noDueDate') }}
@@ -167,6 +195,10 @@ function confirmReject() {
         <p v-if="approval.action.context.callSummary" class="text-sm leading-relaxed mt-2 mb-1">{{ approval.action.context.callSummary }}</p>
         <p v-if="approval.action.context.transcriptExcerpt" class="text-xs leading-relaxed text-surface-500 mt-1 mb-0">“{{ approval.action.context.transcriptExcerpt }}”</p>
       </details>
+      <details v-if="approval.action.kind === 'coding.issue.implement'" class="mt-3">
+        <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('approvals.issueSnapshot') }}</summary>
+        <p class="text-xs whitespace-pre-wrap leading-relaxed text-surface-600 mt-2 mb-0">{{ approval.action.issueExcerpt }}</p>
+      </details>
 
       <p v-if="approval.executionError" class="text-xs text-amber-800 mt-2 mb-0">{{ approval.executionError }}</p>
       <p v-if="approval.rejectionNote" class="text-xs text-rose-800 mt-2 mb-0">
@@ -176,6 +208,13 @@ function confirmReject() {
       <router-link
         v-if="resultCaseId"
         :to="`/cases/${resultCaseId}`"
+        class="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 no-underline"
+      >
+        {{ t('approvals.openResult') }} <i class="pi pi-arrow-right text-[.65rem]" />
+      </router-link>
+      <router-link
+        v-if="resultCodingRunId"
+        :to="{ path: '/coding', query: { run: resultCodingRunId } }"
         class="mt-3 inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 no-underline"
       >
         {{ t('approvals.openResult') }} <i class="pi pi-arrow-right text-[.65rem]" />

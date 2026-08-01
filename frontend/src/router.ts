@@ -34,6 +34,7 @@ const router = createRouter({
         { path: 'contacts', name: 'contacts', component: () => import('./views/ContactsPage.vue') },
         { path: 'contacts/:id', name: 'contact', component: () => import('./views/ContactDetailPage.vue') },
         { path: 'sources', name: 'sources', component: () => import('./views/SourcesPage.vue') },
+        { path: 'coding', name: 'coding', component: () => import('./views/CodingPage.vue') },
         { path: 'team', name: 'team', component: () => import('./views/TeamPage.vue') },
       ],
     },

@@ -22,10 +22,17 @@ import {
   runEnabledWorkflowsForCall,
   workflowRuntimeFlags,
 } from "./workflow/runtime.js";
+import { GoogleCodingArtifactStore } from "./coding/artifacts.js";
+import {
+  createCloudRunExecutionInspector,
+  reconcileCodingRuns,
+} from "./coding/reconcile.js";
+import { queueCodingPublisher } from "./coding/service.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
 export { grokAuthCallback } from "./grok-auth-callback.js";
+export { codingCallback } from "./coding-callback.js";
 
 export { api };
 
@@ -156,6 +163,29 @@ export const syncGitHubSources = onSchedule(
     if (failures.length) {
       console.error("One or more GitHub connections failed to reconcile", failures);
       throw new Error(`${failures.length} GitHub connection(s) failed`);
+    }
+  },
+);
+
+export const reconcileCodingRunExecutions = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 240,
+    memory: "256MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+  },
+  async () => {
+    const result = await reconcileCodingRuns({
+      artifactStore: new GoogleCodingArtifactStore(),
+      inspectExecution: createCloudRunExecutionInspector(),
+      queuePublisher: (companyId, runId) => queueCodingPublisher({ companyId, runId }),
+    });
+    if (result.failures) {
+      throw new Error(`${result.failures} coding run reconciliation check(s) failed`);
     }
   },
 );

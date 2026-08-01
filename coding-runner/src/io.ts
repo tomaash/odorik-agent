@@ -110,6 +110,7 @@ export async function uploadArtifact(
   url: string,
   artifactPath: string,
   maxBytes: number,
+  contentType = "application/gzip",
 ): Promise<number> {
   const info = await stat(artifactPath);
   if (!info.isFile()) throw new Error("Artifact is not a regular file");
@@ -129,7 +130,7 @@ export async function uploadArtifact(
     redirect: "error",
     signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
     headers: {
-      "content-type": "application/gzip",
+      "content-type": contentType,
       "content-length": String(info.size),
     },
     body,

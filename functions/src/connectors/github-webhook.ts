@@ -357,12 +357,13 @@ export async function processGitHubWebhookDelivery(input: {
   fetcher?: FetchLike;
   database?: FirebaseFirestore.Firestore;
   observedAt?: Timestamp;
-}): Promise<{ outcome: string }> {
+}): Promise<{ outcome: string; issueContextItemId?: string }> {
   const database = input.database || db;
   const observedAt = input.observedAt || Timestamp.now();
   await assertDeliveryRoute({ ...input, database });
 
   let outcome: string;
+  let observedIssueContextItemId: string | undefined;
   if (input.event === "installation_repositories") {
     await connectGitHubInstallation({
       companyId: input.companyId,
@@ -393,12 +394,13 @@ export async function processGitHubWebhookDelivery(input: {
     } else if (payloadIssue.pull_request) {
       outcome = "ignored_pull_request";
     } else {
-      const contextRef = database.doc(
-        `companies/${input.companyId}/contextItems/${githubIssueContextItemId(
+      const contextItemId = githubIssueContextItemId(
           input.connectionId,
           repository.id,
           payloadIssue.id,
-        )}`,
+        );
+      const contextRef = database.doc(
+        `companies/${input.companyId}/contextItems/${contextItemId}`,
       );
       if (input.event === "issues" && input.action === "deleted") {
         await contextRef.delete();
@@ -424,6 +426,7 @@ export async function processGitHubWebhookDelivery(input: {
             observedAt,
           }), { merge: false });
           outcome = "issue_upserted";
+          observedIssueContextItemId = contextItemId;
         }
       }
       await updateResourceItemCount({
@@ -445,7 +448,10 @@ export async function processGitHubWebhookDelivery(input: {
     outcome,
     observedAt,
   });
-  return { outcome };
+  return {
+    outcome,
+    ...(observedIssueContextItemId ? { issueContextItemId: observedIssueContextItemId } : {}),
+  };
 }
 
 export async function recordGitHubWebhookFailure(input: {

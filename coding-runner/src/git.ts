@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
 import { chmod, chown, mkdir, readdir, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { requireSuccessfulCommand, runCommand } from "./command.js";
@@ -83,6 +85,9 @@ export type ChangeArtifact = {
   changedFiles: number;
   patchBytes: number;
   hasChanges: boolean;
+  changedPaths: string[];
+  resultBundleSha256?: string;
+  resultBundleBytes?: number;
 };
 
 export async function createChangeArtifacts(
@@ -129,6 +134,7 @@ export async function createChangeArtifacts(
       changedFiles: 0,
       patchBytes,
       hasChanges: false,
+      changedPaths: [],
     };
   }
 
@@ -155,11 +161,17 @@ export async function createChangeArtifacts(
   );
   const verify = await runCommand("git", ["bundle", "verify", bundlePath], workspaceCommandOptions(repositoryPath));
   if (verify.code !== 0) throw new Error(`Result bundle verification failed: ${verify.stderr}`);
+  const bundleInfo = await stat(bundlePath);
+  const bundleHash = createHash("sha256");
+  for await (const chunk of createReadStream(bundlePath)) bundleHash.update(chunk as Buffer);
   return {
     baseSha: spec.source.baseSha,
     resultSha,
     changedFiles: changedNames.length,
     patchBytes,
     hasChanges: true,
+    changedPaths: changedNames,
+    resultBundleSha256: bundleHash.digest("hex"),
+    resultBundleBytes: bundleInfo.size,
   };
 }

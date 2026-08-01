@@ -4,11 +4,17 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 
 export const githubIssueCapabilityId = "context.github.issue.read" as const;
-export const githubRequiredPermissions = {
+export const githubObserverPermissions = {
   contents: "read",
   issues: "read",
   metadata: "read",
   pull_requests: "read",
+} as const;
+export const githubRequiredPermissions = {
+  contents: "write",
+  issues: "read",
+  metadata: "read",
+  pull_requests: "write",
 } as const;
 
 export type GitHubAppConfiguration = {
@@ -177,9 +183,17 @@ function assertReadOnlyPermissions(permissions: Record<string, string>): void {
       throw new Error(`GitHub App permission ${permission} is not read-only`);
     }
   }
-  for (const [permission, expected] of Object.entries(githubRequiredPermissions)) {
+  for (const [permission, expected] of Object.entries(githubObserverPermissions)) {
     if (permissions[permission] !== expected) {
       throw new Error(`GitHub App permission ${permission} must be ${expected}`);
+    }
+  }
+}
+
+function assertInstallationPermissions(permissions: Record<string, string>): void {
+  for (const [permission, expected] of Object.entries(githubRequiredPermissions)) {
+    if (permissions[permission] !== expected) {
+      throw new Error(`GitHub App installation permission ${permission} must be ${expected}`);
     }
   }
 }
@@ -204,7 +218,7 @@ export async function inspectGitHubInstallation(input: {
     throw new Error("GitHub installation does not belong to the configured App");
   }
   if (installation.suspended_at) throw new Error("GitHub App installation is suspended");
-  assertReadOnlyPermissions(installation.permissions);
+  assertInstallationPermissions(installation.permissions);
 
   const tokenResult = await githubRequest<InstallationTokenResponse>(
     fetcher,
@@ -212,7 +226,7 @@ export async function inspectGitHubInstallation(input: {
     jwt,
     {
       method: "POST",
-      body: JSON.stringify({ permissions: githubRequiredPermissions }),
+      body: JSON.stringify({ permissions: githubObserverPermissions }),
     },
   );
   assertReadOnlyPermissions(tokenResult.permissions);
@@ -231,7 +245,7 @@ export async function inspectGitHubInstallation(input: {
     installationId: installation.id,
     account: installation.account,
     repositorySelection: installation.repository_selection,
-    permissions: tokenResult.permissions,
+    permissions: installation.permissions,
     repositories,
     token: tokenResult.token,
     tokenExpiresAt: tokenResult.expires_at,
@@ -530,7 +544,7 @@ export async function githubInstallationToken(input: {
     githubAppJwt(input.configuration),
     {
       method: "POST",
-      body: JSON.stringify({ permissions: githubRequiredPermissions }),
+      body: JSON.stringify({ permissions: githubObserverPermissions }),
     },
   );
   assertReadOnlyPermissions(tokenResult.permissions);
@@ -571,6 +585,43 @@ export async function fetchGitHubIssueWithComments(input: {
     if (pageComments.length < 100) break;
   }
   return { issue, comments };
+}
+
+export async function resolveGitHubRepositoryBaseSha(input: {
+  configuration: GitHubAppConfiguration;
+  installationId: number;
+  repositoryId: number;
+  fullName: string;
+  baseBranch: string;
+  fetcher?: FetchLike;
+}): Promise<string> {
+  const fetcher = input.fetcher || fetch;
+  const installationToken = await githubInstallationToken({
+    configuration: input.configuration,
+    installationId: input.installationId,
+    fetcher,
+  });
+  const [owner, repo, ...extra] = input.fullName.split("/");
+  if (!owner || !repo || extra.length) throw new Error("Invalid GitHub repository name");
+  const prefix = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
+  const repository = await githubRequest<GitHubRepository>(
+    fetcher,
+    prefix,
+    installationToken.token,
+  );
+  if (
+    repository.id !== input.repositoryId
+    || repository.full_name.toLowerCase() !== input.fullName.toLowerCase()
+    || repository.default_branch !== input.baseBranch
+  ) throw new Error("GitHub repository no longer matches the selected resource");
+  const commit = await githubRequest<{ sha: string }>(
+    fetcher,
+    `${prefix}/commits/${encodeURIComponent(input.baseBranch)}`,
+    installationToken.token,
+  );
+  const sha = String(commit.sha || "").toLowerCase();
+  if (!/^[a-f0-9]{40,64}$/.test(sha)) throw new Error("GitHub returned an invalid base SHA");
+  return sha;
 }
 
 async function fetchRepositoryIssues(input: {

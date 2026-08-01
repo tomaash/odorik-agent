@@ -14,6 +14,7 @@ import {
   WORKSPACE_GID,
 } from "./security.js";
 import { assertRunIdMatchesEnvironment, parseRunSpec, type CodingRunSpec } from "./spec.js";
+import { sendCodingCallback, type CodingCallbackEvent } from "./callback.js";
 
 const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT ?? "/workspace";
 const GROK_HOME = process.env.GROK_HOME ?? "/home/grok/.grok";
@@ -62,7 +63,20 @@ function log(runId: string, phase: RunPhase, message: string, extra: Record<stri
   );
 }
 
-function grokEnvironment(): NodeJS.ProcessEnv {
+async function report(event: CodingCallbackEvent): Promise<void> {
+  try {
+    await sendCodingCallback(process.env.CODING_CALLBACK_URL, event);
+  } catch (error) {
+    process.stderr.write(`${JSON.stringify({
+      severity: "WARNING",
+      runId: event.runId,
+      phase: event.phase,
+      message: redactSecrets(error instanceof Error ? error.message : String(error)),
+    })}\n`);
+  }
+}
+
+export function grokEnvironment(): NodeJS.ProcessEnv {
   const identity = runtimeIdentity();
   const environment: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
@@ -77,7 +91,7 @@ function grokEnvironment(): NodeJS.ProcessEnv {
   return environment;
 }
 
-function grokArguments(spec: CodingRunSpec, repositoryPath: string, promptPath: string): string[] {
+export function grokArguments(spec: CodingRunSpec, repositoryPath: string, promptPath: string): string[] {
   const args = [
     "--cwd",
     repositoryPath,
@@ -238,6 +252,22 @@ export async function runCodingJob(): Promise<void> {
   }
   await mkdir(artifactDirectory, { recursive: true, mode: 0o700 });
   log(runId, phase, "Coding run starting", { authKind: "subscription_oauth" });
+  let eventSequence = 0;
+  const phaseEvent = async (nextPhase: RunPhase, message: string) => {
+    eventSequence += 1;
+    await report({
+      eventId: `runner-${eventSequence}-${nextPhase}`,
+      runId,
+      type: "phase",
+      phase: nextPhase,
+      status: "running",
+      message,
+      ...(process.env.CLOUD_RUN_EXECUTION
+        ? { executionName: process.env.CLOUD_RUN_EXECUTION }
+        : {}),
+    });
+  };
+  await phaseEvent("starting", "Coding runner started");
 
   try {
     const authSource = process.env.GROK_AUTH_SOURCE ?? "/secrets/grok/auth.json";
@@ -245,6 +275,7 @@ export async function runCodingJob(): Promise<void> {
 
     phase = "downloading_source";
     log(runId, phase, "Downloading source bundle");
+    await phaseEvent(phase, "Downloading immutable source bundle");
     const download = await downloadToFile(
       spec.source.downloadUrl,
       sourceBundlePath,
@@ -260,6 +291,7 @@ export async function runCodingJob(): Promise<void> {
 
     phase = "preparing_repository";
     log(runId, phase, "Preparing isolated repository", { sourceBytes: download.bytes });
+    await phaseEvent(phase, "Preparing isolated repository");
     await cloneBundle(sourceBundlePath, repositoryPath, spec.source.baseSha);
     const taskDocument = [
       `# ${spec.task.title}`,
@@ -278,10 +310,12 @@ export async function runCodingJob(): Promise<void> {
 
     phase = "inspecting_repository";
     log(runId, phase, "Checking repository-provided Grok extensions");
+    await phaseEvent(phase, "Validating repository security configuration");
     await inspectRepositoryConfiguration(GROK_BINARY, repositoryPath, grokEnvironment());
 
     phase = "installing_dependencies";
-    log(runId, phase, "Preparing locked dependencies without lifecycle scripts");
+    log(runId, phase, "Checking for pre-provisioned dependencies without network access");
+    await phaseEvent(phase, "Checking pre-provisioned dependencies");
     dependencyPreparation = await prepareDependencies(repositoryPath);
     log(runId, phase, "Dependency preparation complete", dependencyPreparation);
 
@@ -290,6 +324,7 @@ export async function runCodingJob(): Promise<void> {
       maxTurns: spec.agent.maxTurns,
       ...(spec.agent.model ? { model: spec.agent.model } : {}),
     });
+    await phaseEvent(phase, "Grok is implementing the issue");
     grokResult = await runCommand(GROK_BINARY, grokArguments(spec, repositoryPath, promptPath), {
       cwd: repositoryPath,
       env: grokEnvironment(),
@@ -307,6 +342,7 @@ export async function runCodingJob(): Promise<void> {
 
     phase = "collecting_artifacts";
     log(runId, phase, "Collecting reviewed change artifacts");
+    await phaseEvent(phase, "Collecting immutable review artifacts");
     if (identity.workspaceUid !== undefined) {
       await chmod(artifactDirectory, 0o770);
       await chown(artifactDirectory, WORKSPACE_UID, WORKSPACE_GID);
@@ -364,15 +400,63 @@ export async function runCodingJob(): Promise<void> {
   try {
     phase = "uploading_artifacts";
     log(runId, phase, "Uploading immutable result artifact");
+    await phaseEvent(phase, "Uploading immutable result artifact");
     await packageArtifacts(artifactDirectory, packagePath);
+    if (spec.artifacts.patchUploadUrl && gitArtifact) {
+      await uploadArtifact(
+        spec.artifacts.patchUploadUrl,
+        join(artifactDirectory, "changes.patch"),
+        spec.limits.maxPatchBytes,
+        "text/x-diff; charset=utf-8",
+      );
+    }
+    if (spec.artifacts.resultBundleUploadUrl && gitArtifact?.hasChanges) {
+      await uploadArtifact(
+        spec.artifacts.resultBundleUploadUrl,
+        join(artifactDirectory, "result.bundle"),
+        spec.limits.maxArtifactBytes,
+        "application/octet-stream",
+      );
+    }
     const bytes = await uploadArtifact(spec.artifacts.uploadUrl, packagePath, spec.limits.maxArtifactBytes);
     log(runId, failure ? "failed" : "succeeded", failure ? "Failure artifact uploaded" : "Coding run completed", {
       artifactBytes: bytes,
       ...(gitArtifact ? { changedFiles: gitArtifact.changedFiles, resultSha: gitArtifact.resultSha } : {}),
     });
+    eventSequence += 1;
+    await report({
+      eventId: `runner-${eventSequence}-${failure ? "failed" : "completed"}`,
+      runId,
+      type: failure ? "failed" : "completed",
+      phase: failure ? "failed" : "succeeded",
+      status: failure ? "failed" : "ready_to_publish",
+      message: failure ? errorMessage(failure) : "Result is ready for approved draft PR publication",
+      ...(process.env.CLOUD_RUN_EXECUTION
+        ? { executionName: process.env.CLOUD_RUN_EXECUTION }
+        : {}),
+      result: {
+        durationMs: metadata.durationMs,
+        authKind: metadata.grok.authKind,
+        outputTruncated: metadata.grok.outputTruncated === true,
+        artifactBytes: bytes,
+        ...(gitArtifact || {}),
+      },
+    });
   } catch (error) {
     artifactUploadFailure = error;
     log(runId, "failed", `Could not upload result artifact: ${errorMessage(error)}`);
+    eventSequence += 1;
+    await report({
+      eventId: `runner-${eventSequence}-upload-failed`,
+      runId,
+      type: "failed",
+      phase: "failed",
+      status: "failed",
+      message: errorMessage(error),
+      ...(process.env.CLOUD_RUN_EXECUTION
+        ? { executionName: process.env.CLOUD_RUN_EXECUTION }
+        : {}),
+    });
   }
 
   if (failure) throw failure;

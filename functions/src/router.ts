@@ -105,6 +105,22 @@ import {
   moveCase,
   updatePipeline,
 } from "./pipeline/repository.js";
+import { GoogleCodingArtifactStore } from "./coding/artifacts.js";
+import {
+  cancelCodingExecution,
+} from "./coding/cloud-run.js";
+import {
+  CodingRunError,
+  getCodingRun,
+  listCodingIssues,
+  listCodingRuns,
+} from "./coding/repository.js";
+import {
+  cancelCodingRun,
+  codingArtifactDownloadUrl,
+  codingPatchPreview,
+} from "./coding/service.js";
+import { requestCodingImplementationApproval } from "./coding/proposal.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
@@ -114,6 +130,7 @@ export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID"
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
 const executeGrokAuthJob = createCloudRunGrokAuthJobExecutor();
+const codingArtifacts = new GoogleCodingArtifactStore();
 
 async function getAccess(uid: string) {
   return registrationStatus(uid);
@@ -198,6 +215,127 @@ export const appRouter = router({
         model: "gemini-3.5-flash-lite",
       };
     }),
+  }),
+
+  coding: router({
+    listIssues: enabledProcedure.query(({ ctx }) => listCodingIssues({
+      companyId: ctx.companyId,
+    })),
+    listRuns: enabledProcedure.query(({ ctx }) => listCodingRuns({
+      companyId: ctx.companyId,
+    })),
+    getRun: enabledProcedure
+      .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
+      .query(async ({ ctx, input }) => {
+        try {
+          return await getCodingRun({ companyId: ctx.companyId, runId: input.runId });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404 ? "NOT_FOUND" : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    requestFromIssue: adminProcedure
+      .input(z.object({
+        issueContextItemId: z.string().regex(/^github_issue_[a-f0-9]{32}$/),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await requestCodingImplementationApproval({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            preferredApproverUid: ctx.uid,
+            issueContextItemId: input.issueContextItemId,
+            configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    cancelRun: adminProcedure
+      .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await cancelCodingRun({
+            companyId: ctx.companyId,
+            runId: input.runId,
+            actorUid: ctx.uid,
+            cancelExecution: cancelCodingExecution,
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    getPatchPreview: enabledProcedure
+      .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
+      .query(async ({ ctx, input }) => {
+        try {
+          return await codingPatchPreview({
+            companyId: ctx.companyId,
+            runId: input.runId,
+            artifactStore: codingArtifacts,
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    getArtifactDownloadUrl: enabledProcedure
+      .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await codingArtifactDownloadUrl({
+            companyId: ctx.companyId,
+            runId: input.runId,
+            artifactStore: codingArtifacts,
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
   }),
 
   sources: router({

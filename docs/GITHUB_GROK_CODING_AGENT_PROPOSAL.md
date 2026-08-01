@@ -1,6 +1,6 @@
 # Proposal: GitHub + Grok coding agent for Agent Erik
 
-**Status:** implementation started (CG0 runner foundation + CG1 read foundation + CG2 subscription connection)
+**Status:** CG3 implementation in progress (approve implementation first; draft PR is the automatic result)
 **Date:** 2026-08-01
 **Working name:** Coding Agent slice (provider phase `R1` / coding-agent epic)
 **Depends on:** connector kernel (C0–C3), typed action registry (C2), approval execution path (G3-class external writes)
@@ -35,9 +35,10 @@ The repository now contains the first CG0/Cloud Run foundation:
   only the Grok subscription secret, plus an authenticated Sources connection
   flow that never exposes `auth.json` to the browser.
 
-The authenticated coding-run dispatcher, coding-run persistence/UI, and
-approval-gated PR publisher remain subsequent slices. The runner intentionally
-cannot push or create a PR.
+The authenticated coding-run dispatcher, persistence/UI, approval action, and
+trusted draft-PR publisher are now implemented locally for CG3. The runner
+intentionally cannot push or create a PR; the trusted dispatcher image performs
+publication in a separate mode after validating the approved result artifacts.
 
 The product already foreshadows GitHub as a source adapter in Sources copy (“Issues and comments from explicitly selected repositories”). This proposal makes that real and adds the write/execution half.
 
@@ -94,9 +95,9 @@ decision:
         ↓
 Cloud Run coding job starts (workspace + Grok ACP agent)
         ↓
-agent implements, runs tests, commits on a branch
+agent implements, runs tests, emits immutable result artifacts
         ↓
-typed action github.pr.create executes (idempotent)
+the already-approved action publishes one branch + one draft PR (idempotent)
         ↓
 PR URL + head SHA + check status stored; issue linked; queue updated
 ```
@@ -112,8 +113,8 @@ Human responsibility remains the default. **Automation is an explicit, versioned
 | Resource | Selected GitHub repository (and optionally projects/labels filters) |
 | ContextItem | `github.issue`, `github.issue_comment`, later `github.pr` |
 | Thread / agent run | Coding session stream (tool calls, thoughts, commands) as derived state |
-| Proposal + Decision | Claim, implement, open-PR, comment — external effects |
-| Action registry | `github.issue.claim`, `github.issue.comment`, `github.pr.create`, `github.pr.request_review` |
+| Proposal + Decision | One bounded `coding.issue.implement` delegation before Grok starts |
+| Action registry | `coding.issue.implement`; later `github.issue.claim`, `github.issue.comment`, `github.pr.request_review` |
 | ActionExecution | Provider-aware idempotency + `outcome_unknown` reconciliation |
 | Cloud Run | Existing pattern for API/ingest/processor; **new Jobs service** for long coding runs |
 | Approval UI | Reuse decision cards; add coding-run detail (diff stats, PR link, logs) |
@@ -142,7 +143,7 @@ context.github.issue.read          observe selected repos' issues + comments
 context.github.pr.read             observe PRs (optional v1.1)
 action.github.issue.claim          assign / label "in progress" / comment claim
 action.github.issue.comment        post a structured progress/result comment
-action.github.pr.create            open PR from branch
+action.coding.issue.implement      approved Grok run + one result branch + draft PR
 action.github.pr.request_review    optional later
 ```
 
@@ -218,9 +219,8 @@ type CodingAutomationPolicy = {
     requiredChecks?: string[]        // wait / report only
   }
   approval: {
-    // Human gate vs delegated automation
-    claimRequiresApproval: boolean
-    openPrRequiresApproval: boolean  // default true for first production week
+    // Human gate before the implementation starts
+    implementationRequiresApproval: boolean // always true in CG3
     approverUids?: string[]          // named approvers; empty = repo code owners mapping later
   }
   publishedBy: string
@@ -234,8 +234,8 @@ Publishing a policy is itself a consequential company action: either admin-only 
 ### 8.2 Claim flow
 
 1. Webhook / reconcile sees issue matching active policy.
-2. Worker creates `CodingRun` in `queued` and optionally an Erik `task` for visibility.
-3. If `claimRequiresApproval`: proposal card; else execute `github.issue.claim` under policy digest.
+2. Worker creates an immutable `coding.issue.implement` approval proposal.
+3. Only approval execution creates the `CodingRun` and queues Grok.
 4. Claim action is idempotent on `(connectionId, repo, issueNumber)` — redelivery must not double-assign spam.
 5. Issue ContextItem updates; agent thread links to the run.
 
@@ -243,10 +243,12 @@ Publishing a policy is itself a consequential company action: either admin-only 
 
 - only issues with label `erik-implement`;
 - draft PR only;
-- **open PR requires human approval** after the agent finishes;
+- implementation requires human approval before Grok starts;
+- that approval explicitly authorizes one result branch and one automatic draft PR;
 - claim may be automatic (label + bot comment) to avoid queue lag.
 
-This satisfies “automated taking” without unsupervised external writes of code.
+The draft PR is the review artifact. There is no second approval merely to create it,
+and there is still no automatic merge or deploy.
 
 ## 9. Cloud Run implementation plane
 
@@ -273,8 +275,8 @@ Coding sessions need:
 ### 9.2 Job lifecycle
 
 ```text
-queued → provisioning → cloning → agent_running → verifying →
-  awaiting_pr_approval → opening_pr → succeeded
+approval_pending → queued → provisioning → cloning → agent_running → verifying →
+  ready_to_publish → publishing → succeeded
                        ↘ failed_safe_to_retry
                        ↘ failed_terminal
                        ↘ cancelled
@@ -314,30 +316,26 @@ The job process (Erik coding host):
 5. Stream updates to `codingRuns/{id}/events/*`.
 6. On agent stop: run project test command if configured (from repo policy or `erik.yaml` later).
 7. If tests fail and attempts remain: optional second agent turn with failure logs.
-8. Emit a patch and result Git bundle to GCS; mark run `awaiting_pr_approval`.
-9. A separate approved GitHub action pushes/opens the PR; the runner never receives write credentials.
+8. Emit a patch and result Git bundle to GCS; mark run `ready_to_publish`.
+9. The trusted publisher verifies the original approval digest, base/result SHA,
+   bundle checksum, limits, and target branch; it then pushes and opens the draft PR.
+   The runner never receives GitHub credentials.
 
 ## 10. Opening pull requests
 
 ### 10.1 Typed action
 
 ```ts
-// action.github.pr.create
+// action.coding.issue.implement
 {
-  kind: "github.pr.create",
-  connectionId: string,
-  repoResourceId: string,
-  owner: string,
-  repo: string,
-  headBranch: string,
-  baseBranch: string,
-  title: string,
-  body: string,              // includes issue close keyword, run link, summary
-  draft: boolean,
-  issueNumber: number,
-  codingRunId: string,
-  headSha: string,           // expected remote tip for precondition
-  idempotencyKey: string     // companyId + codingRunId + "pr.create"
+  kind: "coding.issue.implement",
+  runId: string,
+  github: { connectionId, repoResourceId, repositoryId, issueNumber,
+            issueContextItemId, issueVersion, issueChecksum },
+  git: { baseBranch, baseSha, resultBranch },
+  grok: { connectionId: "grok_subscription", authKind: "subscription_oauth" },
+  limits: { maxRuntimeMinutes, maxTurns, maxChangedFiles, maxPatchBytes, maxArtifactBytes },
+  publication: { draft: true, prTitle, prBody }
 }
 ```
 
@@ -345,10 +343,12 @@ Registry traits:
 
 - `category: "external.write"`
 - `requiresApproval: true` (always at descriptor level)
-- Automation policy may supply a **pre-recorded decision** bound to policy digest + run digest only when `openPrRequiresApproval: false`
-- `idempotency: "provider_aware"` — reconcile by branch + open PR search before create
+- approval is bound to the exact issue snapshot, base SHA, result branch, limits,
+  Grok subscription auth kind, and automatic draft-PR effect;
+- `idempotency: "provider_aware"` — reconcile by branch SHA + open PR search before create
 - `reconciliation: "required_before_retry"`
-- result: `{ prNumber, prUrl, nodeId, draft }`
+- immediate action result: `{ codingRunId, status: "queued" | "packaging" }`;
+- durable run result: `{ pullRequestNumber, pullRequestUrl, branch, draft }`
 
 ### 10.2 PR body contract (minimum)
 
@@ -438,15 +438,16 @@ The complete product must expose the entire lifecycle in the authenticated web a
    - show account label/team, last authentication, last successful run, and **Reconnect**/**Disconnect** controls;
    - never display, upload, or return `auth.json`, refresh tokens, or an xAI API-key field.
 3. **Automation / Coding policies** (admin)
-   - repository and label filters, concurrency/runtime/turn limits, approval toggles, draft-PR default;
+   - repository and label filters, concurrency/runtime/turn limits, named approver, draft-PR-only default;
    - policy preview and immutable published-version digest.
 4. **Work queue**
-   - coding runs as tasks: Queued / Provisioning / Running / Needs PR approval / PR opened / Failed / Cancelled;
+   - coding approvals and runs: Awaiting approval / Queued / Running / Publishing / PR opened / Failed / Cancelled;
    - clear subscription-attention state instead of a generic runner failure.
 5. **Coding run detail**
    - issue evidence, current phase, bounded live event timeline, changed files/diff, model/turn/runtime metadata, and test evidence;
-   - Cancel, Retry, Download artifact, Approve PR, Reject, and Request changes actions according to state;
-   - approval shows the exact branch, base/head SHA, PR title/body, and disclosed external effects.
+   - Reject before execution; Cancel active runs; Download artifact; open the resulting PR;
+   - approval shows issue snapshot, exact base SHA, result branch, Grok subscription auth,
+     limits, automatic draft-PR creation, and the explicit absence of merge/deploy.
 6. **Agent thread (optional)**
    - factual agent can answer “what’s the status of issue 128?” via ContextItems + CodingRun tools (read-only).
 
@@ -475,20 +476,20 @@ startup.
 
 Align with the connector epic style: one complete loop per slice.
 
-**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 read connector authenticates the configured GitHub App from Secret Manager, lists the installation's repositories, requires a separate Erik-side repository opt-in, and projects selected repositories' issues/comments into tenant-scoped ContextItems. Its signed webhook path is tenant-routed by installation, delivery-deduplicated, asynchronously processed, health-visible in Sources, and backed by 30-minute reconciliation. Installation tokens remain memory-only and the adapter rejects write permissions. CG1 is complete after the deployed webhook receives a live issue delivery and the product agent cites that issue. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth` and produced exactly the requested one-file patch. No xAI API key is accepted, and the OAuth session reached neither the browser nor the repository workspace. CG3 still lacks the authenticated control-plane run record, GitHub branch publisher, and web run surfaces.
+**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 connector observes selected repositories using downscoped read-only installation tokens; the App installation requests Contents and Pull requests write for the separately scoped trusted publisher. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth`. **CG3 is deployed and awaits one live acceptance run:** label `erik-implement` or the Coding UI creates an immutable approval first; approval queues a durable run; the isolated Grok runner emits bounded artifacts; and the trusted dispatcher/publisher pushes one deterministic branch and opens one draft PR idempotently. The existing GitHub installation must still accept the requested Contents/Pull requests write grants, with Issues kept read-only, before that acceptance run. No xAI API key, automatic merge, or deploy exists.
 
 | Slice | Outcome | Exit criteria |
 | --- | --- | --- |
 | **CG0** | Spike: one repo, PAT or App, manual issue → local/container Grok → manual PR | Operator can complete loop offline; document ACP host gaps |
 | **CG1** | GitHub observe connector in Erik | Selected repos’ issues as ContextItems; agent can cite an issue; disconnect deletes context |
 | **CG2** | Grok subscription web connection + secret plumbing | Admin completes device OAuth from the web UI; coding job authenticates with cached state; API-key auth is disabled; session never reaches browser/workspace |
-| **CG3** | Cloud Run Job coding host (no auto PR) | Manual “Implement” from an issue creates run, branch pushed, artifacts stored |
-| **CG4** | Typed `github.pr.create` + approval card | Human approves exact title/body/branch; PR opens once; retry safe |
-| **CG5** | Claim action + label policy | Label `erik-implement` auto-claims and queues run; audit shows policy digest |
-| **CG6** | Policy-delegated PR (optional) | Repo with `openPrRequiresApproval: false` opens draft PR under published policy without per-run click |
-| **CG7** | Operator recovery | Cancel run, retry failed, reconcile orphan branches/PRs, attention states on connection |
+| **CG3** | Approved issue → Grok → automatic draft PR | Workflow/UI creates one immutable approval; reject causes no run/write; approve queues Grok; exactly one result branch and draft PR open; retries reconcile safely |
+| **CG4** | Operator recovery + PR follow-up | Reconcile `outcome_unknown`, cancel/retry as linked attempts, request changes, recover orphan branches/PRs |
+| **CG5** | Configurable coding policy UI | Admin configures repository/label/approver/limits instead of the CG3 fixed `erik-implement` workflow |
+| **CG6** | Policy-delegated implementation (optional) | Published policy authorizes matching issues to run and open draft PRs without a per-issue approval |
+| **CG7** | Advanced fleet controls | Concurrency quotas, fairness, retention/export, broader check-suite integration |
 
-**Suggested first production path:** CG1 → CG2 → CG3 → CG4 (human-approved PRs) → CG5 (auto-claim only). Defer CG6 until trust is earned.
+**Suggested first production path:** CG1 → CG2 → CG3 (human-approved implementation and automatic draft PR) → CG4 recovery → CG5 policy UI. Defer CG6 until trust is earned.
 
 ### Rough effort (order of magnitude)
 
@@ -497,9 +498,9 @@ Align with the connector epic style: one complete loop per slice.
 | CG0 spike | 2–3 |
 | CG1 GitHub read | 4–6 |
 | CG2 Grok connection | 1–2 |
-| CG3 Job host | 6–10 |
-| CG4 PR action + UI | 3–5 |
-| CG5 Auto-claim | 2–4 |
+| CG3 approved issue-to-draft-PR loop | 8–12 |
+| CG4 recovery + PR follow-up | 3–5 |
+| CG5 coding policy UI | 2–4 |
 | CG6 Delegated PR | 2–3 |
 | CG7 Recovery | 2–4 |
 
@@ -520,7 +521,7 @@ Total to human-approved automated claim+PR loop: roughly **3–5 weeks** calenda
 | --- | --- |
 | Prompt injection via malicious issue text | Strict system/policy vs evidence boundary; no credential tools in agent; network allowlist |
 | Exhausted shared Grok subscription allowance or unbounded Cloud Run time | Turn/time/concurrency caps; draft-only; label opt-in; surface subscription attention state |
-| Flaky or wrong PRs erode trust | Default human PR approval; draft PRs; required tests when configured |
+| Flaky or wrong PRs erode trust | Human approval before Grok, bounded delegation, draft-only PRs, normal GitHub review before merge |
 | GitHub App permission creep | Split read/write product capabilities; incremental auth messaging |
 | Long jobs vs platform timeouts | Cloud Run Jobs, not HTTP request handlers |
 | Secret leakage in commits | Pre-push secret scan; block push on hit; scrub event logs |
@@ -541,19 +542,20 @@ Total to human-approved automated claim+PR loop: roughly **3–5 weeks** calenda
 
 1. Admin installs GitHub App on org `acme`, enables repo `acme/widget`.
 2. Admin connects a dedicated Grok subscription through device OAuth; no xAI API key is stored.
-3. Admin publishes policy: label `erik-implement`, auto-claim, **PR requires approval**, draft PR, base `main`.
+3. Admin enables the fixed CG3 workflow: label `erik-implement`, named approver, draft PR, base `main`.
 4. Developer opens issue #42 with label `erik-implement`.
-5. Within a minute Erik claims the issue (bot comment + label `erik-claimed`) and starts a coding job.
-6. Work queue shows run Running; detail streams tool activity.
-7. Job finishes; proposal card shows branch, summary, test results, exact PR title/body.
-8. Approver clicks Approve; `github.pr.create` opens draft PR linking #42.
+5. Erik creates an approval showing the issue snapshot, exact base SHA, limits,
+   deterministic branch, Grok subscription OAuth, and automatic draft-PR effect.
+6. Approver clicks Approve; only then does the coding job start.
+7. Work queue shows Running then Publishing; detail streams bounded activity and artifacts.
+8. The trusted publisher opens exactly one draft PR linking #42; GitHub remains the code-review/merge gate.
 9. Audit shows policy digest, decision actor, execution result, PR number.
 10. Disconnecting GitHub stops new claims and removes normalized context per connector rules; open PRs remain on GitHub.
 
 ## 19. Decision gates (before scheduling)
 
 1. **Auth:** GitHub App vs user OAuth for v1? (**Recommend App.**)
-2. **PR gate:** Always human for first production month? (**Recommend yes.**)
+2. **Implementation gate:** Always human before Grok for first production month? (**Yes for CG3.**)
 3. **Runtime:** Bundle Grok CLI in Job image vs xAI remote agent API only? (**Spike in CG0.**)
 4. **Queue UX:** Separate Coding page vs Tasks only?
 5. **Priority vs Gmail epic:** Does this interrupt C3–G3, or run as parallel R1 after C3?
@@ -565,20 +567,23 @@ Implement as a **new coding-agent epic** (`CG0–CG7`) that:
 - reuses the connector + action + approval kernels;
 - adds GitHub observe + execute capabilities and a Grok provider connection;
 - introduces a Cloud Run Job coding host;
-- ships **auto-claim + human-approved draft PRs** first;
+- ships **workflow-created, human-approved implementation with an automatic draft PR** first;
 - only then considers policy-delegated PR opening.
 
 This matches Agent Erik’s product promise: agents do the work, people (or explicit policy) remain accountable for consequential GitHub effects, and every step is inspectable.
 
 ## 21. Next concrete step
 
-If accepted, start **CG0** as a spike branch:
+Deploy and accept **CG3**:
 
-1. Dockerfile with git + grok CLI.
-2. Script: immutable run spec + signed Git bundle → headless Grok subscription run → patch/result bundle artifact.
-3. Record wall time, failure modes, and secret handling notes.
-4. Promote findings into CG1–CG4 detailed tickets without expanding product scope.
+1. Deploy the runner and trusted dispatcher/publisher images plus Functions/UI.
+2. Refresh the GitHub connection so Erik records the updated App grants while
+   observation tokens remain read-only.
+3. Request implementation for one harmless issue, verify that no run starts before approval,
+   then approve it.
+4. Verify one Grok subscription run, one deterministic branch, one draft PR,
+   the PR deep link in Coding, and the approval/run audit trail.
 
 ---
 
-*Authoring note: this document is a proposal only. It does not change the connector epic status or schedule until product accepts the decision gates in §19.*
+*Authoring note: the product direction is accepted through CG3; later policy delegation still requires an explicit decision.*

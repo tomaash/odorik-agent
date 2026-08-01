@@ -96,14 +96,18 @@ export const workflowActionSchema = z.union([
 
 export type WorkflowAction = z.infer<typeof workflowActionSchema>;
 
-export type WorkflowActionSource = {
+type WorkflowSourceBase = {
   kind: "workflow";
-  callId: string;
   workflowId: string;
   workflowVersion: number;
   runId: string;
   blockId: string;
 };
+
+export type WorkflowActionSource = WorkflowSourceBase & (
+  | { callId: string; issueContextItemId?: never }
+  | { issueContextItemId: string; callId?: never }
+);
 
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);

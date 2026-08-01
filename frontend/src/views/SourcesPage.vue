@@ -266,9 +266,11 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/calendar.events.readonly': t('sources.scopes.calendarEvents'),
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
     'contents:read': t('sources.scopes.githubContents'),
+    'contents:write': t('sources.scopes.githubContentsWrite'),
     'issues:read': t('sources.scopes.githubIssues'),
     'metadata:read': t('sources.scopes.githubMetadata'),
     'pull_requests:read': t('sources.scopes.githubPullRequests'),
+    'pull_requests:write': t('sources.scopes.githubPullRequestsWrite'),
   }[scope] || scope
 }
 

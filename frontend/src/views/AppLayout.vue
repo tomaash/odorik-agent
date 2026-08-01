@@ -25,6 +25,7 @@ const navigation = [
   { to: '/ask', icon: 'pi pi-comment', label: 'nav.ask' },
 ]
 const secondaryNavigation = [
+  { to: '/coding', icon: 'pi pi-code', label: 'nav.coding' },
   { to: '/workflows', icon: 'pi pi-sitemap', label: 'nav.workflows' },
   { to: '/sources', icon: 'pi pi-database', label: 'nav.sources' },
   { to: '/team', icon: 'pi pi-users', label: 'nav.team' },

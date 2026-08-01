@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -9,7 +9,7 @@ import { prepareDependencies } from "../dependencies.js";
 
 const exec = promisify(execFile);
 
-test("locked npm dependencies are installed without repository lifecycle scripts", async () => {
+test("repository dependency metadata is never executed by the supervisor", async () => {
   const repository = await mkdtemp(join(tmpdir(), "erik-runner-deps-"));
   await exec("git", ["init"], { cwd: repository });
   await writeFile(
@@ -32,7 +32,10 @@ test("locked npm dependencies are installed without repository lifecycle scripts
   );
 
   const result = await prepareDependencies(repository);
-  assert.equal(result.kind, "npm-ci-ignore-scripts");
-  await assert.rejects(access(join(repository, "pwned")));
+  assert.equal(result.kind, "unavailable");
+  assert.equal(await readFile(join(repository, "package.json"), "utf8").then((value) => value.includes("pwned")), true);
   assert.match(await readFile(join(repository, ".git", "info", "exclude"), "utf8"), /node_modules/);
+
+  await mkdir(join(repository, "node_modules"));
+  assert.equal((await prepareDependencies(repository)).kind, "preinstalled");
 });

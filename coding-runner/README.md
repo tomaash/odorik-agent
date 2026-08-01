@@ -32,7 +32,12 @@ The Job service account has access only to the Grok subscription secret. It has 
 
 The separate `erik-coding-signer` service account has object access to the coding artifact bucket and never runs repository code. The control plane may impersonate only this signer to mint short-lived per-run URLs. An operator can run `infra/smoke-coding-runner.sh` after receiving Token Creator on the signer service account.
 
-For Node repositories with a committed `package-lock.json`, the supervisor performs `npm ci --ignore-scripts` before Grok starts. It passes no application/cloud credentials and suppresses dependency lifecycle scripts. Grok can then run tests inside the strict sandbox, whose Linux child-network policy blocks metadata and outbound access. Other package managers need an equivalent reviewed bootstrap before they can be enabled.
+The supervisor never resolves repository-controlled dependencies. Even with
+lifecycle scripts disabled, a lockfile can cause network requests while Cloud
+Run metadata is reachable. Existing/pre-provisioned dependencies may be used by
+Grok inside the strict sandbox; otherwise dependency-requiring checks are
+reported as unavailable. A later credential-free preparation Job may provide
+reviewed dependency trees without widening the runner boundary.
 
 ## Input contract
 
@@ -41,6 +46,7 @@ The Cloud Run execution receives:
 ```text
 RUN_ID=<same ID as the run spec>
 RUN_SPEC_URL=<short-lived signed HTTPS GET URL>
+CODING_CALLBACK_URL=<authenticated status callback audience and endpoint>
 ```
 
 The URL returns JSON:
@@ -63,7 +69,8 @@ The URL returns JSON:
     "maxTurns": 30
   },
   "artifacts": {
-    "uploadUrl": "https://signed-artifact-put-url"
+    "uploadUrl": "https://signed-artifact-put-url",
+    "patchUploadUrl": "https://signed-patch-put-url"
   },
   "limits": {
     "maxSourceBytes": 2147483648,
@@ -86,7 +93,8 @@ The control plane must construct the bundle from the exact approved base commit,
 
 ## Output contract
 
-The runner uploads an `application/gzip` archive containing:
+The runner uploads an `application/gzip` archive and, when requested by the
+run spec, a separately reviewable `text/x-diff` patch containing:
 
 ```text
 run-result.json       machine-readable status and commit metadata
@@ -97,7 +105,7 @@ result.bundle         result commit, omitted when there are no changes
 grok-output.ndjson    bounded and basic-pattern-redacted headless output
 ```
 
-Changed-file count, patch size, total artifact size, and likely-secret patterns are checked before upload. The result bundle has `baseSha` as a prerequisite and can be applied by the separate, approval-gated GitHub publisher.
+Changed-file count, patch size, total artifact size, and likely-secret patterns are checked before upload. The result bundle has `baseSha` as a prerequisite and is applied by the trusted publisher under the implementation approval that existed before this runner started.
 
 ## Local verification
 
@@ -122,9 +130,11 @@ From the repository root:
 
 ```bash
 infra/bootstrap-coding-runner.sh
+infra/bootstrap-coding-dispatcher.sh
 infra/bootstrap-grok-auth-worker.sh
 infra/deploy-grok-auth-worker.sh
 infra/deploy-coding-runner.sh
+infra/deploy-coding-dispatcher.sh
 ```
 
 The authenticated Sources flow performs the normal device login. The separate
@@ -142,6 +152,14 @@ gcloud run jobs execute erik-coding-runner \
   --wait
 ```
 
-The future Erik dispatcher should use `roles/run.jobsExecutorWithOverrides` on this one Job. The deployment script grants that role to the existing `odorik-crm` service account when it exists.
+The trusted `erik-coding-dispatcher` uses
+`roles/run.jobsExecutorWithOverrides` on this one Job. It refetches the
+canonical issue and exact default-branch SHA, creates the Git bundle without
+checking out repository content, and never receives the Grok secret. The
+runner reports bounded phases and completion through a Google identity-token
+callback; signed source/upload URLs never enter Firestore or Grok's process
+environment. After a successful changed result, the same trusted image runs in
+publish mode to push the deterministic result branch and open a draft PR; the
+runner still receives no GitHub credential.
 
 The first verified production smoke execution, `erik-coding-runner-k56fj`, completed on 2026-07-31. It authenticated with Grok subscription OAuth, changed exactly one file in the strict sandbox, produced a verified result bundle, and uploaded the immutable artifact. This validates the Cloud Run second-generation namespace support required by Grok's Linux sandbox as well as the disk-backed ephemeral volume path.

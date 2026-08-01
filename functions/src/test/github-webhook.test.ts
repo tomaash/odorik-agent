@@ -237,8 +237,12 @@ test("selected repository events fetch canonical comments and update context ide
     database: memory.asFirestore(),
     observedAt: Timestamp.fromDate(new Date("2026-07-31T12:30:00Z")),
   };
-  assert.deepEqual(await processGitHubWebhookDelivery(input), { outcome: "issue_upserted" });
-  assert.deepEqual(await processGitHubWebhookDelivery(input), { outcome: "issue_upserted" });
+  const expected = {
+    outcome: "issue_upserted",
+    issueContextItemId: githubIssueContextItemId(connectionId, repository.id, issue.id),
+  };
+  assert.deepEqual(await processGitHubWebhookDelivery(input), expected);
+  assert.deepEqual(await processGitHubWebhookDelivery(input), expected);
 
   const contextId = githubIssueContextItemId(connectionId, repository.id, issue.id);
   const context = memory.read(`companies/explorers/contextItems/${contextId}`);

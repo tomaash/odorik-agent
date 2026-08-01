@@ -1,0 +1,50 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: __DISPATCHER_JOB__
+  labels:
+    cloud.googleapis.com/location: __CODING_REGION__
+spec:
+  template:
+    spec:
+      taskCount: 1
+      parallelism: 1
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: "1200"
+          serviceAccountName: __DISPATCHER_SERVICE_ACCOUNT__
+          containers:
+            - name: coding-dispatcher
+              image: __DISPATCHER_IMAGE__
+              env:
+                - name: GCP_PROJECT_ID
+                  value: __PROJECT_ID__
+                - name: CODING_REGION
+                  value: __CODING_REGION__
+                - name: CODING_RUNNER_JOB
+                  value: __CODING_RUNNER_JOB__
+                - name: CODING_ARTIFACT_BUCKET
+                  value: __CODING_BUCKET__
+                - name: CODING_SIGNER_SERVICE_ACCOUNT
+                  value: __CODING_SIGNER_SERVICE_ACCOUNT__
+                - name: GITHUB_CLIENT_ID
+                  value: __GITHUB_CLIENT_ID__
+                - name: GITHUB_PRIVATE_KEY_PATH
+                  value: /secrets/github/private-key.pem
+              resources:
+                limits:
+                  cpu: "1"
+                  memory: 1Gi
+              volumeMounts:
+                - name: github-app-private-key
+                  mountPath: /secrets/github
+                  readOnly: true
+          volumes:
+            - name: github-app-private-key
+              secret:
+                secretName: GITHUB_APP_PRIVATE_KEY
+                items:
+                  - key: latest
+                    path: private-key.pem
+                    mode: 0400
