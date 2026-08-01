@@ -68,6 +68,12 @@ import {
   githubConfigurationFromEnvironment,
   syncGitHubConnection,
 } from "./connectors/github.js";
+import {
+  createCloudRunGrokAuthJobExecutor,
+  getGrokAuthorization,
+  GrokAuthorizationError,
+  startGrokAuthorization,
+} from "./connectors/grok-subscription.js";
 import type { SourceCapabilityId } from "./connectors/types.js";
 import {
   acceptTeamInvitation,
@@ -107,6 +113,7 @@ export const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
 export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
+const executeGrokAuthJob = createCloudRunGrokAuthJobExecutor();
 
 async function getAccess(uid: string) {
   return registrationStatus(uid);
@@ -306,6 +313,56 @@ export const appRouter = router({
           connectionId: input.connectionId,
           configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
         })),
+    }),
+    grok: router({
+      connect: adminProcedure.mutation(async ({ ctx }) => {
+        try {
+          return await startGrokAuthorization({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            action: "connect",
+            executeJob: executeGrokAuthJob,
+          });
+        } catch (error) {
+          if (error instanceof GrokAuthorizationError) {
+            throw new TRPCError({
+              code: error.statusCode === 409 ? "CONFLICT" : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+      status: adminProcedure
+        .input(z.object({
+          sessionId: z.string().regex(/^grok_[a-f0-9]{32}$/),
+        }))
+        .query(({ ctx, input }) => getGrokAuthorization({
+          companyId: ctx.companyId,
+          sessionId: input.sessionId,
+        })),
+      disconnect: adminProcedure.mutation(async ({ ctx }) => {
+        try {
+          return await startGrokAuthorization({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            action: "disconnect",
+            executeJob: executeGrokAuthJob,
+          });
+        } catch (error) {
+          if (error instanceof GrokAuthorizationError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
     }),
     addOdorik: adminProcedure
       .mutation(async ({ ctx }) => {
@@ -570,8 +627,8 @@ export const appRouter = router({
         dimensions: embeddingDimensions,
         sparse: "qdrant/bm25",
       };
+      }),
     }),
-  }),
 
   tasks: router({
     list: enabledProcedure

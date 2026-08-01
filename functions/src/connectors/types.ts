@@ -2,10 +2,11 @@ export const connectorIds = [
   "odorik",
   "google_workspace",
   "github",
+  "grok_subscription",
 ] as const;
 
 export type ConnectorId = typeof connectorIds[number];
-export type ProviderId = "odorik" | "google" | "github";
+export type ProviderId = "odorik" | "google" | "github" | "grok";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
 export type CapabilityStatus =
@@ -59,8 +60,13 @@ export type ConnectionPublicView = {
   tenantId?: string;
   displayName: string;
   status: ConnectionStatus;
-  authKind: "basic_upload" | "oauth2" | "github_app";
-  credentialMode: "encrypted" | "legacy_secret" | "shared_secret" | "none";
+  authKind: "basic_upload" | "oauth2" | "github_app" | "subscription_oauth";
+  credentialMode:
+    | "encrypted"
+    | "legacy_secret"
+    | "shared_secret"
+    | "managed_secret"
+    | "none";
   uploadUrl?: string;
   accountLabel?: string;
   grantedScopes: string[];
@@ -73,6 +79,22 @@ export type ConnectionPublicView = {
     lastEvent?: string | null;
     lastAction?: string | null;
     lastOutcome?: string | null;
+    lastError?: string | null;
+  };
+  subscription?: {
+    state:
+      | "connecting"
+      | "waiting_for_user"
+      | "active"
+      | "attention"
+      | "disconnecting"
+      | "disconnected";
+    currentAuthSessionId?: string | null;
+    teamId?: string | null;
+    lastAuthenticatedAt?: string | null;
+    sessionExpiresAt?: string | null;
+    lastSuccessfulRunAt?: string | null;
+    lastDisconnectedAt?: string | null;
     lastError?: string | null;
   };
   /** The provider grant is gone; only fresh consent restores the connection. */

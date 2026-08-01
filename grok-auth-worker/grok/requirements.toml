@@ -1,0 +1,8 @@
+[cli]
+auto_update = false
+
+[grok_com_config]
+disable_api_key_auth = true
+
+[ui]
+yolo = false

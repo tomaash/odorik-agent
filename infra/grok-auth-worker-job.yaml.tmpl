@@ -1,0 +1,38 @@
+apiVersion: run.googleapis.com/v1
+kind: Job
+metadata:
+  name: __GROK_AUTH_JOB__
+  labels:
+    cloud.googleapis.com/location: __GROK_AUTH_REGION__
+spec:
+  template:
+    spec:
+      taskCount: 1
+      parallelism: 1
+      template:
+        spec:
+          maxRetries: 0
+          timeoutSeconds: "1200"
+          serviceAccountName: __GROK_AUTH_SERVICE_ACCOUNT__
+          containers:
+            - name: grok-auth-worker
+              image: __GROK_AUTH_IMAGE__
+              env:
+                - name: HOME
+                  value: /home/grok-auth
+                - name: GCP_PROJECT_ID
+                  value: __PROJECT_ID__
+                - name: GROK_AUTH_ACTION
+                  value: connect
+                - name: GROK_AUTH_SESSION_ID
+                  value: grok_00000000000000000000000000000000
+                - name: GROK_AUTH_SECRET_NAME
+                  value: grok-subscription-auth
+                - name: GROK_AUTH_CALLBACK_URL
+                  value: https://agent-erik-app.web.app/callbacks/grok-auth
+                - name: GROK_HOME
+                  value: /home/grok-auth/.grok
+              resources:
+                limits:
+                  cpu: "1"
+                  memory: 1Gi

@@ -23,6 +23,7 @@ cleanup() {
 trap cleanup EXIT
 chmod 0700 "$AUTH_TMP_DIR"
 
+echo "Break-glass operator login: the normal connection path is Sources → Grok subscription."
 echo "Connecting a Grok subscription with device OAuth. No xAI API key is used."
 env -u XAI_API_KEY GROK_HOME="$AUTH_TMP_DIR" grok login --device-auth
 
@@ -39,9 +40,21 @@ if ! gcloud secrets describe grok-subscription-auth --project="$PROJECT_ID" >/de
     --labels=auth-kind=subscription-oauth,consumer=coding-runner \
     --project="$PROJECT_ID"
 fi
-gcloud secrets versions add grok-subscription-auth \
+NEW_VERSION="$(gcloud secrets versions add grok-subscription-auth \
   --data-file="$AUTH_FILE" \
-  --project="$PROJECT_ID" >/dev/null
+  --format='value(name)' \
+  --project="$PROJECT_ID")"
+
+while IFS= read -r version; do
+  if [[ -n "$version" && "$version" != "$NEW_VERSION" ]]; then
+    gcloud secrets versions disable "$version" \
+      --secret=grok-subscription-auth \
+      --project="$PROJECT_ID" >/dev/null
+  fi
+done < <(gcloud secrets versions list grok-subscription-auth \
+  --filter='state=ENABLED' \
+  --format='value(name)' \
+  --project="$PROJECT_ID")
 
 echo "Grok subscription session stored as a new Secret Manager version."
-echo "Reconnect by running this script again if a job reports attention_required authentication."
+echo "The previous enabled versions were disabled. Use Sources for future reconnects."

@@ -12,7 +12,10 @@ The runner uses a **Grok subscription OAuth session**, obtained with `grok login
 - Grok runs as UID `10001`, while repository preparation runs as UID `10002`;
 - the runner has no GitHub write credential and does not push or create pull requests.
 
-The cached session may eventually need reconnection. For the MVP, an authentication failure is an operator attention state: rerun `infra/configure-grok-subscription.sh` to add a fresh Secret Manager version.
+The cached session may eventually need reconnection. An authentication failure
+becomes a visible subscription attention state; an administrator reconnects in
+**Sources → Grok subscription**. `infra/configure-grok-subscription.sh` remains
+only a break-glass operator path.
 
 ## Security boundary
 
@@ -119,9 +122,14 @@ From the repository root:
 
 ```bash
 infra/bootstrap-coding-runner.sh
-infra/configure-grok-subscription.sh
+infra/bootstrap-grok-auth-worker.sh
+infra/deploy-grok-auth-worker.sh
 infra/deploy-coding-runner.sh
 ```
+
+The authenticated Sources flow performs the normal device login. The separate
+auth job uses 1 vCPU / 1 GiB and can rotate only the Grok subscription secret;
+the coding runner can read that secret but cannot update it.
 
 The deployment creates `erik-coding-runner` in `europe-west1` with 2 vCPU, 4 GiB RAM, a 10 GiB ephemeral ext4 volume, a 60-minute task timeout, and zero retries. Existing Firebase and Firestore resources remain in `europe-west3`.
 

@@ -155,6 +155,18 @@
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": []
+    },
+    {
+      "collectionGroup": "grokAuthSessions",
+      "fieldPath": "retainUntil",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "grokAuthSessionRoutes",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
     }
   ]
 }

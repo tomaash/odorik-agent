@@ -81,6 +81,9 @@ The existing vertical slice remains useful as a proving ground:
   in Secret Manager. Administrators connect the configured installation in
   Sources, explicitly include repositories (none are selected by default),
   and manually synchronize read-only issues and comments into `ContextItem`s.
+- Administrators connect a paid Grok subscription from Sources with xAI device
+  OAuth. A dedicated 1 vCPU / 1 GiB auth job writes the opaque session directly
+  to Secret Manager; the browser never receives it and no xAI API key is used.
 - Calls and calendar events normalize into company-scoped `ContextItem`
   documents before the same Qdrant indexing pipeline processes them.
 - All CRM, agent, connector, recording, and derived-search data is scoped to
@@ -161,6 +164,7 @@ of enabled company members.
 - `frontend/`: Vue 3, TypeScript, Pinia, PrimeVue, Tailwind, and Firebase Auth
 - `docs/`: target product, platform contracts, and implementation sequence
 - `coding-runner/`: isolated Cloud Run Job worker using Grok subscription OAuth
+- `grok-auth-worker/`: subscription-only device login and Secret Manager rotation
 - `firestore.rules`, `firestore.indexes.json`: named-database rules and indexes
 
 ## Local verification
@@ -237,6 +241,16 @@ only a minimized payload. A retryable Firestore worker fetches the canonical
 issue and comments with a short-lived installation token. The Sources UI shows
 webhook health; manual synchronization remains available, and
 `syncGitHubSources` reconciles enabled repositories every 30 minutes.
+
+Grok subscription connection uses `infra/bootstrap-grok-auth-worker.sh` and
+`infra/deploy-grok-auth-worker.sh`. The auth job has its own service account and
+can manage versions only on `grok-subscription-auth`; the coding job retains
+read-only access. The callback accepts only a Google-signed identity token for
+that exact worker service account and hosted audience. The official Grok Build
+OAuth grant currently includes broad Grok.com and Projects read/write scopes,
+so production should use a dedicated paid Grok account. Disconnecting in
+Sources disables every stored secret version; it does not revoke the grant at
+xAI.
 
 Team invitation delivery additionally binds `RESEND_API_KEY` to the API
 function, as does `sendPartnerForm`, which delivers the website's contact form.

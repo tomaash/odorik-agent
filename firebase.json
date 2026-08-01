@@ -17,6 +17,13 @@
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
         {
+          "source": "/callbacks/grok-auth",
+          "function": {
+            "functionId": "grokAuthCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/webhooks/github",
           "function": {
             "functionId": "githubWebhook",
@@ -60,6 +67,13 @@
       "public": "frontend/dist",
       "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
       "rewrites": [
+        {
+          "source": "/callbacks/grok-auth",
+          "function": {
+            "functionId": "grokAuthCallback",
+            "region": "europe-west3"
+          }
+        },
         {
           "source": "/webhooks/github",
           "function": {

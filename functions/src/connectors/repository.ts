@@ -91,6 +91,7 @@ export async function listSources(
     const stats = (data.stats || {}) as Record<string, unknown>;
     const auth = (data.auth || {}) as Record<string, unknown>;
     const webhook = (data.webhook || {}) as Record<string, unknown>;
+    const subscription = (data.subscription || {}) as Record<string, unknown>;
     const capabilities: CapabilityConfigurationPublicView[] = connectorId === "odorik"
       ? [{
         id: "calls",
@@ -148,7 +149,9 @@ export async function listSources(
         ? "google"
         : connectorId === "github"
           ? "github"
-          : "odorik",
+          : connectorId === "grok_subscription"
+            ? "grok"
+            : "odorik",
       providerAccountId: typeof data.providerAccountId === "string"
         ? data.providerAccountId
         : undefined,
@@ -180,6 +183,37 @@ export async function listSources(
         lastAction: typeof webhook.lastAction === "string" ? webhook.lastAction : null,
         lastOutcome: typeof webhook.lastOutcome === "string" ? webhook.lastOutcome : null,
         lastError: typeof webhook.lastError === "string" ? webhook.lastError : null,
+      } : undefined,
+      subscription: connectorId === "grok_subscription" ? {
+        state: [
+          "connecting",
+          "waiting_for_user",
+          "active",
+          "attention",
+          "disconnecting",
+          "disconnected",
+        ].includes(String(subscription.state))
+          ? subscription.state as NonNullable<ConnectionPublicView["subscription"]>["state"]
+          : "attention",
+        currentAuthSessionId: typeof subscription.currentAuthSessionId === "string"
+          ? subscription.currentAuthSessionId
+          : null,
+        teamId: typeof subscription.teamId === "string" ? subscription.teamId : null,
+        lastAuthenticatedAt: typeof subscription.lastAuthenticatedAt === "string"
+          ? subscription.lastAuthenticatedAt
+          : null,
+        sessionExpiresAt: typeof subscription.sessionExpiresAt === "string"
+          ? subscription.sessionExpiresAt
+          : null,
+        lastSuccessfulRunAt: typeof subscription.lastSuccessfulRunAt === "string"
+          ? subscription.lastSuccessfulRunAt
+          : null,
+        lastDisconnectedAt: typeof subscription.lastDisconnectedAt === "string"
+          ? subscription.lastDisconnectedAt
+          : null,
+        lastError: typeof subscription.lastError === "string"
+          ? subscription.lastError
+          : null,
       } : undefined,
       reauthorizationRequired: data.reauthorizationRequired === true,
       itemCount: Number(stats.itemCount || resources.reduce((sum, item) => sum + item.itemCount, 0)),
@@ -298,6 +332,11 @@ export async function setConnectionStatus(
       "Google Workspace account status is managed through authorization and revocation",
     );
   }
+  if (snapshot.data()?.connectorId === "grok_subscription") {
+    throw new Error(
+      "Grok subscription status is managed through its isolated authorization worker",
+    );
+  }
   await ref.set({
     status,
     updatedBy: actorUid,
@@ -315,6 +354,11 @@ export async function prepareConnectionDeletion(
   const snapshot = await ref.get();
   if (!snapshot.exists) throw new Error("Connection not found");
   const data = snapshot.data() || {};
+  if (data.connectorId === "grok_subscription") {
+    throw new Error(
+      "Disconnect the Grok subscription before removing its local connection record",
+    );
+  }
   await ref.set({
     status: "disconnected",
     deletionStartedBy: actorUid,

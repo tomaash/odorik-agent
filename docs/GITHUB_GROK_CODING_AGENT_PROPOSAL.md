@@ -1,7 +1,7 @@
 # Proposal: GitHub + Grok coding agent for Agent Erik
 
-**Status:** implementation started (CG0 runner foundation + CG1 read foundation)
-**Date:** 2026-07-31
+**Status:** implementation started (CG0 runner foundation + CG1 read foundation + CG2 subscription connection)
+**Date:** 2026-08-01
 **Working name:** Coding Agent slice (provider phase `R1` / coding-agent epic)
 **Depends on:** connector kernel (C0–C3), typed action registry (C2), approval execution path (G3-class external writes)
 
@@ -31,8 +31,13 @@ The repository now contains the first CG0/Cloud Run foundation:
 - `coding-runner/`: pinned Grok Build headless runner, subscription-only authentication policy, Git-bundle input, patch/result-bundle output, limits, redaction, and tests;
 - `infra/coding-runner-job.yaml.tmpl`: 2 vCPU / 4 GiB Cloud Run Job with a 10 GiB ephemeral ext4 disk in `europe-west1`;
 - `infra/bootstrap-coding-runner.sh`, `configure-grok-subscription.sh`, and `deploy-coding-runner.sh`: least-privilege GCP bootstrap, device-OAuth secret setup, and deployment.
+- `grok-auth-worker/`: a separate 1 vCPU / 1 GiB device-OAuth job that rotates
+  only the Grok subscription secret, plus an authenticated Sources connection
+  flow that never exposes `auth.json` to the browser.
 
-The GitHub connector, signed-URL dispatcher, coding-run persistence/UI, and approval-gated PR publisher remain subsequent slices. The runner intentionally cannot push or create a PR.
+The authenticated coding-run dispatcher, coding-run persistence/UI, and
+approval-gated PR publisher remain subsequent slices. The runner intentionally
+cannot push or create a PR.
 
 The product already foreshadows GitHub as a source adapter in Sources copy (“Issues and comments from explicitly selected repositories”). This proposal makes that real and adds the write/execution half.
 
@@ -158,7 +163,7 @@ ContextItems. A periodic full read sync reconciles missed deliveries.
 
 ### 7.2 Grok subscription
 
-**Auth:** a dedicated Grok subscription account signs in with `grok login --device-auth`. Grok Build stores a refreshable OAuth session in `auth.json`; Erik treats that file as opaque secret material in Google Secret Manager. This design deliberately rejects `XAI_API_KEY` and direct xAI API billing.
+**Auth:** a dedicated Grok subscription account signs in with `grok login --device-auth`. Grok Build stores a refreshable OAuth session in `auth.json`; Erik treats that file as opaque secret material in Google Secret Manager. This design deliberately rejects `XAI_API_KEY` and direct xAI API billing. The official Grok Build consent currently includes broad Grok.com and Grok Projects read/write scopes. Erik cannot narrow scopes controlled by xAI's OAuth client, so the connected subscription should not be a personal account containing unrelated chats or projects.
 
 **Product surface:** Sources or a new **Coding provider** section under company settings:
 
@@ -176,7 +181,7 @@ ContextItems. A periodic full read sync reconciles missed deliveries.
 | Coding runtime config | Max wall time, max turns, allowed commands, and repository limits |
 | Job secret mount | Read-only cached OAuth session copied outside the repository workspace |
 
-The subscription session is never placed in frontend configuration, Firestore, or the Git workspace. For the MVP, an expired/rotated session marks the connection `attention_required`; an administrator repeats device login and stores a new Secret Manager version. The Job does not receive permission to mutate Secret Manager.
+The subscription session is never placed in frontend configuration, Firestore, or the Git workspace. For the MVP, an expired/rotated session marks the connection `attention_required`; an administrator repeats device login from Sources and the auth-only worker stores a new Secret Manager version. The coding Job does not receive permission to mutate Secret Manager. Disconnect disables all enabled versions so new runner mounts fail; it does not revoke the OAuth grant at xAI.
 
 **Runtime:** pin `@xai-official/grok` in the runner image and use headless `grok --prompt-file ... --output-format streaming-json`. Run with `dontAsk`, explicit allow/deny rules, the strict workspace sandbox, no subagents/memory/web tools, and a root-owned `/etc/grok/requirements.toml` that disables API-key auth and bypass-permissions mode.
 
@@ -447,6 +452,13 @@ The complete product must expose the entire lifecycle in the authenticated web a
 
 The auth-only worker must use a different service account from the coding runner. It may add a version to the one company-specific Grok subscription secret, but it receives no repository, GitHub, Firestore-wide, or coding-artifact authority. The normal coding Job remains unable to update its own subscription secret.
 
+The deployed MVP uses a fixed secret assigned exclusively to one company in a
+server-owned mapping. This is intentional for the current single-company
+product; multi-company onboarding must provision a separate secret and
+secret-scoped IAM binding per company rather than reusing this name. The auth
+job needs 1 vCPU / 1 GiB: a live 512 MiB probe was OOM-killed during Grok CLI
+startup.
+
 ## 13. Security and tenancy
 
 - All user procedures derive `companyId` from membership. The public webhook
@@ -463,7 +475,7 @@ The auth-only worker must use a different service account from the coding runner
 
 Align with the connector epic style: one complete loop per slice.
 
-**Implementation status (2026-07-31):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 read connector authenticates the configured GitHub App from Secret Manager, lists the installation's repositories, requires a separate Erik-side repository opt-in, and projects selected repositories' issues/comments into tenant-scoped ContextItems. Its signed webhook path is tenant-routed by installation, delivery-deduplicated, asynchronously processed, health-visible in Sources, and backed by 30-minute reconciliation. Installation tokens remain memory-only and the adapter rejects write permissions. CG1 is complete after the deployed webhook receives a live issue delivery and the product agent cites that issue. CG3 still lacks the authenticated control-plane run record, GitHub branch publisher, and web run surfaces. The manual Grok auth script is deliberately operator scaffolding; CG2 is complete only when the web connection flow exists.
+**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 read connector authenticates the configured GitHub App from Secret Manager, lists the installation's repositories, requires a separate Erik-side repository opt-in, and projects selected repositories' issues/comments into tenant-scoped ContextItems. Its signed webhook path is tenant-routed by installation, delivery-deduplicated, asynchronously processed, health-visible in Sources, and backed by 30-minute reconciliation. Installation tokens remain memory-only and the adapter rejects write permissions. CG1 is complete after the deployed webhook receives a live issue delivery and the product agent cites that issue. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth` and produced exactly the requested one-file patch. No xAI API key is accepted, and the OAuth session reached neither the browser nor the repository workspace. CG3 still lacks the authenticated control-plane run record, GitHub branch publisher, and web run surfaces.
 
 | Slice | Outcome | Exit criteria |
 | --- | --- | --- |

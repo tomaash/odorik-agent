@@ -416,7 +416,7 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type ConnectorId = 'odorik' | 'google_workspace' | 'github'
+export type ConnectorId = 'odorik' | 'google_workspace' | 'github' | 'grok_subscription'
 export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
@@ -470,13 +470,13 @@ export type SourceConnection = {
   id: string
   companyId: string
   connectorId: ConnectorId
-  providerId: 'odorik' | 'google' | 'github'
+  providerId: 'odorik' | 'google' | 'github' | 'grok'
   providerAccountId?: string
   tenantId?: string
   displayName: string
   status: 'configuring' | 'active' | 'attention' | 'disconnected'
-  authKind: 'basic_upload' | 'oauth2' | 'github_app'
-  credentialMode: 'encrypted' | 'legacy_secret' | 'shared_secret' | 'none'
+  authKind: 'basic_upload' | 'oauth2' | 'github_app' | 'subscription_oauth'
+  credentialMode: 'encrypted' | 'legacy_secret' | 'shared_secret' | 'managed_secret' | 'none'
   uploadUrl?: string
   accountLabel?: string
   grantedScopes: string[]
@@ -494,6 +494,16 @@ export type SourceConnection = {
     lastOutcome?: string | null
     lastError?: string | null
   }
+  subscription?: {
+    state: 'connecting' | 'waiting_for_user' | 'active' | 'attention' | 'disconnecting' | 'disconnected'
+    currentAuthSessionId?: string | null
+    teamId?: string | null
+    lastAuthenticatedAt?: string | null
+    sessionExpiresAt?: string | null
+    lastSuccessfulRunAt?: string | null
+    lastDisconnectedAt?: string | null
+    lastError?: string | null
+  }
   capabilities: SourceCapability[]
   resources: SourceResource[]
 }
@@ -502,6 +512,18 @@ export type SourcesResponse = {
   companyId: string
   connectors: SourceConnector[]
   connections: SourceConnection[]
+}
+
+export type GrokAuthorization = {
+  sessionId: string
+  action: 'connect' | 'disconnect'
+  status: 'starting' | 'waiting_for_user' | 'completed' | 'failed' | 'expired' | 'cancelled'
+  verificationUri: string | null
+  userCode: string | null
+  accountLabel: string | null
+  error: string | null
+  expiresAt: string | null
+  updatedAt: string | null
 }
 
 export type SelectableCalendar = {
@@ -828,4 +850,18 @@ export async function connectConfiguredGitHubInstallation() {
 
 export async function syncGitHubIssues(connectionId: string) {
   return trpc.sources.github.sync.mutate({ connectionId })
+}
+
+export async function startGrokSubscriptionAuthorization(): Promise<GrokAuthorization> {
+  return trpc.sources.grok.connect.mutate() as Promise<GrokAuthorization>
+}
+
+export async function getGrokSubscriptionAuthorization(
+  sessionId: string,
+): Promise<GrokAuthorization> {
+  return trpc.sources.grok.status.query({ sessionId }) as Promise<GrokAuthorization>
+}
+
+export async function disconnectGrokSubscription(): Promise<GrokAuthorization> {
+  return trpc.sources.grok.disconnect.mutate() as Promise<GrokAuthorization>
 }
