@@ -35,6 +35,12 @@ const permissions = {
   metadata: "read",
   pull_requests: "read",
 };
+const installationPermissions = {
+  contents: "write",
+  issues: "read",
+  metadata: "read",
+  pull_requests: "write",
+};
 const repository: GitHubRepository = {
   id: 987654,
   name: "elixir-play",
@@ -79,7 +85,7 @@ function githubFixtureFetcher(input?: {
         app_id: configuration.appId,
         account: { id: 12345, login: "tomaash", type: "User" },
         repository_selection: "selected",
-        permissions: input?.installationPermissions || permissions,
+        permissions: input?.installationPermissions || installationPermissions,
         suspended_at: null,
       });
     }
@@ -157,7 +163,7 @@ test("configured GitHub identifiers are validated and contain no private credent
   );
 });
 
-test("installation inspection requests only read permissions and rejects write grants", async () => {
+test("installation inspection requires write grants but downscopes observation tokens", async () => {
   const requests: Array<{ url: string; method: string; authorization: string | null; body: string }> = [];
   const snapshot = await inspectGitHubInstallation({
     configuration,
@@ -166,6 +172,7 @@ test("installation inspection requests only read permissions and rejects write g
   });
   assert.equal(snapshot.account.login, "tomaash");
   assert.deepEqual(snapshot.repositories.map((entry) => entry.full_name), ["tomaash/elixir-play"]);
+  assert.deepEqual(snapshot.permissions, installationPermissions);
   const tokenRequest = requests.find((request) => request.url.includes("/access_tokens"));
   assert.equal(tokenRequest?.method, "POST");
   assert.deepEqual(JSON.parse(tokenRequest?.body || "{}"), { permissions });
@@ -177,10 +184,10 @@ test("installation inspection requests only read permissions and rejects write g
       configuration,
       installationId,
       fetcher: githubFixtureFetcher({
-        installationPermissions: { ...permissions, issues: "write" },
+        installationPermissions: { ...installationPermissions, contents: "read" },
       }),
     }),
-    /not read-only/,
+    /installation permission contents must be write/,
   );
 });
 
@@ -229,7 +236,7 @@ test("GitHub connection preserves explicit selection, removes stale context, and
   assert.deepEqual(memory.read(connectionPath)?.auth, {
     kind: "github_app",
     credentialMode: "shared_secret",
-    scopes: ["contents:read", "issues:read", "metadata:read", "pull_requests:read"],
+    scopes: ["contents:write", "issues:read", "metadata:read", "pull_requests:write"],
   });
 
   memory.seed("companies/explorers/contextItems/stale-current-repo", {

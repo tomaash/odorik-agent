@@ -12,6 +12,7 @@ import {
 } from "./connectors/github-webhook.js";
 import { githubConfigurationFromEnvironment } from "./connectors/github.js";
 import { githubAppPrivateKey } from "./router.js";
+import { requestLabeledCodingImplementationApproval } from "./coding/proposal.js";
 
 export const githubWebhookSecret = defineSecret("GITHUB_WEBHOOK_SECRET");
 
@@ -83,6 +84,7 @@ export const processGitHubWebhook = onDocumentCreated(
       lastAttemptAt: FieldValue.serverTimestamp(),
     }, { merge: true });
     try {
+      const configuration = githubConfigurationFromEnvironment(githubAppPrivateKey.value());
       const result = await processGitHubWebhookDelivery({
         deliveryId: String(delivery?.deliveryId || ""),
         event: delivery?.event,
@@ -91,8 +93,16 @@ export const processGitHubWebhook = onDocumentCreated(
         connectionId: String(delivery?.connectionId || ""),
         installationId: Number(delivery?.installationId),
         payload: delivery?.payload as QueuedGitHubWebhookPayload,
-        configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+        configuration,
       });
+      if (result.issueContextItemId) {
+        await requestLabeledCodingImplementationApproval({
+          companyId: String(delivery?.companyId || ""),
+          actorUid: "workflow:coding.issue.label",
+          issueContextItemId: result.issueContextItemId,
+          configuration,
+        });
+      }
       await deliveryRef.set({
         status: "processed",
         outcome: result.outcome,

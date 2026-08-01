@@ -80,7 +80,9 @@ The existing vertical slice remains useful as a proving ground:
 - GitHub uses the `Agent Erik Development` GitHub App with a private key held
   in Secret Manager. Administrators connect the configured installation in
   Sources, explicitly include repositories (none are selected by default),
-  and manually synchronize read-only issues and comments into `ContextItem`s.
+  and synchronize issues/comments into `ContextItem`s with downscoped read-only
+  observer tokens. The App's write grants are used only by the trusted coding
+  publisher after a human approves the bounded implementation action.
 - Administrators connect a paid Grok subscription from Sources with xAI device
   OAuth. A dedicated 1 vCPU / 1 GiB auth job writes the opaque session directly
   to Secret Manager; the browser never receives it and no xAI API key is used.
@@ -164,6 +166,10 @@ of enabled company members.
 - `frontend/`: Vue 3, TypeScript, Pinia, PrimeVue, Tailwind, and Firebase Auth
 - `docs/`: target product, platform contracts, and implementation sequence
 - `coding-runner/`: isolated Cloud Run Job worker using Grok subscription OAuth
+- `coding-dispatcher/`: trusted GitHub source packager and draft-PR publisher that refetches one
+  normalized issue, resolves the exact selected default-branch SHA, creates an
+  immutable bundle, starts only the isolated runner, then validates its result
+  before pushing the approved branch and opening one draft PR
 - `grok-auth-worker/`: subscription-only device login and Secret Manager rotation
 - `firestore.rules`, `firestore.indexes.json`: named-database rules and indexes
 
@@ -241,6 +247,12 @@ only a minimized payload. A retryable Firestore worker fetches the canonical
 issue and comments with a short-lived installation token. The Sources UI shows
 webhook health; manual synchronization remains available, and
 `syncGitHubSources` reconciles enabled repositories every 30 minutes.
+Observer tokens request only read permissions even though the App installation
+grants Contents and Pull requests write. Coding publication mints a separate
+short-lived token restricted to the approved repository. Label
+`erik-implement` creates an approval; it does not start Grok until the named
+administrator approves the exact issue snapshot, base SHA, limits, branch, and
+automatic draft-PR effect.
 
 Grok subscription connection uses `infra/bootstrap-grok-auth-worker.sh` and
 `infra/deploy-grok-auth-worker.sh`. The auth job has its own service account and

@@ -60,3 +60,5 @@ gcloud secrets add-iam-policy-binding "$GITHUB_APP_PRIVATE_KEY_SECRET" \
 echo "GitHub App private key stored in Secret Manager."
 echo "SECRET=$GITHUB_APP_PRIVATE_KEY_SECRET"
 echo "CONSUMER=$CONTROL_PLANE_SERVICE_ACCOUNT"
+echo "Required GitHub App repository permissions: Contents=Read and write, Issues=Read-only, Pull requests=Read and write, Metadata=Read-only."
+echo "Observer tokens are downscoped to read-only; publisher tokens are restricted to one approved repository."

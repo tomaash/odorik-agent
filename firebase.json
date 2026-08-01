@@ -24,6 +24,13 @@
           }
         },
         {
+          "source": "/callbacks/coding",
+          "function": {
+            "functionId": "codingCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/webhooks/github",
           "function": {
             "functionId": "githubWebhook",
@@ -71,6 +78,13 @@
           "source": "/callbacks/grok-auth",
           "function": {
             "functionId": "grokAuthCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
+          "source": "/callbacks/coding",
+          "function": {
+            "functionId": "codingCallback",
             "region": "europe-west3"
           }
         },

@@ -22,6 +22,8 @@ export type CodingRunSpec = {
   };
   artifacts: {
     uploadUrl: string;
+    patchUploadUrl?: string;
+    resultBundleUploadUrl?: string;
   };
   limits: {
     maxSourceBytes: number;
@@ -112,6 +114,12 @@ export function parseRunSpec(value: unknown): CodingRunSpec {
   const model = optionalString(agent.model, "agent.model", 128);
   if (model && !MODEL_PATTERN.test(model)) throw new Error("agent.model has an invalid format");
   const sourceUrl = optionalString(task.sourceUrl, "task.sourceUrl", 2048);
+  const patchUploadUrl = artifacts.patchUploadUrl === undefined
+    ? undefined
+    : validateHttpsUrl(artifacts.patchUploadUrl, "artifacts.patchUploadUrl");
+  const resultBundleUploadUrl = artifacts.resultBundleUploadUrl === undefined
+    ? undefined
+    : validateHttpsUrl(artifacts.resultBundleUploadUrl, "artifacts.resultBundleUploadUrl");
 
   const parsed: CodingRunSpec = {
     schemaVersion: 1,
@@ -132,6 +140,8 @@ export function parseRunSpec(value: unknown): CodingRunSpec {
     },
     artifacts: {
       uploadUrl: validateHttpsUrl(artifacts.uploadUrl, "artifacts.uploadUrl"),
+      ...(patchUploadUrl ? { patchUploadUrl } : {}),
+      ...(resultBundleUploadUrl ? { resultBundleUploadUrl } : {}),
     },
     limits: {
       maxSourceBytes: integer(

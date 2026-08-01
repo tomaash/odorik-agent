@@ -105,6 +105,14 @@ test("production action registry is closed, approval-only, and digest compatible
         idempotency: "deterministic_internal",
         reconciliation: "deterministic_lookup",
       },
+      {
+        kind: "coding.issue.implement",
+        capabilityId: "action.coding.issue.implement",
+        category: "external.write",
+        approval: true,
+        idempotency: "provider_aware",
+        reconciliation: "required_before_retry",
+      },
     ],
   );
   assert.throws(

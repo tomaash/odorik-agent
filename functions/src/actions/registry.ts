@@ -1,6 +1,7 @@
 import type { ZodType } from "zod";
 import type { WorkflowActionSource } from "./contracts.js";
 import { internalActionDescriptors } from "./internal-actions.js";
+import { codingActionDescriptors } from "../coding/action.js";
 
 export type RegisteredAction = {
   kind: string;
@@ -8,8 +9,9 @@ export type RegisteredAction = {
 
 export type ActionScope = {
   contactId: string | null;
-  callId: string;
+  callId: string | null;
   caseId: string | null;
+  issueContextItemId?: string | null;
 };
 
 export type ActionResultReference = {
@@ -212,5 +214,5 @@ export async function executeRegisteredAction(input: {
 }
 
 export const actionRegistry = createActionRegistry(
-  internalActionDescriptors,
+  [...internalActionDescriptors, ...codingActionDescriptors],
 );

@@ -343,7 +343,7 @@ export type ActionApprovalItem = {
     caseId?: string | null
   } | null
   result?: {
-    kind: 'task' | 'case' | 'case_movement'
+    kind: 'task' | 'case' | 'case_movement' | 'coding_run'
     id: string
   } | null
   action: ({
@@ -386,6 +386,39 @@ export type ActionApprovalItem = {
     expectedRevision: number
     contactId: string
     callId: string
+  } | {
+    kind: 'coding.issue.implement'
+    runId: string
+    title: string
+    issueExcerpt: string
+    issuePrompt: string
+    github: {
+      connectionId: string
+      installationId: number
+      repoResourceId: string
+      repositoryId: number
+      owner: string
+      repo: string
+      issueNumber: number
+      issueContextItemId: string
+      issueUrl: string
+      issueVersion: string
+      issueChecksum: string
+    }
+    git: {
+      baseBranch: string
+      baseSha: string
+      resultBranch: string
+    }
+    grok: { connectionId: 'grok_subscription'; authKind: 'subscription_oauth' }
+    limits: {
+      maxRuntimeMinutes: number
+      maxTurns: number
+      maxChangedFiles: number
+      maxPatchBytes: number
+      maxArtifactBytes: number
+    }
+    publication: { draft: true; prTitle: string; prBody: string }
   }) & {
     context?: {
       callerName?: string | null
@@ -396,7 +429,8 @@ export type ActionApprovalItem = {
   }
   source: {
     kind: 'workflow'
-    callId: string
+    callId?: string
+    issueContextItemId?: string
     workflowId: string
     workflowVersion: number
     runId: string
@@ -524,6 +558,97 @@ export type GrokAuthorization = {
   error: string | null
   expiresAt: string | null
   updatedAt: string | null
+}
+
+export type CodingRunStatus =
+  | 'queued'
+  | 'packaging'
+  | 'provisioning'
+  | 'running'
+  | 'ready_to_publish'
+  | 'publishing'
+  | 'succeeded'
+  | 'no_changes'
+  | 'outcome_unknown'
+  | 'cancel_requested'
+  | 'cancelled'
+  | 'failed'
+
+export type CodingIssue = {
+  id: string
+  title: string
+  excerpt: string
+  sourceUrl: string
+  repository: string
+  issueNumber: number
+  labels: string[]
+  connectionId: string
+  repoResourceId: string
+  activeRunId: string | null
+  pendingApprovalId?: string | null
+  updatedAt: string | null
+}
+
+export type CodingRunEvent = {
+  id: string
+  status: CodingRunStatus
+  phase: string
+  message: string
+  source?: 'dispatcher' | 'runner'
+  createdAt?: string | null
+}
+
+export type CodingRun = {
+  id: string
+  status: CodingRunStatus
+  phase: string
+  initiatedBy: { uid: string; displayName: string }
+  github: {
+    connectionId: string
+    repoResourceId: string
+    owner: string
+    repo: string
+    repositoryId: number
+    issueNumber: number
+    issueUrl: string
+    issueContextItemId: string
+  }
+  issueSnapshot: {
+    contextVersion: string
+    title: string
+    text: string
+    labels: string[]
+    capturedAt?: string | null
+  }
+  grok: { connectionId: string; authKind: 'subscription_oauth' }
+  git: {
+    baseBranch: string
+    proposedBranch: string
+    baseSha?: string
+    resultSha?: string
+  }
+  result?: {
+    changedPaths: string[]
+    changedFiles: number
+    patchBytes: number
+    artifactBytes: number
+    durationMs: number
+    outputTruncated: boolean
+    authKind?: 'subscription_oauth'
+    resultBundleSha256?: string
+    resultBundleBytes?: number
+  }
+  publicationResult?: {
+    pullRequestNumber: number
+    pullRequestUrl: string
+    branch: string
+    draft: boolean
+  }
+  error?: { code: string; message: string; phase: string }
+  events?: CodingRunEvent[]
+  createdAt?: string | null
+  updatedAt?: string | null
+  completedAt?: string | null
 }
 
 export type SelectableCalendar = {
@@ -864,4 +989,44 @@ export async function getGrokSubscriptionAuthorization(
 
 export async function disconnectGrokSubscription(): Promise<GrokAuthorization> {
   return trpc.sources.grok.disconnect.mutate() as Promise<GrokAuthorization>
+}
+
+export async function listCodingIssues(): Promise<CodingIssue[]> {
+  return trpc.coding.listIssues.query() as Promise<CodingIssue[]>
+}
+
+export async function listCodingRuns(): Promise<CodingRun[]> {
+  return trpc.coding.listRuns.query() as Promise<CodingRun[]>
+}
+
+export async function getCodingRun(runId: string): Promise<CodingRun> {
+  return trpc.coding.getRun.query({ runId }) as Promise<CodingRun>
+}
+
+export async function requestCodingRunApprovalFromIssue(
+  issueContextItemId: string,
+): Promise<ActionApprovalItem> {
+  return trpc.coding.requestFromIssue.mutate({ issueContextItemId }) as Promise<ActionApprovalItem>
+}
+
+export async function cancelCodingRun(runId: string): Promise<CodingRun> {
+  return trpc.coding.cancelRun.mutate({ runId }) as Promise<CodingRun>
+}
+
+export async function getCodingPatchPreview(
+  runId: string,
+): Promise<{ patch: string; truncated: boolean }> {
+  return trpc.coding.getPatchPreview.query({ runId }) as Promise<{
+    patch: string
+    truncated: boolean
+  }>
+}
+
+export async function getCodingArtifactDownload(
+  runId: string,
+): Promise<{ url: string; expiresAt: string }> {
+  return trpc.coding.getArtifactDownloadUrl.mutate({ runId }) as Promise<{
+    url: string
+    expiresAt: string
+  }>
 }
