@@ -25,6 +25,7 @@ import {
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
+export { grokAuthCallback } from "./grok-auth-callback.js";
 
 export { api };
 

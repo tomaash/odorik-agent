@@ -13,6 +13,8 @@ import {
   addOdorikConnection,
   connectConfiguredGitHubInstallation,
   deleteSourceConnection,
+  disconnectGrokSubscription,
+  getGrokSubscriptionAuthorization,
   getGoogleCalendars,
   getGoogleDriveFolders,
   getOdorikSetup,
@@ -23,6 +25,7 @@ import {
   setSourceConnectionStatus,
   setSourceResourceEnabled,
   startGoogleWorkspaceAuthorization,
+  startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
   syncGoogleDrive,
   syncGitHubIssues,
@@ -33,6 +36,7 @@ import {
   type SelectableCalendar,
   type SelectableFolder,
   type SourcesResponse,
+  type GrokAuthorization,
 } from '../api/client'
 
 const { t, locale } = useI18n()
@@ -67,6 +71,10 @@ const selectedWorkspaceCapabilities = ref<Array<'context.calendar.read' | 'conte
 ])
 const pendingDeleteId = ref('')
 const deletingId = ref('')
+const grokAuthorization = ref<GrokAuthorization | null>(null)
+const grokDialogVisible = ref(false)
+const grokPendingAction = ref<'connect' | 'disconnect' | null>(null)
+let grokPollTimer: number | null = null
 const isAdmin = computed(() => auth.access?.admin === true)
 // Every choice that belongs to a source card opens as a modal over that card.
 // Nothing configuration-related renders alongside or above the card grid.
@@ -139,16 +147,19 @@ function connectorIcon(connector: SourceConnector) {
     odorik: 'pi pi-phone',
     google_workspace: 'pi pi-google',
     github: 'pi pi-github',
+    grok_subscription: 'pi pi-code',
   }[connector.id]
 }
 
 function connectorTag(connector: SourceConnector) {
   if (connector.id === 'odorik') return t('sources.receivesRecordings')
   if (connector.id === 'github') return t('sources.github.readOnlyIssues')
+  if (connector.id === 'grok_subscription') return t('sources.grok.subscriptionOAuth')
   return t('sources.workspace.services')
 }
 
 function addConnectionTitle(connector: SourceConnector) {
+  if (connector.id === 'grok_subscription') return t('sources.grok.connectTitle')
   if (connector.id !== 'github') return t('sources.workspace.addAccountTitle')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshTitle')
@@ -156,6 +167,7 @@ function addConnectionTitle(connector: SourceConnector) {
 }
 
 function addConnectionHint(connector: SourceConnector) {
+  if (connector.id === 'grok_subscription') return t('sources.grok.connectHint')
   if (connector.id !== 'github') return t('sources.workspace.addAccountHint')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshHint')
@@ -163,6 +175,7 @@ function addConnectionHint(connector: SourceConnector) {
 }
 
 function addConnectionLabel(connector: SourceConnector) {
+  if (connector.id === 'grok_subscription') return t('sources.grok.connect')
   if (connector.id !== 'github') return t('sources.workspace.connectAccount')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshInstallation')
@@ -178,6 +191,7 @@ function addConnectionIcon(connector: SourceConnector) {
 function connectionKindLabel(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return t('sources.workspace.account')
   if (connection.connectorId === 'github') return t('sources.github.installation')
+  if (connection.connectorId === 'grok_subscription') return t('sources.grok.connectionKind')
   return connection.displayName
 }
 
@@ -274,6 +288,7 @@ function connectionStatusLabel(connection: SourceConnection) {
   ) return t('sources.waitingForRecording')
   if (connection.status === 'active') return t('sources.active')
   if (connection.status === 'attention') return t('sources.attention')
+  if (connection.status === 'configuring') return t('sources.connecting')
   return t('sources.disconnected')
 }
 
@@ -285,6 +300,7 @@ function connectionStatusSeverity(connection: SourceConnection) {
   ) return 'warn'
   if (connection.status === 'active') return 'success'
   if (connection.status === 'attention') return 'warn'
+  if (connection.status === 'configuring') return 'info'
   return 'secondary'
 }
 
@@ -331,6 +347,10 @@ async function createOdorik() {
 }
 
 async function addConnection(connector: SourceConnector) {
+  if (connector.id === 'grok_subscription') {
+    await beginGrokAuthorization()
+    return
+  }
   if (connector.id === 'google_workspace') {
     openWorkspaceAuthorization()
     return
@@ -356,7 +376,114 @@ async function addConnection(connector: SourceConnector) {
 }
 
 function canAddConnection(connector: SourceConnector) {
+  if (connector.id === 'grok_subscription') {
+    return connector.availability === 'available'
+      && !connectionsByConnector.value.get('grok_subscription')?.length
+  }
   return connector.availability === 'available'
+}
+
+function stopGrokPolling() {
+  if (grokPollTimer !== null) window.clearTimeout(grokPollTimer)
+  grokPollTimer = null
+}
+
+function scheduleGrokPoll() {
+  stopGrokPolling()
+  grokPollTimer = window.setTimeout(() => void pollGrokAuthorization(), 1500)
+}
+
+async function pollGrokAuthorization() {
+  const sessionId = grokAuthorization.value?.sessionId
+  if (!sessionId) return
+  try {
+    const result = await getGrokSubscriptionAuthorization(sessionId)
+    grokAuthorization.value = result
+    if (['starting', 'waiting_for_user'].includes(result.status)) {
+      scheduleGrokPoll()
+      return
+    }
+    stopGrokPolling()
+    await load()
+    if (result.status === 'completed') {
+      notice.value = result.action === 'connect'
+        ? t('sources.grok.connected')
+        : t('sources.grok.disconnected')
+    } else {
+      error.value = result.error || t('sources.grok.failed')
+    }
+  } catch (cause) {
+    stopGrokPolling()
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function beginGrokAuthorization() {
+  saving.value = true
+  error.value = ''
+  notice.value = ''
+  stopGrokPolling()
+  grokAuthorization.value = null
+  grokPendingAction.value = 'connect'
+  grokDialogVisible.value = true
+  try {
+    grokAuthorization.value = await startGrokSubscriptionAuthorization()
+    scheduleGrokPoll()
+    await load()
+  } catch (cause) {
+    grokDialogVisible.value = false
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    grokPendingAction.value = null
+    saving.value = false
+  }
+}
+
+async function beginGrokDisconnect() {
+  saving.value = true
+  error.value = ''
+  notice.value = ''
+  stopGrokPolling()
+  grokAuthorization.value = null
+  grokPendingAction.value = 'disconnect'
+  grokDialogVisible.value = true
+  try {
+    grokAuthorization.value = await disconnectGrokSubscription()
+    scheduleGrokPoll()
+    await load()
+  } catch (cause) {
+    grokDialogVisible.value = false
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    grokPendingAction.value = null
+    saving.value = false
+  }
+}
+
+function openGrokVerification() {
+  if (!grokAuthorization.value?.verificationUri) return
+  window.open(grokAuthorization.value.verificationUri, '_blank', 'noopener,noreferrer')
+}
+
+async function copyGrokCode() {
+  if (!grokAuthorization.value?.userCode) return
+  await navigator.clipboard.writeText(grokAuthorization.value.userCode)
+  notice.value = t('sources.grok.codeCopied')
+}
+
+function closeGrokDialog() {
+  grokDialogVisible.value = false
+  stopGrokPolling()
+}
+
+function grokConnectionBusy(connection: SourceConnection) {
+  return ['connecting', 'waiting_for_user', 'disconnecting'].includes(connection.subscription?.state || '')
+}
+
+function grokDialogTitle() {
+  return (grokAuthorization.value?.action || grokPendingAction.value) === 'disconnect'
+    ? t('sources.grok.dialogDisconnectTitle')
+    : t('sources.grok.dialogConnectTitle')
 }
 
 async function toggleConnection(connection: SourceConnection) {
@@ -668,6 +795,24 @@ onMounted(async () => {
   const params = new URLSearchParams(window.location.search)
   const workspaceResult = params.get('workspace')
   await load()
+  const grokConnection = data.value?.connections.find(
+    (connection) => connection.connectorId === 'grok_subscription',
+  )
+  const grokSessionId = grokConnection?.subscription?.currentAuthSessionId
+  if (
+    grokSessionId
+    && ['connecting', 'waiting_for_user', 'disconnecting'].includes(grokConnection.subscription?.state || '')
+  ) {
+    try {
+      grokAuthorization.value = await getGrokSubscriptionAuthorization(grokSessionId)
+      if (['starting', 'waiting_for_user'].includes(grokAuthorization.value.status)) {
+        grokDialogVisible.value = true
+        scheduleGrokPoll()
+      }
+    } catch {
+      // A stale retained session must not block the rest of Sources.
+    }
+  }
   if (workspaceResult === 'connected') notice.value = t('sources.workspaceConnected')
   else if (workspaceResult === 'partial') error.value = t('sources.workspacePartial')
   else if (workspaceResult === 'denied') error.value = t('sources.googleDenied')
@@ -677,6 +822,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   document.removeEventListener('pointerdown', handleDocumentClick)
+  stopGrokPolling()
 })
 </script>
 
@@ -693,6 +839,75 @@ onUnmounted(() => {
     <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
+
+    <Dialog
+      v-model:visible="grokDialogVisible"
+      modal
+      blockScroll
+      :draggable="false"
+      :header="grokDialogTitle()"
+      class="w-[calc(100vw-2rem)] sm:w-[min(34rem,calc(100vw-4rem))] my-auto"
+      contentClass="!p-0 flex flex-col min-w-0 overflow-hidden"
+      @hide="stopGrokPolling"
+    >
+      <div v-if="grokAuthorization" class="grid gap-4 px-4 py-5 sm:px-6">
+        <div
+          v-if="grokAuthorization.status === 'starting'"
+          class="flex flex-col items-center gap-3 py-8 text-center"
+        >
+          <ProgressSpinner class="h-10 w-10" />
+          <p class="m-0 text-sm leading-relaxed text-surface-500">
+            {{ grokAuthorization.action === 'disconnect' ? t('sources.grok.disconnecting') : t('sources.grok.starting') }}
+          </p>
+        </div>
+
+        <template v-else-if="grokAuthorization.status === 'waiting_for_user'">
+          <Message severity="info" :closable="false">{{ t('sources.grok.waiting') }}</Message>
+          <div class="rounded-2xl border border-indigo-200 bg-indigo-50 p-5 text-center">
+            <div class="mb-2 text-xs font-semibold uppercase tracking-wider text-indigo-700">
+              {{ t('sources.grok.authorizationCode') }}
+            </div>
+            <code class="block text-3xl font-bold tracking-[0.18em] text-indigo-950 sm:text-4xl">
+              {{ grokAuthorization.userCode }}
+            </code>
+          </div>
+          <p class="m-0 text-sm leading-relaxed text-surface-500">{{ t('sources.grok.codeHint') }}</p>
+          <div class="grid gap-2 sm:grid-cols-2">
+            <Button
+              :label="t('sources.grok.copyCode')"
+              icon="pi pi-copy"
+              severity="secondary"
+              outlined
+              @click="copyGrokCode"
+            />
+            <Button
+              :label="t('sources.grok.open')"
+              icon="pi pi-external-link"
+              @click="openGrokVerification"
+            />
+          </div>
+          <p v-if="grokAuthorization.expiresAt" class="m-0 text-center text-xs text-surface-400">
+            {{ t('sources.grok.expires') }}: {{ formatDate(grokAuthorization.expiresAt) }}
+          </p>
+        </template>
+
+        <Message v-else-if="grokAuthorization.status === 'completed'" severity="success" :closable="false">
+          {{ grokAuthorization.action === 'connect' ? t('sources.grok.connected') : t('sources.grok.disconnected') }}
+        </Message>
+        <Message v-else severity="error" :closable="false">
+          {{ grokAuthorization.error || t('sources.grok.failed') }}
+        </Message>
+      </div>
+      <div v-else class="flex flex-col items-center gap-3 px-4 py-12 text-center sm:px-6">
+        <ProgressSpinner class="h-10 w-10" />
+        <p class="m-0 text-sm leading-relaxed text-surface-500">
+          {{ grokPendingAction === 'disconnect' ? t('sources.grok.disconnecting') : t('sources.grok.starting') }}
+        </p>
+      </div>
+      <div class="flex justify-end border-t border-surface-200 bg-white px-4 py-3 sm:px-6">
+        <Button :label="t('common.close')" severity="secondary" text @click="closeGrokDialog" />
+      </div>
+    </Dialog>
 
     <Dialog
       v-model:visible="workspaceDialogVisible"
@@ -1210,7 +1425,60 @@ onUnmounted(() => {
                 </p>
               </div>
 
-              <template v-if="connection.connectorId === 'odorik'">
+              <template v-if="connection.connectorId === 'grok_subscription'">
+                <Message severity="info" :closable="false" class="mb-3">
+                  {{ t('sources.grok.noApiKey') }}
+                </Message>
+                <div class="grid gap-2 rounded-xl border border-surface-200 bg-white p-3 text-sm">
+                  <div class="flex flex-wrap justify-between gap-x-4 gap-y-1">
+                    <span class="text-surface-500">{{ t('sources.grok.lastAuthenticated') }}</span>
+                    <strong class="text-right text-surface-800">{{ formatDate(connection.subscription?.lastAuthenticatedAt) }}</strong>
+                  </div>
+                  <div class="flex flex-wrap justify-between gap-x-4 gap-y-1">
+                    <span class="text-surface-500">{{ t('sources.grok.sessionExpires') }}</span>
+                    <strong class="text-right text-surface-800">{{ formatDate(connection.subscription?.sessionExpiresAt) }}</strong>
+                  </div>
+                  <div v-if="connection.subscription?.teamId" class="flex flex-wrap justify-between gap-x-4 gap-y-1">
+                    <span class="text-surface-500">{{ t('sources.grok.team') }}</span>
+                    <strong class="max-w-full break-all text-right text-surface-800">{{ connection.subscription.teamId }}</strong>
+                  </div>
+                  <div class="flex flex-wrap justify-between gap-x-4 gap-y-1">
+                    <span class="text-surface-500">{{ t('sources.grok.lastRun') }}</span>
+                    <strong class="text-right text-surface-800">{{ formatDate(connection.subscription?.lastSuccessfulRunAt) }}</strong>
+                  </div>
+                </div>
+                <Message
+                  v-if="connection.subscription?.lastError"
+                  severity="warn"
+                  :closable="false"
+                  class="mt-3"
+                >
+                  {{ connection.subscription.lastError }}
+                </Message>
+                <div v-if="isAdmin" class="mt-3 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <Button
+                    :label="connection.status === 'disconnected' ? t('sources.grok.connect') : t('sources.grok.reconnect')"
+                    icon="pi pi-refresh"
+                    severity="secondary"
+                    outlined
+                    :disabled="grokConnectionBusy(connection)"
+                    :loading="saving"
+                    @click="beginGrokAuthorization"
+                  />
+                  <Button
+                    v-if="connection.status !== 'disconnected'"
+                    :label="t('sources.grok.disconnect')"
+                    icon="pi pi-power-off"
+                    severity="danger"
+                    outlined
+                    :disabled="grokConnectionBusy(connection)"
+                    :loading="saving"
+                    @click="beginGrokDisconnect"
+                  />
+                </div>
+              </template>
+
+              <template v-else-if="connection.connectorId === 'odorik'">
                 <div class="mb-4 rounded-xl border border-surface-200 bg-white p-3">
                   <div class="flex items-start justify-between gap-3">
                     <div class="min-w-0">
@@ -1415,7 +1683,7 @@ onUnmounted(() => {
                 </section>
               </div>
 
-              <div v-if="isAdmin" class="flex flex-wrap justify-end mt-3">
+              <div v-if="isAdmin && connection.connectorId !== 'grok_subscription'" class="flex flex-wrap justify-end mt-3">
                 <Button
                   v-if="connection.connectorId === 'odorik'"
                   :label="connection.status === 'disconnected' ? t('sources.reconnect') : t('sources.disconnect')"

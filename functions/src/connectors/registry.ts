@@ -83,6 +83,13 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
     availability: "available",
     capabilities: [sourceCapabilities["context.github.issue.read"]],
   },
+  grok_subscription: {
+    id: "grok_subscription",
+    name: "Grok subscription",
+    description: "Subscription OAuth used only by the isolated coding runner.",
+    availability: "available",
+    capabilities: [],
+  },
 };
 
 export function connectorCatalog(): ConnectorDescriptor[] {
