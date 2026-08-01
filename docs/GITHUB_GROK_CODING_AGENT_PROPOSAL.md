@@ -1,6 +1,6 @@
 # Proposal: GitHub + Grok coding agent for Agent Erik
 
-**Status:** CG3 implementation in progress (approve implementation first; draft PR is the automatic result)
+**Status:** CG3 complete and production-accepted (approve implementation first; draft PR is the automatic result)
 **Date:** 2026-08-01
 **Working name:** Coding Agent slice (provider phase `R1` / coding-agent epic)
 **Depends on:** connector kernel (C0–C3), typed action registry (C2), approval execution path (G3-class external writes)
@@ -36,7 +36,7 @@ The repository now contains the first CG0/Cloud Run foundation:
   flow that never exposes `auth.json` to the browser.
 
 The authenticated coding-run dispatcher, persistence/UI, approval action, and
-trusted draft-PR publisher are now implemented locally for CG3. The runner
+trusted draft-PR publisher are deployed for CG3. The runner
 intentionally cannot push or create a PR; the trusted dispatcher image performs
 publication in a separate mode after validating the approved result artifacts.
 
@@ -476,7 +476,7 @@ startup.
 
 Align with the connector epic style: one complete loop per slice.
 
-**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 connector observes selected repositories using downscoped read-only installation tokens; the App installation requests Contents and Pull requests write for the separately scoped trusted publisher. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth`. **CG3 is deployed and awaits one live acceptance run:** label `erik-implement` or the Coding UI creates an immutable approval first; approval queues a durable run; the isolated Grok runner emits bounded artifacts; and the trusted dispatcher/publisher pushes one deterministic branch and opens one draft PR idempotently. The existing GitHub installation must still accept the requested Contents/Pull requests write grants, with Issues kept read-only, before that acceptance run. No xAI API key, automatic merge, or deploy exists.
+**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 connector observes selected repositories using downscoped read-only installation tokens; the App installation grants Contents and Pull requests write only for the separately scoped trusted publisher while Issues remains read-only. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth`. **CG3 is complete and production-accepted:** the Coding UI created immutable approval `coding_approval_58924904282906af438bf386887692635dde5b6a` for `tomaash/elixir-play#2`; only approval started run `coding_58924904282906af438bf38688769263`; the isolated Grok runner emitted one bounded README patch; and the trusted publisher pushed deterministic branch `erik/issue-2-88769263` and opened draft PR [#3](https://github.com/tomaash/elixir-play/pull/3). The PR is the post-execution approval/review artifact; no second Erik approval, xAI API key, automatic merge, or deploy exists.
 
 | Slice | Outcome | Exit criteria |
 | --- | --- | --- |
@@ -574,15 +574,10 @@ This matches Agent Erik’s product promise: agents do the work, people (or expl
 
 ## 21. Next concrete step
 
-Deploy and accept **CG3**:
-
-1. Deploy the runner and trusted dispatcher/publisher images plus Functions/UI.
-2. Refresh the GitHub connection so Erik records the updated App grants while
-   observation tokens remain read-only.
-3. Request implementation for one harmless issue, verify that no run starts before approval,
-   then approve it.
-4. Verify one Grok subscription run, one deterministic branch, one draft PR,
-   the PR deep link in Coding, and the approval/run audit trail.
+Proceed to **CG4 operator recovery + PR follow-up**. Preserve the CG3 contract:
+one human approval authorizes one Grok execution and automatic publication of
+one deterministic result branch plus one draft PR; GitHub review remains the
+merge gate.
 
 ---
 

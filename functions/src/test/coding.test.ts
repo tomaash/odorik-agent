@@ -185,6 +185,52 @@ test("one issue creates one active run and duplicate starts reuse it", async () 
   assert.equal(issues[0]?.activeRunId, first.id);
 });
 
+test("a safe dispatcher-start failure can retry the same approved run", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const artifacts = new MemoryArtifacts();
+  let failArtifactCheck = true;
+  const artifactStore: CodingArtifactStore = {
+    ...artifacts,
+    putJson: artifacts.putJson.bind(artifacts),
+    signedReadUrl: artifacts.signedReadUrl.bind(artifacts),
+    signedWriteUrl: artifacts.signedWriteUrl.bind(artifacts),
+    readText: artifacts.readText.bind(artifacts),
+    exists: async (object) => {
+      if (failArtifactCheck) {
+        failArtifactCheck = false;
+        throw new Error("artifact authentication unavailable");
+      }
+      return artifacts.exists(object);
+    },
+  };
+  const dispatches: string[] = [];
+  const start = () => startApprovedCodingRun({
+    context: approvedContext,
+    action: codingAction(),
+    artifactStore,
+    executeDispatcher: async ({ runId }) => {
+      dispatches.push(runId);
+      return { operationName: `operations/${runId}` };
+    },
+    database: memory.asFirestore(),
+  });
+
+  await assert.rejects(start(), /artifact authentication unavailable/);
+  assert.equal(
+    memory.read(`companies/${companyId}/codingRuns/${codingAction().runId}`)?.phase,
+    "dispatch_failed",
+  );
+
+  const retried = await start();
+  assert.equal(retried.status, "packaging");
+  assert.deepEqual(dispatches, [codingAction().runId]);
+  assert.equal(
+    memory.read(`companies/${companyId}/codingRuns/${codingAction().runId}`)?.error,
+    null,
+  );
+});
+
 test("requesting implementation creates approval first and approval queues Grok", async () => {
   const memory = new MemoryFirestore();
   seedCodingSources(memory);
