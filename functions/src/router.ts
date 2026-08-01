@@ -119,8 +119,14 @@ import {
   cancelCodingRun,
   codingArtifactDownloadUrl,
   codingPatchPreview,
+  reconcileCodingPublication,
 } from "./coding/service.js";
-import { requestCodingImplementationApproval } from "./coding/proposal.js";
+import {
+  requestCodingImplementationApproval,
+  requestCodingPullRequestChangesApproval,
+  requestCodingRetryApproval,
+} from "./coding/proposal.js";
+import { inspectGitHubPublication } from "./coding/github-recovery.js";
 
 export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
@@ -275,6 +281,97 @@ export const appRouter = router({
             runId: input.runId,
             actorUid: ctx.uid,
             cancelExecution: cancelCodingExecution,
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    reconcileRun: adminProcedure
+      .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          const configuration = githubConfigurationFromEnvironment(githubAppPrivateKey.value());
+          return await reconcileCodingPublication({
+            companyId: ctx.companyId,
+            runId: input.runId,
+            actorUid: ctx.uid,
+            inspectPublication: (value) => inspectGitHubPublication({
+              ...value,
+              configuration,
+            }),
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    retryRun: adminProcedure
+      .input(z.object({
+        runId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+        instructions: z.string().trim().min(1).max(20_000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await requestCodingRetryApproval({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            preferredApproverUid: ctx.uid,
+            runId: input.runId,
+            instructions: input.instructions,
+            configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+          });
+        } catch (error) {
+          if (error instanceof CodingRunError) {
+            throw new TRPCError({
+              code: error.statusCode === 404
+                ? "NOT_FOUND"
+                : error.statusCode === 409
+                  ? "CONFLICT"
+                  : "BAD_REQUEST",
+              message: error.message,
+            });
+          }
+          throw error;
+        }
+      }),
+    requestPullRequestChanges: adminProcedure
+      .input(z.object({
+        runId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+        instructions: z.string().trim().min(1).max(20_000),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          const configuration = githubConfigurationFromEnvironment(githubAppPrivateKey.value());
+          return await requestCodingPullRequestChangesApproval({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            preferredApproverUid: ctx.uid,
+            runId: input.runId,
+            instructions: input.instructions,
+            configuration,
+            inspectPublication: (value) => inspectGitHubPublication({
+              ...value,
+              configuration,
+            }),
           });
         } catch (error) {
           if (error instanceof CodingRunError) {

@@ -17,6 +17,18 @@ const exec = promisify(execFile);
 
 class UnknownPublicationOutcome extends Error {}
 
+export function branchPublicationDecision(input: {
+  mode: "create" | "fast_forward";
+  currentSha: string | null;
+  baseSha: string;
+  resultSha: string;
+}): "push" | "noop" {
+  if (input.currentSha === input.resultSha) return "noop";
+  if (input.currentSha === null) return "push";
+  if (input.mode === "fast_forward" && input.currentSha === input.baseSha) return "push";
+  throw new Error("Approved result branch already exists at a different commit");
+}
+
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
@@ -98,15 +110,30 @@ export async function runPublisher(): Promise<void> {
       repositoryId: spec.github.repositoryId,
       configuration: { clientId: required("GITHUB_CLIENT_ID"), privateKey },
     });
+    let pull = spec.publication.existingPullRequestNumber
+      ? await findOpenPullRequest({
+          token,
+          fullName: spec.github.fullName,
+          headBranch: spec.git.resultBranch,
+          baseBranch: spec.git.baseBranch,
+        })
+      : null;
+    if (
+      spec.publication.existingPullRequestNumber
+      && (!pull || pull.number !== spec.publication.existingPullRequestNumber)
+    ) throw new Error("The approved pull request is no longer open at the expected branch");
     const currentBranchSha = await githubBranchSha({
       token,
       fullName: spec.github.fullName,
       branch: spec.git.resultBranch,
     });
-    if (currentBranchSha && currentBranchSha !== resultSha) {
-      throw new Error("Approved result branch already exists at a different commit");
-    }
-    if (!currentBranchSha) {
+    const branchDecision = branchPublicationDecision({
+      mode: spec.git.branchMode,
+      currentSha: currentBranchSha,
+      baseSha: spec.git.baseSha,
+      resultSha,
+    });
+    if (branchDecision === "push") {
       const askpass = join(root, "git-askpass.sh");
       await writeFile(
         askpass,
@@ -146,13 +173,27 @@ export async function runPublisher(): Promise<void> {
       }
     }
 
-    let pull = await findOpenPullRequest({
+    pull = await findOpenPullRequest({
       token,
       fullName: spec.github.fullName,
       headBranch: spec.git.resultBranch,
       baseBranch: spec.git.baseBranch,
     });
+    if (
+      pull
+      && spec.publication.existingPullRequestNumber
+      && pull.number !== spec.publication.existingPullRequestNumber
+    ) {
+      throw new UnknownPublicationOutcome(
+        "A different pull request appeared while the approved branch was being updated",
+      );
+    }
     if (!pull) {
+      if (spec.publication.existingPullRequestNumber) {
+        throw new UnknownPublicationOutcome(
+          "The approved pull request closed while its branch was being updated",
+        );
+      }
       try {
         pull = await createDraftPullRequest({
           token,
@@ -176,7 +217,14 @@ export async function runPublisher(): Promise<void> {
         }
       }
     }
-    await publish("completed", "succeeded", "succeeded", "Draft pull request opened", {
+    await publish(
+      "completed",
+      "succeeded",
+      "succeeded",
+      spec.git.branchMode === "fast_forward"
+        ? "Pull request branch updated"
+        : "Draft pull request opened",
+      {
       baseSha: spec.git.baseSha,
       resultSha,
       branch: spec.git.resultBranch,
@@ -185,7 +233,8 @@ export async function runPublisher(): Promise<void> {
       draft: pull.draft,
       approvalId: spec.approval.approvalId,
       effectDigest: spec.approval.effectDigest,
-    });
+      },
+    );
   } catch (error) {
     const unknown = error instanceof UnknownPublicationOutcome;
     await publish(

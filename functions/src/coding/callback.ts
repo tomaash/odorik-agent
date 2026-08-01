@@ -114,8 +114,13 @@ export async function processCodingCallback(input: {
     }
     if (currentStatus === "cancel_requested") {
       shouldPublish = false;
-      nextStatus = event.type === "phase" ? "cancel_requested" : "cancelled";
-      nextPhase = event.type === "phase" ? "cancel_requested" : "cancelled";
+      const publicationMayHaveCompleted = run.data()?.cancelRequestedFromStatus === "publishing"
+        && input.principalEmail.includes("dispatcher")
+        && ["succeeded", "outcome_unknown"].includes(nextStatus);
+      if (!publicationMayHaveCompleted) {
+        nextStatus = event.type === "phase" ? "cancel_requested" : "cancelled";
+        nextPhase = event.type === "phase" ? "cancel_requested" : "cancelled";
+      }
     } else if (statusIsTerminal(currentStatus)) {
       shouldPublish = false;
       transaction.create(callbackRef, {

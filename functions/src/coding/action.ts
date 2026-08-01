@@ -6,6 +6,24 @@ import type {
 import { startApprovedCodingRun } from "./service.js";
 
 const shaSchema = z.string().regex(/^[a-f0-9]{40,64}$/);
+const linkedAttemptSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("retry"),
+    parentRunId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+    rootRunId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+    attempt: z.number().int().min(2).max(100),
+    instructions: z.string().min(1).max(20_000),
+  }).strict(),
+  z.object({
+    kind: z.literal("pull_request_changes"),
+    parentRunId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+    rootRunId: z.string().regex(/^coding_[a-f0-9]{32}$/),
+    attempt: z.number().int().min(2).max(100),
+    instructions: z.string().min(1).max(20_000),
+    pullRequestNumber: z.number().int().positive(),
+    pullRequestUrl: z.string().url().regex(/^https:\/\/github\.com\//).max(2_000),
+  }).strict(),
+]);
 
 export const codingIssueImplementActionSchema = z.object({
   kind: z.literal("coding.issue.implement"),
@@ -28,9 +46,11 @@ export const codingIssueImplementActionSchema = z.object({
   }).strict(),
   git: z.object({
     baseBranch: z.string().regex(/^[A-Za-z0-9._/-]{1,200}$/),
+    sourceBranch: z.string().regex(/^[A-Za-z0-9._/-]{1,200}$/).optional(),
     baseSha: shaSchema,
     resultBranch: z.string().regex(/^erik\/[A-Za-z0-9._/-]{1,190}$/),
   }).strict(),
+  linkedAttempt: linkedAttemptSchema.optional(),
   grok: z.object({
     connectionId: z.literal("grok_subscription"),
     authKind: z.literal("subscription_oauth"),
@@ -46,6 +66,7 @@ export const codingIssueImplementActionSchema = z.object({
     draft: z.literal(true),
     prTitle: z.string().min(1).max(256),
     prBody: z.string().min(1).max(10_000),
+    existingPullRequestNumber: z.number().int().positive().optional(),
   }).strict(),
 }).strict();
 

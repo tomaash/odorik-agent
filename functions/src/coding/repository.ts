@@ -191,6 +191,7 @@ export async function createCodingRunFromApprovedAction(input: {
     },
     grok: action.grok,
     proposedBranch: action.git.resultBranch,
+    sourceBranch: action.git.sourceBranch || action.git.baseBranch,
     baseSha: action.git.baseSha,
     approval: {
       approvalId: input.context.approvalId,
@@ -272,9 +273,11 @@ export async function createCodingRunFromApprovedAction(input: {
       grok: action.grok,
       git: {
         baseBranch: action.git.baseBranch,
+        sourceBranch: action.git.sourceBranch || action.git.baseBranch,
         baseSha: action.git.baseSha,
         proposedBranch: action.git.resultBranch,
       },
+      ...(action.linkedAttempt ? { linkedAttempt: action.linkedAttempt } : {}),
       publication: action.publication,
       artifacts: {
         sourceObject: dispatchSpec.objects.source,
@@ -371,28 +374,37 @@ export async function requestCodingRunCancellation(input: {
   const database = input.database || db;
   const now = input.now || Timestamp.now();
   const ref = database.doc(codingRunPath(input.companyId, input.runId));
-  const snapshot = await ref.get();
-  if (!snapshot.exists) throw new CodingRunError("Coding run not found", 404);
-  if (!activeCodingRunStatuses.includes(snapshot.data()?.status)) {
-    throw new CodingRunError("This coding run is no longer active", 409);
-  }
-  await Promise.all([
-    ref.set({
+  await database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) throw new CodingRunError("Coding run not found", 404);
+    if (!activeCodingRunStatuses.includes(snapshot.data()?.status)) {
+      throw new CodingRunError("This coding run is no longer active", 409);
+    }
+    transaction.set(ref, {
       status: "cancel_requested",
       phase: "cancel_requested",
+      cancelRequestedFromStatus: snapshot.data()?.status,
+      cancelRequestedFromPhase: snapshot.data()?.phase,
       cancelRequestedBy: input.actorUid,
       cancelRequestedAt: now,
       updatedAt: now,
-    }, { merge: true }),
-    ref.collection("events").doc(`cancel-${now.toMillis()}`).set({
-      status: "cancel_requested",
-      phase: "cancel_requested",
-      message: "Cancellation requested by an administrator",
-      actorUid: input.actorUid,
-      createdAt: now,
-    }),
-  ]);
-  return publicRun(snapshot.id, { ...snapshot.data(), status: "cancel_requested" });
+    }, { merge: true });
+    transaction.create(
+      ref.collection("events").doc(`cancel-${now.toMillis()}-${snapshot.data()?.status}`),
+      {
+        status: "cancel_requested",
+        phase: "cancel_requested",
+        message: "Cancellation requested by an administrator",
+        actorUid: input.actorUid,
+        createdAt: now,
+      },
+    );
+  });
+  return getCodingRun({
+    companyId: input.companyId,
+    runId: input.runId,
+    database,
+  });
 }
 
 export function safeCodingError(error: unknown): string {

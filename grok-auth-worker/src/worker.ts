@@ -2,11 +2,13 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
 import {
+  accessLatestGrokSecretVersion,
   addGrokSecretVersion,
   disableOtherGrokSecretVersions,
   extractDeviceAuthorization,
   metadataAccessToken,
   postAuthCallback,
+  refreshGrokAuthDocument,
   validateGrokAuthDocument,
 } from "./protocol.js";
 
@@ -143,6 +145,55 @@ async function disconnect(environment: WorkerEnvironment): Promise<void> {
   });
 }
 
+async function refresh(environment: WorkerEnvironment): Promise<void> {
+  const projectId = required(environment, "GCP_PROJECT_ID");
+  const secretName = required(environment, "GROK_AUTH_SECRET_NAME");
+  const runId = required(environment, "GROK_AUTH_SESSION_ID");
+  const callbackUrl = required(environment, "GROK_AUTH_CALLBACK_URL");
+  const accessToken = await metadataAccessToken();
+  const latest = await accessLatestGrokSecretVersion({
+    projectId,
+    secretName,
+    accessToken,
+  });
+  let refreshedPayload: Buffer | null = null;
+  try {
+    const result = await refreshGrokAuthDocument({ payload: latest.payload });
+    refreshedPayload = result.payload;
+    let secretVersion = latest.name;
+    if (result.refreshed) {
+      secretVersion = await addGrokSecretVersion({
+        projectId,
+        secretName,
+        payload: result.payload,
+        accessToken,
+      });
+    }
+    // Also heal a prior partial rotation that left more than one version
+    // enabled even when the current credential itself does not need refresh.
+    await disableOtherGrokSecretVersions({
+      projectId,
+      secretName,
+      keepVersion: secretVersion,
+      accessToken,
+    });
+    await postAuthCallback({
+      callbackUrl,
+      event: {
+        type: "completed",
+        action: "refresh",
+        runId,
+        secretVersion,
+        expiresAt: result.account.expiresAt,
+        refreshed: result.refreshed,
+      },
+    });
+  } finally {
+    latest.payload.fill(0);
+    refreshedPayload?.fill(0);
+  }
+}
+
 export async function runAuthWorker(
   environment: WorkerEnvironment = process.env,
 ): Promise<void> {
@@ -153,6 +204,7 @@ export async function runAuthWorker(
   try {
     if (action === "connect") await connect(environment);
     else if (action === "disconnect") await disconnect(environment);
+    else if (action === "refresh") await refresh(environment);
     else throw new Error("Unsupported Grok auth action");
     console.log(`Grok subscription ${action} completed for ${sessionId}`);
   } catch (error) {
@@ -161,7 +213,7 @@ export async function runAuthWorker(
       event: {
         type: "failed",
         action,
-        sessionId,
+        ...(action === "refresh" ? { runId: sessionId } : { sessionId }),
         error: safeError(error),
       },
     }).catch(() => undefined);

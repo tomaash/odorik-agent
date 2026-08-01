@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  accessLatestGrokSecretVersion,
   addGrokSecretVersion,
   disableOtherGrokSecretVersions,
   extractDeviceAuthorization,
+  refreshGrokAuthDocument,
   validateGrokAuthDocument,
 } from "../protocol.js";
 
@@ -104,4 +106,95 @@ test("canonicalizes Secret Manager's numeric project version name", async () => 
     version,
     "projects/project-1/secrets/grok-subscription-auth/versions/7",
   );
+});
+
+test("reads the latest Grok credential without exposing a numeric project route", async () => {
+  const credential = Buffer.from(JSON.stringify({
+    "https://auth.x.ai::client": {
+      auth_mode: "oidc",
+      oidc_issuer: "https://auth.x.ai",
+      oidc_client_id: "client",
+      refresh_token: "refresh-token-value-that-is-long-enough",
+      email: "operator@example.com",
+      principal_id: "principal-1",
+    },
+  }));
+  const latest = await accessLatestGrokSecretVersion({
+    projectId: "project-1",
+    secretName: "grok-subscription-auth",
+    accessToken: "access-token",
+    fetcher: async (url) => {
+      assert.match(String(url), /versions\/latest:access$/);
+      return new Response(JSON.stringify({
+        name: "projects/224347630361/secrets/grok-subscription-auth/versions/8",
+        payload: { data: credential.toString("base64") },
+      }), { status: 200 });
+    },
+  });
+  assert.equal(latest.name, "projects/project-1/secrets/grok-subscription-auth/versions/8");
+  assert.deepEqual(latest.payload, credential);
+});
+
+test("refreshes and preserves a rotating official Grok OIDC credential", async () => {
+  const requests: Array<{ url: string; body: string }> = [];
+  const current = Buffer.from(JSON.stringify({
+    "https://auth.x.ai::client": {
+      auth_mode: "oidc",
+      oidc_issuer: "https://auth.x.ai",
+      oidc_client_id: "client-1",
+      key: "expired-access-token",
+      refresh_token: "old-refresh-token-value-that-is-long-enough",
+      email: "operator@example.com",
+      principal_type: "User",
+      principal_id: "principal-1",
+      expires_at: "2026-08-01T12:00:00.000Z",
+    },
+  }));
+  const result = await refreshGrokAuthDocument({
+    payload: current,
+    now: new Date("2026-08-01T13:00:00.000Z"),
+    fetcher: async (url, init) => {
+      requests.push({ url: String(url), body: String(init?.body || "") });
+      if (String(url).endsWith("/.well-known/openid-configuration")) {
+        return new Response(JSON.stringify({
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        access_token: "fresh-access-token",
+        refresh_token: "rotated-refresh-token-value-that-is-long-enough",
+        expires_in: 21_600,
+      }), { status: 200 });
+    },
+  });
+  assert.equal(result.refreshed, true);
+  assert.equal(result.account.expiresAt, "2026-08-01T19:00:00.000Z");
+  const account = Object.values(JSON.parse(result.payload.toString("utf8")))[0] as Record<string, unknown>;
+  assert.equal(account.key, "fresh-access-token");
+  assert.equal(account.refresh_token, "rotated-refresh-token-value-that-is-long-enough");
+  assert.match(requests[1]?.body || "", /principal_type=User/);
+  assert.match(requests[1]?.body || "", /principal_id=principal-1/);
+});
+
+test("does not rotate a Grok credential that remains valid beyond the safety window", async () => {
+  const current = Buffer.from(JSON.stringify({
+    "https://auth.x.ai::client": {
+      auth_mode: "oidc",
+      oidc_issuer: "https://auth.x.ai",
+      oidc_client_id: "client-1",
+      refresh_token: "refresh-token-value-that-is-long-enough",
+      email: "operator@example.com",
+      principal_id: "principal-1",
+      expires_at: "2026-08-01T20:00:00.000Z",
+    },
+  }));
+  const result = await refreshGrokAuthDocument({
+    payload: current,
+    now: new Date("2026-08-01T13:00:00.000Z"),
+    fetcher: async () => {
+      throw new Error("network must not be used for a fresh credential");
+    },
+  });
+  assert.equal(result.refreshed, false);
+  assert.deepEqual(result.payload, current);
 });

@@ -12,6 +12,17 @@ export type GrokAccountSummary = {
   expiresAt: string | null;
 };
 
+export type GrokSecretVersion = {
+  name: string;
+  payload: Buffer;
+};
+
+export type GrokRefreshResult = {
+  payload: Buffer;
+  account: GrokAccountSummary;
+  refreshed: boolean;
+};
+
 type FetchLike = typeof fetch;
 
 const ansiPattern = /\u001b\[[0-9;]*m/g;
@@ -141,6 +152,16 @@ function secretVersionId(resourceName: string, secretName: string): string | nul
   return parts[5] || null;
 }
 
+function canonicalSecretVersion(
+  resourceName: string,
+  projectId: string,
+  secretName: string,
+): string {
+  const versionId = secretVersionId(resourceName, secretName);
+  if (!versionId) throw new Error("Secret Manager returned an invalid Grok secret version");
+  return `projects/${projectId}/secrets/${secretName}/versions/${versionId}`;
+}
+
 async function secretManagerRequest(
   path: string,
   accessToken: string,
@@ -182,6 +203,137 @@ export async function addGrokSecretVersion(input: {
   // Secret Manager canonicalizes project IDs to project numbers in resource
   // names. Return our project-ID form so downstream tenant checks stay exact.
   return `projects/${input.projectId}/secrets/${input.secretName}/versions/${versionId}`;
+}
+
+export async function accessLatestGrokSecretVersion(input: {
+  projectId: string;
+  secretName: string;
+  accessToken: string;
+  fetcher?: FetchLike;
+}): Promise<GrokSecretVersion> {
+  assertSecretName(input.secretName);
+  const result = await secretManagerRequest(
+    `projects/${encodeURIComponent(input.projectId)}/secrets/${encodeURIComponent(input.secretName)}/versions/latest:access`,
+    input.accessToken,
+    { method: "GET" },
+    input.fetcher || fetch,
+  );
+  const name = boundedString(result.name, 1_000);
+  const payload = objectValue(result.payload);
+  const encoded = boundedString(payload?.data, 128 * 1024);
+  if (!name || !encoded) throw new Error("Secret Manager returned an incomplete Grok credential");
+  const decoded = Buffer.from(encoded, "base64");
+  if (decoded.length < 100 || decoded.length > 64 * 1024) {
+    decoded.fill(0);
+    throw new Error("Secret Manager returned an invalid Grok credential size");
+  }
+  return {
+    name: canonicalSecretVersion(name, input.projectId, input.secretName),
+    payload: decoded,
+  };
+}
+
+function authDocument(raw: Buffer): {
+  root: Record<string, unknown>;
+  issuerKey: string;
+  account: Record<string, unknown>;
+} {
+  validateGrokAuthDocument(raw);
+  const root = JSON.parse(raw.toString("utf8")) as Record<string, unknown>;
+  const [issuerKey, value] = Object.entries(root)[0] || [];
+  const account = objectValue(value);
+  if (!issuerKey || !account) throw new Error("Grok OAuth session is incomplete");
+  return { root, issuerKey, account };
+}
+
+function refreshIsRequired(account: Record<string, unknown>, now: Date): boolean {
+  const expiresAt = boundedString(account.expires_at, 100);
+  return !expiresAt || Date.parse(expiresAt) <= now.getTime() + 5 * 60 * 1000;
+}
+
+async function retryingFetch(
+  input: string,
+  init: RequestInit,
+  fetcher: FetchLike,
+): Promise<Response> {
+  let response: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    response = await fetcher(input, init);
+    if (response.ok || (response.status < 500 && response.status !== 429)) return response;
+    if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+  }
+  return response as Response;
+}
+
+export async function refreshGrokAuthDocument(input: {
+  payload: Buffer;
+  fetcher?: FetchLike;
+  now?: Date;
+}): Promise<GrokRefreshResult> {
+  const fetcher = input.fetcher || fetch;
+  const now = input.now || new Date();
+  const current = authDocument(input.payload);
+  const summary = validateGrokAuthDocument(input.payload);
+  if (!refreshIsRequired(current.account, now)) {
+    return { payload: Buffer.from(input.payload), account: summary, refreshed: false };
+  }
+  const issuer = boundedString(current.account.oidc_issuer, 500);
+  const clientId = boundedString(current.account.oidc_client_id, 500);
+  const refreshToken = boundedString(current.account.refresh_token, 16_384);
+  if (issuer !== "https://auth.x.ai" || !clientId || !refreshToken) {
+    throw new Error("Grok OAuth session cannot be refreshed");
+  }
+  const discovery = await retryingFetch(
+    `${issuer}/.well-known/openid-configuration`,
+    { method: "GET" },
+    fetcher,
+  );
+  if (!discovery.ok) throw new Error(`Grok OIDC discovery failed (${discovery.status})`);
+  const discoveryBody = objectValue(await discovery.json());
+  const tokenEndpoint = boundedString(discoveryBody?.token_endpoint, 1_000);
+  if (tokenEndpoint !== "https://auth.x.ai/oauth2/token") {
+    throw new Error("Grok OIDC discovery returned an untrusted token endpoint");
+  }
+  const parameters = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId,
+  });
+  const principalType = boundedString(current.account.principal_type, 100);
+  const principalId = boundedString(current.account.principal_id, 500);
+  if (principalType) parameters.set("principal_type", principalType);
+  if (principalId) parameters.set("principal_id", principalId);
+  const refreshed = await retryingFetch(tokenEndpoint, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: parameters.toString(),
+  }, fetcher);
+  if (!refreshed.ok) throw new Error(`Grok OAuth refresh failed (${refreshed.status})`);
+  const tokenBody = objectValue(await refreshed.json());
+  const accessToken = boundedString(tokenBody?.access_token, 32_768);
+  const rotatedRefreshToken = boundedString(tokenBody?.refresh_token, 16_384) || refreshToken;
+  const expiresIn = Number(tokenBody?.expires_in);
+  if (!accessToken || !Number.isSafeInteger(expiresIn) || expiresIn < 60 || expiresIn > 86_400) {
+    throw new Error("Grok OAuth refresh returned an invalid token response");
+  }
+  const refreshedAt = now.toISOString();
+  const expiresAt = new Date(now.getTime() + expiresIn * 1000).toISOString();
+  const nextAccount = {
+    ...current.account,
+    key: accessToken,
+    refresh_token: rotatedRefreshToken,
+    create_time: refreshedAt,
+    expires_at: expiresAt,
+  };
+  const payload = Buffer.from(JSON.stringify({
+    ...current.root,
+    [current.issuerKey]: nextAccount,
+  }));
+  return {
+    payload,
+    account: validateGrokAuthDocument(payload),
+    refreshed: true,
+  };
 }
 
 export async function disableOtherGrokSecretVersions(input: {

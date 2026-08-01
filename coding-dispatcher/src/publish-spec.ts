@@ -14,8 +14,14 @@ export type PublishSpec = {
     baseSha: string;
     resultBranch: string;
     resultSha: string;
+    branchMode: "create" | "fast_forward";
   };
-  publication: { draft: true; prTitle: string; prBody: string };
+  publication: {
+    draft: true;
+    prTitle: string;
+    prBody: string;
+    existingPullRequestNumber?: number;
+  };
   objects: { source: string; resultBundle: string };
   resultBundleSha256: string;
   maxResultBundleBytes: number;
@@ -61,7 +67,7 @@ export function parsePublishSpec(value: unknown): PublishSpec {
     return result;
   };
   if (publication.draft !== true) throw new Error("Only draft pull requests are allowed");
-  return {
+  const parsed: PublishSpec = {
     schemaVersion: 1,
     runId,
     companyId,
@@ -81,11 +87,24 @@ export function parsePublishSpec(value: unknown): PublishSpec {
       baseSha: text(git.baseSha, "git.baseSha", /^[a-f0-9]{40,64}$/),
       resultBranch: text(git.resultBranch, "git.resultBranch", /^erik\/[A-Za-z0-9._/-]+$/, 200),
       resultSha: text(git.resultSha, "git.resultSha", /^[a-f0-9]{40,64}$/),
+      branchMode: git.branchMode === undefined
+        ? "create"
+        : text(git.branchMode, "git.branchMode", /^(create|fast_forward)$/) as "create" | "fast_forward",
     },
     publication: {
       draft: true,
       prTitle: text(publication.prTitle, "publication.prTitle", /^[^\r\n\0]+$/, 256),
       prBody: text(publication.prBody, "publication.prBody", /^[\s\S]+$/, 10_000),
+      ...(publication.existingPullRequestNumber === undefined
+        ? {}
+        : {
+            existingPullRequestNumber: integer(
+              publication.existingPullRequestNumber,
+              "publication.existingPullRequestNumber",
+              1,
+              2_147_483_647,
+            ),
+          }),
     },
     objects: {
       source: artifact(objects.source, "objects.source"),
@@ -103,6 +122,13 @@ export function parsePublishSpec(value: unknown): PublishSpec {
       500 * 1024 * 1024,
     ),
   };
+  if (
+    (parsed.git.branchMode === "fast_forward")
+    !== (parsed.publication.existingPullRequestNumber !== undefined)
+  ) {
+    throw new Error("Linked pull request updates require fast-forward publication mode");
+  }
+  return parsed;
 }
 
 export async function readPublishSpec(urlValue: string): Promise<PublishSpec> {

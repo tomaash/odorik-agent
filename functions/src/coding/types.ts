@@ -44,6 +44,7 @@ export type CodingDispatchSpec = {
     authKind: "subscription_oauth";
   };
   proposedBranch: string;
+  sourceBranch: string;
   baseSha: string;
   approval: {
     approvalId: string;
@@ -80,6 +81,10 @@ export type CodingPublisherExecutor = (input: {
 export type CodingDispatcherExecutor = (input: {
   runId: string;
   dispatchSpecUrl: string;
+}) => Promise<{ operationName: string; executionName?: string }>;
+
+export type CodingAuthRefreshExecutor = (input: {
+  runId: string;
 }) => Promise<{ operationName: string; executionName?: string }>;
 
 export type CodingCallbackEvent = {

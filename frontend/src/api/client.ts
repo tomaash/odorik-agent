@@ -407,8 +407,18 @@ export type ActionApprovalItem = {
     }
     git: {
       baseBranch: string
+      sourceBranch?: string
       baseSha: string
       resultBranch: string
+    }
+    linkedAttempt?: {
+      kind: 'retry' | 'pull_request_changes'
+      parentRunId: string
+      rootRunId: string
+      attempt: number
+      instructions: string
+      pullRequestNumber?: number
+      pullRequestUrl?: string
     }
     grok: { connectionId: 'grok_subscription'; authKind: 'subscription_oauth' }
     limits: {
@@ -418,7 +428,12 @@ export type ActionApprovalItem = {
       maxPatchBytes: number
       maxArtifactBytes: number
     }
-    publication: { draft: true; prTitle: string; prBody: string }
+    publication: {
+      draft: true
+      prTitle: string
+      prBody: string
+      existingPullRequestNumber?: number
+    }
   }) & {
     context?: {
       callerName?: string | null
@@ -623,6 +638,7 @@ export type CodingRun = {
   grok: { connectionId: string; authKind: 'subscription_oauth' }
   git: {
     baseBranch: string
+    sourceBranch?: string
     proposedBranch: string
     baseSha?: string
     resultSha?: string
@@ -643,7 +659,20 @@ export type CodingRun = {
     pullRequestUrl: string
     branch: string
     draft: boolean
+    state?: 'open' | 'closed'
+    mergedAt?: string | null
+    headSha?: string
   }
+  linkedAttempt?: {
+    kind: 'retry' | 'pull_request_changes'
+    parentRunId: string
+    rootRunId: string
+    attempt: number
+    instructions: string
+    pullRequestNumber?: number
+    pullRequestUrl?: string
+  }
+  recovery?: { reconciledBy: string; reconciledAt?: string | null }
   error?: { code: string; message: string; phase: string }
   events?: CodingRunEvent[]
   createdAt?: string | null
@@ -1011,6 +1040,27 @@ export async function requestCodingRunApprovalFromIssue(
 
 export async function cancelCodingRun(runId: string): Promise<CodingRun> {
   return trpc.coding.cancelRun.mutate({ runId }) as Promise<CodingRun>
+}
+
+export async function reconcileCodingRun(runId: string): Promise<CodingRun> {
+  return trpc.coding.reconcileRun.mutate({ runId }) as Promise<CodingRun>
+}
+
+export async function requestCodingRetry(
+  runId: string,
+  instructions: string,
+): Promise<ActionApprovalItem> {
+  return trpc.coding.retryRun.mutate({ runId, instructions }) as Promise<ActionApprovalItem>
+}
+
+export async function requestCodingPullRequestChanges(
+  runId: string,
+  instructions: string,
+): Promise<ActionApprovalItem> {
+  return trpc.coding.requestPullRequestChanges.mutate({
+    runId,
+    instructions,
+  }) as Promise<ActionApprovalItem>
 }
 
 export async function getCodingPatchPreview(
