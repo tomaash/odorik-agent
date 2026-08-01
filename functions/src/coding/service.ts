@@ -40,7 +40,11 @@ export async function startApprovedCodingRun(input: {
     database,
     now: input.now,
   });
-  if (!created.created && created.run.status !== "queued") return created.run;
+  if (
+    !created.created
+    && created.run.status !== "queued"
+    && created.run.phase !== "dispatch_failed"
+  ) return created.run;
   const dispatchObject = created.dispatchSpec.objects.runSpec.replace(/run-spec\.json$/, "dispatch.json");
   try {
     if (!await artifactStore.exists(dispatchObject)) {
@@ -62,6 +66,8 @@ export async function startApprovedCodingRun(input: {
       message: "Trusted source dispatcher queued",
       eventId: "dispatcher-queued",
       values: {
+        error: null,
+        completedAt: null,
         cloudRun: {
           dispatcherOperationName: execution.operationName,
           ...(execution.executionName

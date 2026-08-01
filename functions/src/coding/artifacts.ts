@@ -31,10 +31,7 @@ export class GoogleCodingArtifactStore implements CodingArtifactStore {
         targetScopes: ["https://www.googleapis.com/auth/devstorage.full_control"],
         lifetime: 3600,
       });
-      // @google-cloud/storage currently carries google-auth-library v9 while
-      // the Functions runtime uses v10. Both expose the same signing/request
-      // contract, but their private AuthClient types are nominally different.
-      return new Storage({ projectId, authClient: authClient as never });
+      return new Storage({ projectId, authClient });
     })();
     return this.storagePromise;
   }

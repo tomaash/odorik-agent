@@ -23,7 +23,7 @@ async function storage(): Promise<Storage> {
       targetScopes: ["https://www.googleapis.com/auth/devstorage.full_control"],
       lifetime: 3600,
     });
-    return new Storage({ projectId, authClient: authClient as never });
+    return new Storage({ projectId, authClient });
   })();
   return storagePromise;
 }
