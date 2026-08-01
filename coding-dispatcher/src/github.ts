@@ -210,6 +210,7 @@ export async function canonicalCodingSource(input: {
   repositoryId: number;
   fullName: string;
   expectedDefaultBranch: string;
+  sourceBranch: string;
   expectedBaseSha: string;
   issueNumber: number;
   expectedIssueVersion: string;
@@ -286,12 +287,12 @@ export async function canonicalCodingSource(input: {
   }
   const commit = await request<{ sha: string }>(
     fetcher,
-    `${prefix}/commits/${encodeURIComponent(repository.default_branch)}`,
+    `${prefix}/commits/${encodeURIComponent(input.sourceBranch)}`,
     tokenBody.token,
   );
   if (!/^[a-f0-9]{40,64}$/i.test(commit.sha)) throw new Error("GitHub returned an invalid base SHA");
   if (commit.sha.toLowerCase() !== input.expectedBaseSha) {
-    throw new Error("GitHub base branch changed after implementation approval");
+    throw new Error("GitHub source branch changed after implementation approval");
   }
   return { token: tokenBody.token, repository, issue, comments, baseSha: commit.sha.toLowerCase() };
 }

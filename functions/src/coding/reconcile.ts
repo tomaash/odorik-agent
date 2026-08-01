@@ -4,6 +4,7 @@ import { db } from "../firestore.js";
 import type { CodingArtifactStore } from "./artifacts.js";
 import { safeCodingError, updateCodingRunState } from "./repository.js";
 import type { CodingRunStatus } from "./types.js";
+import { canonicalCodingExecutionName } from "./cloud-run.js";
 
 export type CodingExecutionState = {
   terminal: boolean;
@@ -12,19 +13,7 @@ export type CodingExecutionState = {
 
 export type CodingExecutionInspector = (executionName: string) => Promise<CodingExecutionState>;
 
-const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "odorik-tx-260720-c58d";
-const codingRegion = process.env.CODING_REGION || "europe-west1";
 const authentication = new GoogleAuth({ scopes: ["https://www.googleapis.com/auth/cloud-platform"] });
-
-function canonicalExecutionName(value: string): string {
-  if (/^projects\/[^/]+\/locations\/[^/]+\/jobs\/[^/]+\/executions\/[^/]+$/.test(value)) {
-    return value;
-  }
-  if (/^[a-z][a-z0-9-]{0,62}$/.test(value)) {
-    return `projects/${projectId}/locations/${codingRegion}/jobs/erik-coding-runner/executions/${value}`;
-  }
-  throw new Error("Invalid Cloud Run execution name");
-}
 
 export function createCloudRunExecutionInspector(): CodingExecutionInspector {
   return async (executionName) => {
@@ -36,7 +25,7 @@ export function createCloudRunExecutionInspector(): CodingExecutionInspector {
       succeededCount?: number;
       terminalCondition?: { state?: string; reason?: string };
     }>({
-      url: `https://run.googleapis.com/v2/${canonicalExecutionName(executionName)}`,
+      url: `https://run.googleapis.com/v2/${canonicalCodingExecutionName(executionName)}`,
       method: "GET",
     });
     const value = response.data;
@@ -123,38 +112,54 @@ export async function reconcileCodingRuns(input: {
           }
           continue;
         }
+        const publicationCancellationUnknown = status === "cancel_requested"
+          && data.cancelRequestedFromStatus === "publishing";
         const executionName = String(
-          status === "publishing"
+          status === "publishing" || publicationCancellationUnknown
             ? data.cloudRun?.publisherExecutionName || ""
-            : data.cloudRun?.runnerExecutionName || data.cloudRun?.dispatcherExecutionName || "",
+            : data.cloudRun?.runnerExecutionName
+              || data.cloudRun?.dispatcherExecutionName
+              || data.cloudRun?.authRefreshExecutionName
+              || "",
         );
         if (executionName) {
           const execution = await input.inspectExecution(executionName);
           if (execution.terminal) {
-            const cancelled = status === "cancel_requested" || execution.outcome === "cancelled";
+            const cancelled = !publicationCancellationUnknown
+              && (status === "cancel_requested" || execution.outcome === "cancelled");
             await updateCodingRunState({
               companyId: company.id,
               runId: run.id,
-              status: cancelled
-                ? "cancelled"
-                : status === "publishing"
-                  ? "outcome_unknown"
-                  : "failed",
-              phase: cancelled
-                ? "cancelled"
-                : status === "publishing"
-                  ? "publication_callback_missing"
-                  : "callback_missing",
-              message: cancelled
-                ? "Cloud Run execution cancellation confirmed"
-                : status === "publishing"
-                  ? "Publisher ended without a completion callback; reconcile GitHub before retrying"
-                  : "Cloud Run execution ended without a completion callback",
+              status: publicationCancellationUnknown
+                ? "outcome_unknown"
+                : cancelled
+                  ? "cancelled"
+                  : status === "publishing"
+                    ? "outcome_unknown"
+                    : "failed",
+              phase: publicationCancellationUnknown
+                ? "publication_cancellation_unknown"
+                : cancelled
+                  ? "cancelled"
+                  : status === "publishing"
+                    ? "publication_callback_missing"
+                    : "callback_missing",
+              message: publicationCancellationUnknown
+                ? "Publisher cancellation completed without a callback; reconcile GitHub before retrying"
+                : cancelled
+                  ? "Cloud Run execution cancellation confirmed"
+                  : status === "publishing"
+                    ? "Publisher ended without a completion callback; reconcile GitHub before retrying"
+                    : "Cloud Run execution ended without a completion callback",
               eventId: `reconcile-terminal-${now.toMillis()}`,
               values: cancelled ? {} : {
                 error: {
-                  code: "completion_callback_missing",
-                  message: "Cloud Run execution ended without a completion callback",
+                  code: publicationCancellationUnknown
+                    ? "publication_outcome_unknown"
+                    : "completion_callback_missing",
+                  message: publicationCancellationUnknown
+                    ? "Publisher cancellation ended without a completion callback"
+                    : "Cloud Run execution ended without a completion callback",
                   phase: "reconciliation",
                 },
               },
@@ -170,24 +175,34 @@ export async function reconcileCodingRuns(input: {
           await updateCodingRunState({
             companyId: company.id,
             runId: run.id,
-            status: status === "cancel_requested"
-              ? "cancelled"
-              : status === "publishing"
-                ? "outcome_unknown"
-                : "failed",
-            phase: status === "cancel_requested"
-              ? "cancelled"
-              : status === "publishing"
-                ? "publication_timed_out"
-                : "timed_out",
-            message: status === "cancel_requested"
-              ? "Cancellation confirmed after the run timeout"
-              : "Coding run exceeded its reconciliation timeout",
+            status: publicationCancellationUnknown
+              ? "outcome_unknown"
+              : status === "cancel_requested"
+                ? "cancelled"
+                : status === "publishing"
+                  ? "outcome_unknown"
+                  : "failed",
+            phase: publicationCancellationUnknown
+              ? "publication_cancellation_unknown"
+              : status === "cancel_requested"
+                ? "cancelled"
+                : status === "publishing"
+                  ? "publication_timed_out"
+                  : "timed_out",
+            message: publicationCancellationUnknown
+              ? "Publisher cancellation timed out; reconcile GitHub before retrying"
+              : status === "cancel_requested"
+                ? "Cancellation confirmed after the run timeout"
+                : "Coding run exceeded its reconciliation timeout",
             eventId: `reconcile-timeout-${now.toMillis()}`,
-            values: status === "cancel_requested" ? {} : {
+            values: status === "cancel_requested" && !publicationCancellationUnknown ? {} : {
               error: {
-                code: "coding_run_timed_out",
-                message: "Coding run exceeded its reconciliation timeout",
+                code: publicationCancellationUnknown
+                  ? "publication_outcome_unknown"
+                  : "coding_run_timed_out",
+                message: publicationCancellationUnknown
+                  ? "Publisher cancellation timed out without a completion callback"
+                  : "Coding run exceeded its reconciliation timeout",
                 phase: "reconciliation",
               },
             },

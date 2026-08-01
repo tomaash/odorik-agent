@@ -17,6 +17,7 @@ export type DispatchSpec = {
   };
   grok: { connectionId: string; authKind: "subscription_oauth" };
   proposedBranch: string;
+  sourceBranch: string;
   baseSha: string;
   approval: { approvalId: string; approvedBy: string; effectDigest: string };
   publication: { draft: true; prTitle: string; prBody: string };
@@ -105,6 +106,9 @@ export function parseDispatchSpec(value: unknown): DispatchSpec {
       authKind: "subscription_oauth",
     },
     proposedBranch: safeString(root.proposedBranch, "proposedBranch", /^erik\/[A-Za-z0-9._/-]+$/, 200),
+    sourceBranch: root.sourceBranch === undefined
+      ? safeString(github.defaultBranch, "github.defaultBranch", /^[A-Za-z0-9._/-]+$/, 200)
+      : safeString(root.sourceBranch, "sourceBranch", /^[A-Za-z0-9._/-]+$/, 200),
     baseSha: safeString(root.baseSha, "baseSha", /^[a-f0-9]{40,64}$/),
     approval: {
       approvalId: safeString(approval.approvalId, "approval.approvalId", /^[A-Za-z0-9_-]+$/, 200),

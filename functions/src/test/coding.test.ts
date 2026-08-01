@@ -14,14 +14,26 @@ import {
 } from "../coding/action.js";
 import { approveAction } from "../approvals/repository.js";
 import { processCodingCallback } from "../coding/callback.js";
+import { processCodingAuthRefreshCallback } from "../coding/auth-refresh.js";
 import {
   CodingRunError,
   getCodingRun,
   listCodingIssues,
 } from "../coding/repository.js";
-import { queueCodingPublisher, startApprovedCodingRun } from "../coding/service.js";
+import {
+  cancelCodingRun,
+  queueCodingDispatcher,
+  queueCodingPublisher,
+  reconcileCodingPublication,
+  startApprovedCodingRun,
+} from "../coding/service.js";
 import { reconcileCodingRuns } from "../coding/reconcile.js";
-import { requestCodingImplementationApproval } from "../coding/proposal.js";
+import {
+  requestCodingImplementationApproval,
+  requestCodingPullRequestChangesApproval,
+} from "../coding/proposal.js";
+import { inspectGitHubPublication } from "../coding/github-recovery.js";
+import { canonicalCodingExecutionName } from "../coding/cloud-run.js";
 import { MemoryFirestore } from "./firestore-harness.js";
 
 const companyId = "explorers";
@@ -112,6 +124,7 @@ function codingAction(): CodingIssueImplementAction {
     },
     git: {
       baseBranch: "main",
+      sourceBranch: "main",
       baseSha: "a".repeat(40),
       resultBranch: "erik/issue-17-eeeeeeee",
     },
@@ -183,6 +196,169 @@ test("one issue creates one active run and duplicate starts reuse it", async () 
 
   const issues = await listCodingIssues({ companyId, database: memory.asFirestore() });
   assert.equal(issues[0]?.activeRunId, first.id);
+});
+
+test("production coding waits for persisted OAuth rotation before dispatching Grok", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const artifacts = new MemoryArtifacts();
+  const refreshes: string[] = [];
+  const dispatches: string[] = [];
+  const run = await startApprovedCodingRun({
+    context: approvedContext,
+    action: codingAction(),
+    artifactStore: artifacts,
+    executeAuthRefresh: async ({ runId }) => {
+      refreshes.push(runId);
+      return {
+        operationName: `operations/auth/${runId}`,
+        executionName: "erik-grok-auth-abc12",
+      };
+    },
+    executeDispatcher: async ({ runId }) => {
+      dispatches.push(runId);
+      return { operationName: `operations/dispatch/${runId}` };
+    },
+    database: memory.asFirestore(),
+    now: Timestamp.fromDate(new Date("2026-08-01T10:00:00Z")),
+  });
+  assert.equal(run.status, "queued");
+  assert.equal(run.phase, "auth_refresh_queued");
+  assert.deepEqual(refreshes, [run.id as string]);
+  assert.equal(dispatches.length, 0);
+
+  const callback = await processCodingAuthRefreshCallback({
+    body: {
+      type: "completed",
+      action: "refresh",
+      runId: run.id,
+      secretVersion: "projects/odorik-tx-260720-c58d/secrets/grok-subscription-auth/versions/9",
+      expiresAt: "2026-08-01T16:00:00.000Z",
+      refreshed: true,
+    },
+    database: memory.asFirestore(),
+    now: Timestamp.fromDate(new Date("2026-08-01T10:00:02Z")),
+  });
+  assert.equal(callback.shouldDispatch, true);
+  await queueCodingDispatcher({
+    companyId,
+    runId: run.id as string,
+    artifactStore: artifacts,
+    executeDispatcher: async ({ runId }) => {
+      dispatches.push(runId);
+      return { operationName: `operations/dispatch/${runId}` };
+    },
+    database: memory.asFirestore(),
+    now: Timestamp.fromDate(new Date("2026-08-01T10:00:03Z")),
+  });
+  assert.deepEqual(dispatches, [run.id as string]);
+  assert.equal(memory.read(`companies/${companyId}/codingRuns/${run.id}`)?.status, "packaging");
+  assert.equal(
+    (memory.read(`companies/${companyId}/connections/grok_subscription`)?.credentialRef as Record<string, unknown>).version,
+    "projects/odorik-tx-260720-c58d/secrets/grok-subscription-auth/versions/9",
+  );
+});
+
+test("a failed OAuth preflight stops before Grok and marks the connection for attention", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const run = await startApprovedCodingRun({
+    context: approvedContext,
+    action: codingAction(),
+    artifactStore: new MemoryArtifacts(),
+    executeAuthRefresh: async () => ({
+      operationName: "operations/auth",
+      executionName: "erik-grok-auth-def34",
+    }),
+    executeDispatcher: async () => ({ operationName: "must-not-dispatch" }),
+    database: memory.asFirestore(),
+  });
+  const callback = await processCodingAuthRefreshCallback({
+    body: {
+      type: "failed",
+      action: "refresh",
+      runId: run.id,
+      error: "Grok OAuth refresh failed (400)",
+    },
+    database: memory.asFirestore(),
+  });
+  assert.equal(callback.shouldDispatch, false);
+  assert.equal(memory.read(`companies/${companyId}/codingRuns/${run.id}`)?.status, "failed");
+  assert.equal(memory.read(`companies/${companyId}/connections/grok_subscription`)?.status, "attention");
+});
+
+test("OAuth completion cannot reactivate a disconnected Grok connection", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const run = await startApprovedCodingRun({
+    context: approvedContext,
+    action: codingAction(),
+    artifactStore: new MemoryArtifacts(),
+    executeAuthRefresh: async () => ({ operationName: "operations/auth" }),
+    executeDispatcher: async () => ({ operationName: "must-not-dispatch" }),
+    database: memory.asFirestore(),
+  });
+  const connectionPath = `companies/${companyId}/connections/grok_subscription`;
+  memory.seed(connectionPath, {
+    ...memory.read(connectionPath),
+    status: "disconnected",
+    subscription: { state: "disconnected" },
+  });
+  const callback = await processCodingAuthRefreshCallback({
+    body: {
+      type: "completed",
+      action: "refresh",
+      runId: run.id,
+      secretVersion: "projects/odorik-tx-260720-c58d/secrets/grok-subscription-auth/versions/9",
+      expiresAt: "2026-08-01T16:00:00.000Z",
+      refreshed: true,
+    },
+    database: memory.asFirestore(),
+  });
+  assert.equal(callback.shouldDispatch, false);
+  assert.equal(memory.read(connectionPath)?.status, "disconnected");
+  assert.equal(memory.read(`companies/${companyId}/codingRuns/${run.id}`)?.status, "failed");
+  assert.equal(
+    (memory.read(`companies/${companyId}/codingRuns/${run.id}`)?.error as Record<string, unknown>).code,
+    "grok_connection_inactive",
+  );
+});
+
+test("replayed OAuth completion retries only a safe dispatcher-start failure", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const run = await startApprovedCodingRun({
+    context: approvedContext,
+    action: codingAction(),
+    artifactStore: new MemoryArtifacts(),
+    executeAuthRefresh: async () => ({ operationName: "operations/auth" }),
+    executeDispatcher: async () => ({ operationName: "unused" }),
+    database: memory.asFirestore(),
+  });
+  const body = {
+    type: "completed",
+    action: "refresh",
+    runId: run.id,
+    secretVersion: "projects/odorik-tx-260720-c58d/secrets/grok-subscription-auth/versions/9",
+    expiresAt: "2026-08-01T16:00:00.000Z",
+    refreshed: false,
+  };
+  const first = await processCodingAuthRefreshCallback({
+    body,
+    database: memory.asFirestore(),
+  });
+  assert.equal(first.shouldDispatch, true);
+  const runPath = `companies/${companyId}/codingRuns/${run.id}`;
+  memory.seed(runPath, {
+    ...memory.read(runPath),
+    status: "failed",
+    phase: "dispatch_failed",
+  });
+  const replay = await processCodingAuthRefreshCallback({
+    body,
+    database: memory.asFirestore(),
+  });
+  assert.equal(replay.shouldDispatch, true);
 });
 
 test("a safe dispatcher-start failure can retry the same approved run", async () => {
@@ -475,6 +651,383 @@ test("an approved result queues one publisher and records the draft PR", async (
   });
 });
 
+test("publication reconciliation adopts an orphan PR and rejects a conflicting result", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const action = codingAction();
+  const runId = action.runId;
+  const runPath = `companies/${companyId}/codingRuns/${runId}`;
+  memory.seed(runPath, {
+    status: "outcome_unknown",
+    phase: "outcome_unknown",
+    authorization: { approvalId: approvedContext.approvalId },
+    github: {
+      owner: "tomaash",
+      repo: "elixir-play",
+      repositoryId: 987654,
+      issueContextItemId: contextItemId,
+    },
+    git: {
+      baseBranch: "main",
+      sourceBranch: "main",
+      baseSha: "a".repeat(40),
+      resultSha: "b".repeat(40),
+      proposedBranch: action.git.resultBranch,
+    },
+  });
+  memory.seed(`companies/${companyId}/actionApprovals/${approvedContext.approvalId}`, {
+    action,
+  });
+  const reconciled = await reconcileCodingPublication({
+    companyId,
+    runId,
+    actorUid: "admin-1",
+    inspectPublication: async () => ({
+      branchSha: "b".repeat(40),
+      pullRequest: {
+        number: 42,
+        url: "https://github.com/tomaash/elixir-play/pull/42",
+        draft: true,
+        state: "open",
+        mergedAt: null,
+        headSha: "b".repeat(40),
+        headBranch: action.git.resultBranch,
+        baseBranch: "main",
+      },
+    }),
+    database: memory.asFirestore(),
+    now: Timestamp.fromDate(new Date("2026-08-01T12:00:00Z")),
+  });
+  assert.equal(reconciled.status, "succeeded");
+  assert.equal(
+    (reconciled.publicationResult as Record<string, unknown>).pullRequestNumber,
+    42,
+  );
+
+  memory.seed(runPath, {
+    ...memory.read(runPath),
+    status: "outcome_unknown",
+    phase: "outcome_unknown",
+  });
+  const conflicted = await reconcileCodingPublication({
+    companyId,
+    runId,
+    actorUid: "admin-1",
+    inspectPublication: async () => ({
+      branchSha: "c".repeat(40),
+      pullRequest: null,
+    }),
+    database: memory.asFirestore(),
+  });
+  assert.equal(conflicted.status, "failed");
+  assert.equal((conflicted.error as Record<string, unknown>).code, "publication_conflict");
+});
+
+test("GitHub publication inspection uses a read-only token and exact branch/PR identity", async () => {
+  const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const privateKey = pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  let tokenRequest: Record<string, unknown> | null = null;
+  const fetcher = (async (request: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(request));
+    if (url.pathname.endsWith("/access_tokens")) {
+      tokenRequest = JSON.parse(String(init?.body || "{}")) as Record<string, unknown>;
+      return new Response(JSON.stringify({
+        token: "read-token",
+        expires_at: "2026-08-01T13:00:00Z",
+        permissions: {
+          contents: "read",
+          issues: "read",
+          metadata: "read",
+          pull_requests: "read",
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/repos/tomaash/elixir-play") {
+      return new Response(JSON.stringify({ id: 987654, full_name: "tomaash/elixir-play" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname.includes("/git/ref/heads/erik/issue-17-eeeeeeee")) {
+      return new Response(JSON.stringify({ object: { sha: "b".repeat(40) } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url.pathname.endsWith("/pulls")) {
+      assert.equal(url.searchParams.get("state"), "all");
+      assert.equal(url.searchParams.get("head"), "tomaash:erik/issue-17-eeeeeeee");
+      return new Response(JSON.stringify([{
+        number: 42,
+        html_url: "https://github.com/tomaash/elixir-play/pull/42",
+        draft: true,
+        state: "open",
+        merged_at: null,
+        head: { sha: "b".repeat(40), ref: "erik/issue-17-eeeeeeee" },
+        base: { ref: "main" },
+      }]), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ message: "unexpected request" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  const snapshot = await inspectGitHubPublication({
+    configuration: {
+      appId: 4447426,
+      clientId: "Iv23liy3QUr30tDzuO2F",
+      appSlug: "agent-erik-development",
+      privateKey,
+    },
+    installationId: 150346586,
+    repositoryId: 987654,
+    fullName: "tomaash/elixir-play",
+    resultBranch: "erik/issue-17-eeeeeeee",
+    baseBranch: "main",
+    fetcher,
+  });
+  assert.equal(snapshot.pullRequest?.number, 42);
+  assert.deepEqual(tokenRequest, {
+    permissions: {
+      contents: "read",
+      issues: "read",
+      metadata: "read",
+      pull_requests: "read",
+    },
+  });
+});
+
+test("publication reconciliation safely republishes a matching orphan branch", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const action = codingAction();
+  const runId = action.runId;
+  memory.seed(`companies/${companyId}/codingRuns/${runId}`, {
+    status: "outcome_unknown",
+    phase: "outcome_unknown",
+    authorization: { approvalId: approvedContext.approvalId },
+    github: { owner: "tomaash", repo: "elixir-play", repositoryId: 987654 },
+    git: {
+      baseBranch: "main",
+      baseSha: "a".repeat(40),
+      resultSha: "b".repeat(40),
+      proposedBranch: action.git.resultBranch,
+    },
+  });
+  memory.seed(`companies/${companyId}/actionApprovals/${approvedContext.approvalId}`, {
+    action,
+  });
+  let queued = false;
+  await reconcileCodingPublication({
+    companyId,
+    runId,
+    actorUid: "admin-1",
+    inspectPublication: async () => ({
+      branchSha: "b".repeat(40),
+      pullRequest: null,
+    }),
+    queuePublisher: async () => {
+      queued = true;
+      return getCodingRun({ companyId, runId, database: memory.asFirestore() });
+    },
+    database: memory.asFirestore(),
+  });
+  assert.equal(queued, true);
+  assert.equal(memory.read(`companies/${companyId}/codingRuns/${runId}`)?.status, "ready_to_publish");
+  assert.equal(memory.read(`companies/${companyId}/codingRuns/${runId}`)?.phase, "orphan_branch_recovered");
+});
+
+test("cancellation targets the active publisher and closes pre-publication runs", async () => {
+  const memory = new MemoryFirestore();
+  const action = codingAction();
+  const runPath = `companies/${companyId}/codingRuns/${action.runId}`;
+  memory.seed(runPath, {
+    status: "publishing",
+    phase: "publisher_queued",
+    cloudRun: {
+      dispatcherExecutionName: "dispatcher-old",
+      runnerExecutionName: "runner-old",
+      publisherExecutionName: "publisher-current",
+    },
+  });
+  const cancelled: string[] = [];
+  const result = await cancelCodingRun({
+    companyId,
+    runId: action.runId,
+    actorUid: "admin-1",
+    cancelExecution: async (executionName) => { cancelled.push(executionName); },
+    database: memory.asFirestore(),
+  });
+  assert.deepEqual(cancelled, ["publisher-current"]);
+  assert.equal(result.status, "cancel_requested");
+
+  memory.seed(runPath, {
+    ...memory.read(runPath),
+    status: "queued",
+    phase: "auth_refresh_queued",
+    cloudRun: { authRefreshExecutionName: "erik-grok-auth-current" },
+  });
+  await cancelCodingRun({
+    companyId,
+    runId: action.runId,
+    actorUid: "admin-1",
+    cancelExecution: async (executionName) => { cancelled.push(executionName); },
+    database: memory.asFirestore(),
+  });
+  assert.deepEqual(cancelled, ["publisher-current", "erik-grok-auth-current"]);
+
+  memory.seed(runPath, {
+    ...memory.read(runPath),
+    status: "ready_to_publish",
+    phase: "ready_to_publish",
+    cloudRun: {},
+  });
+  const beforePublish = await cancelCodingRun({
+    companyId,
+    runId: action.runId,
+    actorUid: "admin-1",
+    cancelExecution: async () => { throw new Error("must not be called"); },
+    database: memory.asFirestore(),
+  });
+  assert.equal(beforePublish.status, "cancelled");
+});
+
+test("a publisher completion remains factual after cancellation was requested", async () => {
+  const memory = new MemoryFirestore();
+  const action = codingAction();
+  const runPath = `companies/${companyId}/codingRuns/${action.runId}`;
+  memory.seed(`codingRunRoutes/${action.runId}`, { companyId });
+  memory.seed(runPath, {
+    status: "cancel_requested",
+    phase: "cancel_requested",
+    cancelRequestedFromStatus: "publishing",
+    authorization: {
+      approvalId: approvedContext.approvalId,
+      effectDigest: "f".repeat(64),
+    },
+    git: {
+      baseSha: action.git.baseSha,
+      resultSha: "b".repeat(40),
+      proposedBranch: action.git.resultBranch,
+    },
+  });
+  const callback = await processCodingCallback({
+    principalEmail: "erik-coding-dispatcher@odorik-tx-260720-c58d.iam.gserviceaccount.com",
+    body: {
+      eventId: "publisher-completed-after-cancel",
+      runId: action.runId,
+      type: "completed",
+      status: "succeeded",
+      phase: "succeeded",
+      message: "Draft pull request opened",
+      result: {
+        baseSha: action.git.baseSha,
+        resultSha: "b".repeat(40),
+        branch: action.git.resultBranch,
+        pullRequestNumber: 42,
+        pullRequestUrl: "https://github.com/tomaash/elixir-play/pull/42",
+        draft: true,
+        approvalId: approvedContext.approvalId,
+        effectDigest: "f".repeat(64),
+      },
+    },
+    database: memory.asFirestore(),
+  });
+  assert.equal(callback.shouldPublish, false);
+  assert.equal(memory.read(runPath)?.status, "succeeded");
+  assert.equal(
+    (memory.read(runPath)?.publicationResult as Record<string, unknown>).pullRequestNumber,
+    42,
+  );
+});
+
+test("Cloud Run recovery resolves runner and trusted publisher executions to their own jobs", () => {
+  assert.match(
+    canonicalCodingExecutionName("erik-coding-runner-abc12"),
+    /\/jobs\/erik-coding-runner\/executions\/erik-coding-runner-abc12$/,
+  );
+  assert.match(
+    canonicalCodingExecutionName("erik-coding-dispatcher-abc12"),
+    /\/jobs\/erik-coding-dispatcher\/executions\/erik-coding-dispatcher-abc12$/,
+  );
+  assert.match(
+    canonicalCodingExecutionName("erik-grok-auth-abc12"),
+    /\/jobs\/erik-grok-auth\/executions\/erik-grok-auth-abc12$/,
+  );
+  assert.throws(() => canonicalCodingExecutionName("untrusted-execution"), /Invalid/);
+});
+
+test("PR change requests create a separately approved linked fast-forward attempt", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const action = codingAction();
+  const runId = action.runId;
+  memory.seed(`companies/${companyId}/codingRuns/${runId}`, {
+    status: "succeeded",
+    phase: "succeeded",
+    authorization: { approvalId: approvedContext.approvalId },
+    github: {
+      owner: "tomaash",
+      repo: "elixir-play",
+      repositoryId: 987654,
+      issueContextItemId: contextItemId,
+    },
+    git: {
+      baseBranch: "main",
+      sourceBranch: "main",
+      baseSha: "a".repeat(40),
+      resultSha: "b".repeat(40),
+      proposedBranch: action.git.resultBranch,
+    },
+    publicationResult: {
+      pullRequestNumber: 42,
+      pullRequestUrl: "https://github.com/tomaash/elixir-play/pull/42",
+      branch: action.git.resultBranch,
+      draft: true,
+    },
+  });
+  memory.seed(`companies/${companyId}/actionApprovals/${approvedContext.approvalId}`, {
+    action,
+  });
+  const requested = await requestCodingPullRequestChangesApproval({
+    companyId,
+    actorUid: "admin-1",
+    preferredApproverUid: "admin-1",
+    runId,
+    instructions: "Add a regression test for the parser edge case.",
+    configuration: {
+      appId: 4447426,
+      clientId: "Iv23liy3QUr30tDzuO2F",
+      appSlug: "agent-erik-development",
+      privateKey: "unused-by-the-injected-inspector",
+    },
+    inspectPublication: async () => ({
+      branchSha: "b".repeat(40),
+      pullRequest: {
+        number: 42,
+        url: "https://github.com/tomaash/elixir-play/pull/42",
+        draft: true,
+        state: "open",
+        mergedAt: null,
+        headSha: "b".repeat(40),
+        headBranch: action.git.resultBranch,
+        baseBranch: "main",
+      },
+    }),
+    database: memory.asFirestore(),
+  });
+  assert.equal(requested.status, "pending");
+  const linked = requested.action as CodingIssueImplementAction;
+  assert.equal(linked.linkedAttempt?.kind, "pull_request_changes");
+  assert.equal(linked.linkedAttempt?.parentRunId, runId);
+  assert.equal(linked.linkedAttempt?.attempt, 2);
+  assert.equal(linked.git.sourceBranch, action.git.resultBranch);
+  assert.equal(linked.git.baseSha, "b".repeat(40));
+  assert.equal(linked.git.resultBranch, action.git.resultBranch);
+  assert.equal(linked.publication.existingPullRequestNumber, 42);
+  assert.equal(memory.list(`companies/${companyId}/codingRuns`).length, 1);
+});
+
 test("coding starts fail closed for an unselected repository or disconnected Grok", async () => {
   const memory = new MemoryFirestore();
   seedCodingSources(memory);
@@ -523,4 +1076,28 @@ test("reconciliation closes terminal executions that missed their callback", asy
     (memory.read(`companies/${companyId}/codingRuns/${run.id}`)?.error as Record<string, unknown>).code,
     "completion_callback_missing",
   );
+});
+
+test("reconciliation treats publisher cancellation without a callback as outcome unknown", async () => {
+  const memory = new MemoryFirestore();
+  memory.seed(`companies/${companyId}`, { displayName: "Explorers" });
+  const runId = codingAction().runId;
+  const runPath = `companies/${companyId}/codingRuns/${runId}`;
+  memory.seed(runPath, {
+    status: "cancel_requested",
+    phase: "cancel_requested",
+    cancelRequestedFromStatus: "publishing",
+    cloudRun: { publisherExecutionName: "erik-coding-dispatcher-publish1" },
+    createdAt: Timestamp.fromDate(new Date("2026-08-01T10:00:00Z")),
+    updatedAt: Timestamp.fromDate(new Date("2026-08-01T10:01:00Z")),
+  });
+  const result = await reconcileCodingRuns({
+    artifactStore: new MemoryArtifacts(),
+    inspectExecution: async () => ({ terminal: true, outcome: "cancelled" }),
+    database: memory.asFirestore(),
+    now: Timestamp.fromDate(new Date("2026-08-01T10:02:00Z")),
+  });
+  assert.deepEqual(result, { inspected: 1, repaired: 1, failures: 0 });
+  assert.equal(memory.read(runPath)?.status, "outcome_unknown");
+  assert.equal(memory.read(runPath)?.phase, "publication_cancellation_unknown");
 });

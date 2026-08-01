@@ -47,7 +47,12 @@ gcloud secrets add-iam-policy-binding "$GROK_AUTH_SECRET_NAME" \
   --role=roles/secretmanager.secretVersionManager \
   --project="$PROJECT_ID" >/dev/null
 
+gcloud secrets add-iam-policy-binding "$GROK_AUTH_SECRET_NAME" \
+  --member="serviceAccount:$GROK_AUTH_SERVICE_ACCOUNT" \
+  --role=roles/secretmanager.secretAccessor \
+  --project="$PROJECT_ID" >/dev/null
+
 echo "Grok auth worker bootstrap complete."
 echo "GROK_AUTH_SERVICE_ACCOUNT=$GROK_AUTH_SERVICE_ACCOUNT"
 echo "GROK_AUTH_SECRET_NAME=$GROK_AUTH_SECRET_NAME"
-echo "The worker can add, list, and disable versions of this secret only."
+echo "The worker can read, rotate, list, and disable versions of this secret only."

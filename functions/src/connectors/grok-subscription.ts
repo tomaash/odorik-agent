@@ -7,6 +7,7 @@ export const grokSubscriptionConnectionId = "grok_subscription";
 export const grokSubscriptionSecretName = "grok-subscription-auth";
 
 export type GrokAuthorizationAction = "connect" | "disconnect";
+type GrokAuthJobAction = GrokAuthorizationAction | "refresh";
 export type GrokAuthorizationStatus =
   | "starting"
   | "waiting_for_user"
@@ -28,10 +29,11 @@ export type GrokAuthorizationPublicView = {
 };
 
 export type GrokAuthJobExecutor = (input: {
-  action: GrokAuthorizationAction;
+  action: GrokAuthJobAction;
   sessionId: string;
   secretName: string;
-}) => Promise<{ operationName: string }>;
+  callbackUrl?: string;
+}) => Promise<{ operationName: string; executionName?: string }>;
 
 export class GrokAuthorizationError extends Error {
   constructor(
@@ -101,7 +103,7 @@ export function createCloudRunGrokAuthJobExecutor(): GrokAuthJobExecutor {
   });
   return async (input) => {
     const client = await authentication.getClient();
-    const response = await client.request<{ name?: string }>({
+    const response = await client.request<{ name?: string; metadata?: { target?: string } }>({
       url: `https://run.googleapis.com/v2/projects/${projectId}/locations/${authRegion}/jobs/${authJob}:run`,
       method: "POST",
       data: {
@@ -113,7 +115,7 @@ export function createCloudRunGrokAuthJobExecutor(): GrokAuthJobExecutor {
               { name: "GROK_AUTH_ACTION", value: input.action },
               { name: "GROK_AUTH_SESSION_ID", value: input.sessionId },
               { name: "GROK_AUTH_SECRET_NAME", value: input.secretName },
-              { name: "GROK_AUTH_CALLBACK_URL", value: authCallbackUrl },
+              { name: "GROK_AUTH_CALLBACK_URL", value: input.callbackUrl || authCallbackUrl },
             ],
           }],
           taskCount: 1,
@@ -123,7 +125,12 @@ export function createCloudRunGrokAuthJobExecutor(): GrokAuthJobExecutor {
     });
     const operationName = response.data.name;
     if (!operationName) throw new Error("Cloud Run did not return an auth operation name");
-    return { operationName };
+    return {
+      operationName,
+      ...(response.data.metadata?.target
+        ? { executionName: response.data.metadata.target }
+        : {}),
+    };
   };
 }
 

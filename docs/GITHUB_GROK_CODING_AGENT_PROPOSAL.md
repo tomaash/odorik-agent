@@ -1,6 +1,6 @@
 # Proposal: GitHub + Grok coding agent for Agent Erik
 
-**Status:** CG3 complete and production-accepted (approve implementation first; draft PR is the automatic result)
+**Status:** CG4 complete and production-accepted (each Grok attempt is approved first; its branch/draft PR is the automatic result)
 **Date:** 2026-08-01
 **Working name:** Coding Agent slice (provider phase `R1` / coding-agent epic)
 **Depends on:** connector kernel (C0–C3), typed action registry (C2), approval execution path (G3-class external writes)
@@ -35,8 +35,9 @@ The repository now contains the first CG0/Cloud Run foundation:
   only the Grok subscription secret, plus an authenticated Sources connection
   flow that never exposes `auth.json` to the browser.
 
-The authenticated coding-run dispatcher, persistence/UI, approval action, and
-trusted draft-PR publisher are deployed for CG3. The runner
+The authenticated coding-run dispatcher, persistence/UI, approval action,
+operator recovery flow, and trusted draft-PR publisher are deployed through
+CG4. The runner
 intentionally cannot push or create a PR; the trusted dispatcher image performs
 publication in a separate mode after validating the approved result artifacts.
 
@@ -165,6 +166,12 @@ ContextItems. A periodic full read sync reconciles missed deliveries.
 ### 7.2 Grok subscription
 
 **Auth:** a dedicated Grok subscription account signs in with `grok login --device-auth`. Grok Build stores a refreshable OAuth session in `auth.json`; Erik treats that file as opaque secret material in Google Secret Manager. This design deliberately rejects `XAI_API_KEY` and direct xAI API billing. The official Grok Build consent currently includes broad Grok.com and Grok Projects read/write scopes. Erik cannot narrow scopes controlled by xAI's OAuth client, so the connected subscription should not be a personal account containing unrelated chats or projects.
+
+Before every approved production attempt, a dedicated least-privilege auth job
+refreshes the session when necessary and persists any rotated access/refresh
+token as a new Secret Manager version. Only after that durable preflight
+succeeds may the dispatcher queue Grok. This prevents a successful runner from
+stranding a rotated refresh token inside its ephemeral filesystem.
 
 **Product surface:** Sources or a new **Coding provider** section under company settings:
 
@@ -476,7 +483,7 @@ startup.
 
 Align with the connector epic style: one complete loop per slice.
 
-**Implementation status (2026-08-01):** the CG0/CG3 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 connector observes selected repositories using downscoped read-only installation tokens; the App installation grants Contents and Pull requests write only for the separately scoped trusted publisher while Issues remains read-only. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it as Secret Manager version 2, the old version was disabled, and coding execution `erik-coding-runner-q5zc2` authenticated as `subscription_oauth`. **CG3 is complete and production-accepted:** the Coding UI created immutable approval `coding_approval_58924904282906af438bf386887692635dde5b6a` for `tomaash/elixir-play#2`; only approval started run `coding_58924904282906af438bf38688769263`; the isolated Grok runner emitted one bounded README patch; and the trusted publisher pushed deterministic branch `erik/issue-2-88769263` and opened draft PR [#3](https://github.com/tomaash/elixir-play/pull/3). The PR is the post-execution approval/review artifact; no second Erik approval, xAI API key, automatic merge, or deploy exists.
+**Implementation status (2026-08-01):** the CG0/CG4 runner foundation is deployed and verified on GCP: pinned Grok Build, subscription OAuth only, strict sandbox, separate Unix identities, signed Git-bundle/artifact transfer, 2 vCPU / 4 GiB, and a 10 GiB disk-backed ephemeral volume. A real smoke run produced one committed file and a verified result bundle. The CG1 connector observes selected repositories using downscoped read-only installation tokens; the App installation grants Contents and Pull requests write only for the separately scoped trusted publisher while Issues remains read-only. **CG2 is complete:** an administrator completed xAI device OAuth from Sources, the dedicated auth job validated the official `oidc` credential shape and stored it in Secret Manager, disabled the old version, and a coding execution authenticated as `subscription_oauth`. **CG3 is complete and production-accepted:** the Coding UI created immutable approval `coding_approval_58924904282906af438bf386887692635dde5b6a` for `tomaash/elixir-play#2`; only approval started run `coding_58924904282906af438bf38688769263`; the isolated Grok runner emitted one bounded README patch; and the trusted publisher pushed deterministic branch `erik/issue-2-88769263` and opened draft PR [#3](https://github.com/tomaash/elixir-play/pull/3). **CG4 is complete and production-accepted:** operators can reconcile unknown publication outcomes, cancel or retry as linked attempts, and request a PR change as a newly approved attempt against the exact current PR head. Production issue `tomaash/elixir-play#4` exercised cancellation, a failed retry, OAuth recovery, successful retry publication, and a separately approved PR-change pass. The result remained one deterministic branch and one draft PR [#5](https://github.com/tomaash/elixir-play/pull/5), fast-forwarded from `48838d575235c334437b2227d73ec11d7bb36e10` to `6839303e9dfd00119cd42c920342f5d283178764`. A new OAuth preflight persists rotating credentials before Grok starts; production Secret Manager version 4 is enabled and all older versions are disabled. Every Grok attempt requires its own prior approval; that same approval authorizes automatic publication for that attempt. No second publication approval, xAI API key, automatic merge, or deploy exists.
 
 | Slice | Outcome | Exit criteria |
 | --- | --- | --- |
@@ -484,7 +491,7 @@ Align with the connector epic style: one complete loop per slice.
 | **CG1** | GitHub observe connector in Erik | Selected repos’ issues as ContextItems; agent can cite an issue; disconnect deletes context |
 | **CG2** | Grok subscription web connection + secret plumbing | Admin completes device OAuth from the web UI; coding job authenticates with cached state; API-key auth is disabled; session never reaches browser/workspace |
 | **CG3** | Approved issue → Grok → automatic draft PR | Workflow/UI creates one immutable approval; reject causes no run/write; approve queues Grok; exactly one result branch and draft PR open; retries reconcile safely |
-| **CG4** | Operator recovery + PR follow-up | Reconcile `outcome_unknown`, cancel/retry as linked attempts, request changes, recover orphan branches/PRs |
+| **CG4 (complete)** | Operator recovery + PR follow-up | Reconcile `outcome_unknown`, cancel/retry as linked attempts, request changes, recover orphan branches/PRs |
 | **CG5** | Configurable coding policy UI | Admin configures repository/label/approver/limits instead of the CG3 fixed `erik-implement` workflow |
 | **CG6** | Policy-delegated implementation (optional) | Published policy authorizes matching issues to run and open draft PRs without a per-issue approval |
 | **CG7** | Advanced fleet controls | Concurrency quotas, fairness, retention/export, broader check-suite integration |
@@ -550,7 +557,13 @@ Total to human-approved automated claim+PR loop: roughly **3–5 weeks** calenda
 7. Work queue shows Running then Publishing; detail streams bounded activity and artifacts.
 8. The trusted publisher opens exactly one draft PR linking #42; GitHub remains the code-review/merge gate.
 9. Audit shows policy digest, decision actor, execution result, PR number.
-10. Disconnecting GitHub stops new claims and removes normalized context per connector rules; open PRs remain on GitHub.
+10. If the run is cancelled, fails, or has an unknown publication outcome, an
+    operator reconciles GitHub before retry; every new Grok attempt receives a
+    new immutable approval.
+11. A requested PR change starts from the exact current PR head and, after its
+    own approval, may only fast-forward the same result branch and update the
+    same draft PR.
+12. Disconnecting GitHub stops new claims and removes normalized context per connector rules; open PRs remain on GitHub.
 
 ## 19. Decision gates (before scheduling)
 
@@ -574,11 +587,13 @@ This matches Agent Erik’s product promise: agents do the work, people (or expl
 
 ## 21. Next concrete step
 
-Proceed to **CG4 operator recovery + PR follow-up**. Preserve the CG3 contract:
-one human approval authorizes one Grok execution and automatic publication of
-one deterministic result branch plus one draft PR; GitHub review remains the
-merge gate.
+Proceed to **CG5 configurable coding policy UI**. Preserve the CG4 contract:
+every initial implementation, retry, and PR-change attempt receives one human
+approval before Grok starts; that approval authorizes Grok plus automatic
+publication to the attempt's deterministic branch/draft PR. GitHub review
+remains the merge gate. CG6 policy delegation remains optional and requires a
+separate explicit product decision.
 
 ---
 
-*Authoring note: the product direction is accepted through CG3; later policy delegation still requires an explicit decision.*
+*Authoring note: the product direction is accepted through CG4; later policy delegation still requires an explicit decision.*

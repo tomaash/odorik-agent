@@ -18,7 +18,7 @@ function required(name: string): string {
 
 async function createSourceBundle(input: {
   cloneUrl: string;
-  defaultBranch: string;
+  sourceBranch: string;
   expectedSha: string;
   token: string;
   root: string;
@@ -43,7 +43,7 @@ async function createSourceBundle(input: {
   };
   await exec("git", [
     "-c", "core.hooksPath=/dev/null",
-    "clone", "--bare", "--single-branch", "--branch", input.defaultBranch,
+    "clone", "--bare", "--single-branch", "--branch", input.sourceBranch,
     "--", input.cloneUrl, repository,
   ], { env: environment, timeout: 10 * 60 * 1000, maxBuffer: 2 * 1024 * 1024 });
   const resolved = (await exec("git", ["rev-parse", "HEAD"], {
@@ -108,6 +108,7 @@ export async function runDispatcher(): Promise<void> {
       repositoryId: spec.github.repositoryId,
       fullName: spec.github.fullName,
       expectedDefaultBranch: spec.github.defaultBranch,
+      sourceBranch: spec.sourceBranch,
       expectedBaseSha: spec.baseSha,
       issueNumber: spec.github.issueNumber,
       expectedIssueVersion: spec.github.issueVersion,
@@ -118,7 +119,7 @@ export async function runDispatcher(): Promise<void> {
     });
     const bundlePath = await createSourceBundle({
       cloneUrl: source.repository.clone_url,
-      defaultBranch: source.repository.default_branch,
+      sourceBranch: spec.sourceBranch,
       expectedSha: source.baseSha,
       token: source.token,
       root,

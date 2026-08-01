@@ -74,7 +74,13 @@ function title() {
 }
 
 function actionLabel() {
-  if (props.approval.action.kind === 'coding.issue.implement') return t('approvals.codingAction')
+  if (props.approval.action.kind === 'coding.issue.implement') {
+    if (props.approval.action.linkedAttempt?.kind === 'retry') return t('approvals.codingRetryAction')
+    if (props.approval.action.linkedAttempt?.kind === 'pull_request_changes') {
+      return t('approvals.codingChangesAction')
+    }
+    return t('approvals.codingAction')
+  }
   if (props.approval.action.kind === 'task.create') return t('approvals.taskAction')
   if (props.approval.action.kind === 'case.create') return t('approvals.createCaseAction')
   if (props.approval.action.kind === 'case.move') return t('approvals.moveCaseAction')
@@ -83,6 +89,17 @@ function actionLabel() {
 
 function effect() {
   if (props.approval.action.kind === 'coding.issue.implement') {
+    if (props.approval.action.linkedAttempt?.kind === 'retry') {
+      return t('approvals.retryAndOpenDraft', {
+        repository: `${props.approval.action.github.owner}/${props.approval.action.github.repo}`,
+        issue: props.approval.action.github.issueNumber,
+      })
+    }
+    if (props.approval.action.linkedAttempt?.kind === 'pull_request_changes') {
+      return t('approvals.updatePullRequest', {
+        pullRequest: props.approval.action.linkedAttempt.pullRequestNumber,
+      })
+    }
     return t('approvals.implementAndOpenDraft', {
       repository: `${props.approval.action.github.owner}/${props.approval.action.github.repo}`,
       issue: props.approval.action.github.issueNumber,
@@ -169,8 +186,16 @@ function confirmReject() {
         <strong class="text-violet-950">{{ t('approvals.exactEffect') }}</strong>
         <span>{{ effect() }}</span>
         <template v-if="approval.action.kind === 'coding.issue.implement'">
-          <span><i class="pi pi-code-branch mr-1" />{{ approval.action.git.baseBranch }} @ {{ approval.action.git.baseSha.slice(0, 12) }}</span>
-          <span><i class="pi pi-github mr-1" />{{ approval.action.git.resultBranch }} · {{ t('approvals.draftPrAutomatic') }}</span>
+          <span><i class="pi pi-code-branch mr-1" />{{ approval.action.git.sourceBranch || approval.action.git.baseBranch }} @ {{ approval.action.git.baseSha.slice(0, 12) }}</span>
+          <span>
+            <i class="pi pi-github mr-1" />{{ approval.action.git.resultBranch }} ·
+            {{ approval.action.linkedAttempt?.kind === 'pull_request_changes'
+              ? `PR #${approval.action.linkedAttempt.pullRequestNumber}`
+              : t('approvals.draftPrAutomatic') }}
+          </span>
+          <span v-if="approval.action.linkedAttempt">
+            <i class="pi pi-link mr-1" />{{ t('approvals.linkedAttempt', { attempt: approval.action.linkedAttempt.attempt }) }}
+          </span>
           <span><i class="pi pi-sparkles mr-1" />{{ t('approvals.grokSubscriptionOnly') }}</span>
           <span><i class="pi pi-clock mr-1" />{{ t('approvals.codingLimits', {
             minutes: approval.action.limits.maxRuntimeMinutes,
@@ -198,6 +223,14 @@ function confirmReject() {
       <details v-if="approval.action.kind === 'coding.issue.implement'" class="mt-3">
         <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('approvals.issueSnapshot') }}</summary>
         <p class="text-xs whitespace-pre-wrap leading-relaxed text-surface-600 mt-2 mb-0">{{ approval.action.issueExcerpt }}</p>
+      </details>
+      <details v-if="approval.action.kind === 'coding.issue.implement' && approval.action.linkedAttempt" class="mt-3">
+        <summary class="cursor-pointer text-xs font-medium text-surface-600">
+          {{ t('approvals.linkedAttempt', { attempt: approval.action.linkedAttempt.attempt }) }}
+        </summary>
+        <p class="text-xs whitespace-pre-wrap leading-relaxed text-surface-600 mt-2 mb-0">
+          {{ approval.action.linkedAttempt.instructions }}
+        </p>
       </details>
 
       <p v-if="approval.executionError" class="text-xs text-amber-800 mt-2 mb-0">{{ approval.executionError }}</p>

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseDispatchSpec } from "../spec.js";
 import { parsePublishSpec } from "../publish-spec.js";
+import { branchPublicationDecision } from "../publisher.js";
 
 const runId = `coding_${"a".repeat(32)}`;
 const prefix = `companies/explorers/coding-runs/${runId}`;
@@ -24,6 +25,7 @@ const fixture = {
   },
   grok: { connectionId: "grok_subscription", authKind: "subscription_oauth" },
   proposedBranch: "erik/issue-17-aaaaaaaa",
+  sourceBranch: "main",
   baseSha: "e".repeat(40),
   approval: {
     approvalId: "coding_approval_1",
@@ -53,7 +55,9 @@ const fixture = {
 };
 
 test("dispatch spec binds all objects to the tenant and run prefix", () => {
-  assert.equal(parseDispatchSpec(fixture).github.fullName, "tomaash/elixir-play");
+  const parsed = parseDispatchSpec(fixture);
+  assert.equal(parsed.github.fullName, "tomaash/elixir-play");
+  assert.equal(parsed.sourceBranch, "main");
   assert.throws(
     () => parseDispatchSpec({
       ...fixture,
@@ -90,6 +94,7 @@ test("publish spec binds approval, draft PR, and artifacts to one run", () => {
       baseSha: "e".repeat(40),
       resultBranch: "erik/issue-17-aaaaaaaa",
       resultSha: "1".repeat(40),
+      branchMode: "create",
     },
     publication: fixture.publication,
     objects: {
@@ -100,6 +105,25 @@ test("publish spec binds approval, draft PR, and artifacts to one run", () => {
     maxResultBundleBytes: 50 * 1024 * 1024,
   };
   assert.equal(parsePublishSpec(publish).publication.draft, true);
+  assert.equal(parsePublishSpec({
+    ...publish,
+    git: { ...publish.git, branchMode: "fast_forward" },
+    publication: { ...publish.publication, existingPullRequestNumber: 42 },
+  }).publication.existingPullRequestNumber, 42);
+  assert.throws(
+    () => parsePublishSpec({
+      ...publish,
+      git: { ...publish.git, branchMode: "fast_forward" },
+    }),
+    /require fast-forward publication mode/,
+  );
+  assert.throws(
+    () => parsePublishSpec({
+      ...publish,
+      publication: { ...publish.publication, existingPullRequestNumber: 42 },
+    }),
+    /require fast-forward publication mode/,
+  );
   assert.throws(
     () => parsePublishSpec({
       ...publish,
@@ -114,4 +138,31 @@ test("publish spec binds approval, draft PR, and artifacts to one run", () => {
     }),
     /outside the approved run prefix/,
   );
+});
+
+test("linked PR publication only fast-forwards the exact approved head", () => {
+  assert.equal(branchPublicationDecision({
+    mode: "fast_forward",
+    currentSha: "a".repeat(40),
+    baseSha: "a".repeat(40),
+    resultSha: "b".repeat(40),
+  }), "push");
+  assert.equal(branchPublicationDecision({
+    mode: "create",
+    currentSha: "b".repeat(40),
+    baseSha: "a".repeat(40),
+    resultSha: "b".repeat(40),
+  }), "noop");
+  assert.throws(() => branchPublicationDecision({
+    mode: "fast_forward",
+    currentSha: "c".repeat(40),
+    baseSha: "a".repeat(40),
+    resultSha: "b".repeat(40),
+  }), /different commit/);
+  assert.throws(() => branchPublicationDecision({
+    mode: "create",
+    currentSha: "a".repeat(40),
+    baseSha: "a".repeat(40),
+    resultSha: "b".repeat(40),
+  }), /different commit/);
 });

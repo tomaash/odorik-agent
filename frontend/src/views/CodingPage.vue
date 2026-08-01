@@ -3,9 +3,11 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
+import Dialog from 'primevue/dialog'
 import Message from 'primevue/message'
 import Skeleton from 'primevue/skeleton'
 import Tag from 'primevue/tag'
+import Textarea from 'primevue/textarea'
 import { useAuthStore } from '../stores/auth'
 import {
   cancelCodingRun,
@@ -14,6 +16,9 @@ import {
   getCodingRun,
   listCodingIssues,
   listCodingRuns,
+  reconcileCodingRun,
+  requestCodingPullRequestChanges,
+  requestCodingRetry,
   requestCodingRunApprovalFromIssue,
   type CodingIssue,
   type CodingRun,
@@ -33,6 +38,8 @@ const loading = ref(true)
 const refreshing = ref(false)
 const workingId = ref('')
 const error = ref('')
+const followUpMode = ref<'retry' | 'pull_request_changes' | null>(null)
+const followUpInstructions = ref('')
 let pollTimer: number | null = null
 
 const activeStatuses: CodingRunStatus[] = [
@@ -144,6 +151,47 @@ async function cancel() {
   try {
     selectedRun.value = await cancelCodingRun(selectedRun.value.id)
     await load(true)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    workingId.value = ''
+  }
+}
+
+async function reconcile() {
+  if (!selectedRun.value) return
+  workingId.value = selectedRun.value.id
+  error.value = ''
+  try {
+    selectedRun.value = await reconcileCodingRun(selectedRun.value.id)
+    await load(true)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    workingId.value = ''
+  }
+}
+
+function openFollowUp(mode: 'retry' | 'pull_request_changes') {
+  followUpMode.value = mode
+  followUpInstructions.value = ''
+}
+
+async function requestFollowUp() {
+  if (!selectedRun.value || !followUpMode.value || !followUpInstructions.value.trim()) return
+  workingId.value = selectedRun.value.id
+  error.value = ''
+  try {
+    if (followUpMode.value === 'retry') {
+      await requestCodingRetry(selectedRun.value.id, followUpInstructions.value.trim())
+    } else {
+      await requestCodingPullRequestChanges(
+        selectedRun.value.id,
+        followUpInstructions.value.trim(),
+      )
+    }
+    followUpMode.value = null
+    await router.push({ path: '/tasks', query: { view: 'approvals' } })
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -285,7 +333,45 @@ onUnmounted(() => {
                 {{ selectedRun.github.owner }}/{{ selectedRun.github.repo }} #{{ selectedRun.github.issueNumber }}
               </a>
             </div>
-            <div class="flex gap-2">
+            <div class="flex flex-wrap gap-2">
+              <Button
+                v-if="isAdmin && selectedRun.status === 'outcome_unknown'"
+                :label="t('coding.reconcile')"
+                icon="pi pi-sync"
+                severity="warn"
+                outlined
+                size="small"
+                :loading="workingId === selectedRun.id"
+                @click="reconcile"
+              />
+              <Button
+                v-if="isAdmin && ['failed', 'cancelled', 'no_changes'].includes(selectedRun.status)"
+                :label="t('coding.retry')"
+                icon="pi pi-replay"
+                severity="secondary"
+                outlined
+                size="small"
+                @click="openFollowUp('retry')"
+              />
+              <Button
+                v-if="isAdmin && selectedRun.status === 'succeeded' && !selectedRun.publicationResult?.mergedAt && selectedRun.publicationResult?.state !== 'closed'"
+                :label="t('coding.requestChanges')"
+                icon="pi pi-pencil"
+                severity="secondary"
+                outlined
+                size="small"
+                @click="openFollowUp('pull_request_changes')"
+              />
+              <Button
+                v-if="isAdmin && selectedRun.status === 'succeeded'"
+                :label="t('coding.refreshPr')"
+                icon="pi pi-sync"
+                severity="secondary"
+                text
+                size="small"
+                :loading="workingId === selectedRun.id"
+                @click="reconcile"
+              />
               <Button
                 v-if="isAdmin && activeStatuses.includes(selectedRun.status)"
                 :label="t('coding.cancel')"
@@ -328,6 +414,9 @@ onUnmounted(() => {
           <Message v-if="selectedRun.status === 'outcome_unknown'" severity="warn" :closable="false">
             {{ t('coding.outcomeUnknown') }}
           </Message>
+          <Message v-if="selectedRun.publicationResult?.mergedAt" severity="secondary" :closable="false">
+            {{ t('coding.prMerged') }}
+          </Message>
           <Message v-if="selectedRun.error" severity="error" :closable="false">
             {{ selectedRun.error.message }}
           </Message>
@@ -335,7 +424,7 @@ onUnmounted(() => {
           <div class="grid sm:grid-cols-3 gap-px border border-[var(--hairline)] bg-[var(--hairline)] rounded-md overflow-hidden">
             <div class="bg-white p-3">
               <div class="meta-label text-[.62rem] text-surface-500 uppercase">{{ t('coding.base') }}</div>
-              <div class="mt-1 text-xs font-mono break-all">{{ selectedRun.git.baseBranch }} @ {{ selectedRun.git.baseSha?.slice(0, 12) || '—' }}</div>
+              <div class="mt-1 text-xs font-mono break-all">{{ selectedRun.git.sourceBranch || selectedRun.git.baseBranch }} @ {{ selectedRun.git.baseSha?.slice(0, 12) || '—' }}</div>
             </div>
             <div class="bg-white p-3">
               <div class="meta-label text-[.62rem] text-surface-500 uppercase">{{ t('coding.proposedBranch') }}</div>
@@ -345,6 +434,19 @@ onUnmounted(() => {
               <div class="meta-label text-[.62rem] text-surface-500 uppercase">{{ t('coding.result') }}</div>
               <div class="mt-1 text-xs font-mono">{{ selectedRun.result?.changedFiles ?? '—' }} {{ t('coding.files') }} · {{ formatBytes(selectedRun.result?.patchBytes) }}</div>
             </div>
+          </div>
+
+          <div v-if="selectedRun.linkedAttempt" class="rounded-md border border-indigo-200 bg-indigo-50/40 p-3 text-xs">
+            <strong>{{ t('coding.linkedAttempt', { attempt: selectedRun.linkedAttempt.attempt }) }}</strong>
+            <p class="mt-1 mb-2 whitespace-pre-wrap text-surface-600">{{ selectedRun.linkedAttempt.instructions }}</p>
+            <Button
+              :label="t('coding.openPreviousAttempt')"
+              icon="pi pi-arrow-left"
+              severity="secondary"
+              text
+              size="small"
+              @click="selectRun(selectedRun.linkedAttempt.parentRunId)"
+            />
           </div>
 
           <div>
@@ -377,5 +479,35 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
+
+    <Dialog
+      :visible="followUpMode !== null"
+      modal
+      :header="followUpMode === 'retry' ? t('coding.retryTitle') : t('coding.requestChangesTitle')"
+      class="w-[min(36rem,calc(100vw-2rem))]"
+      @update:visible="value => { if (!value) followUpMode = null }"
+    >
+      <p class="mt-0 text-sm text-surface-600">
+        {{ followUpMode === 'retry' ? t('coding.retryHint') : t('coding.requestChangesHint') }}
+      </p>
+      <Textarea
+        v-model="followUpInstructions"
+        rows="6"
+        autoResize
+        autofocus
+        class="w-full"
+        :placeholder="t('coding.followUpPlaceholder')"
+      />
+      <div class="flex justify-end gap-2 mt-5">
+        <Button :label="t('common.cancel')" severity="secondary" text @click="followUpMode = null" />
+        <Button
+          :label="t('coding.requestApproval')"
+          icon="pi pi-shield"
+          :disabled="!followUpInstructions.trim()"
+          :loading="workingId === selectedRun?.id"
+          @click="requestFollowUp"
+        />
+      </div>
+    </Dialog>
   </section>
 </template>

@@ -4,6 +4,8 @@ import type { CodingDispatcherExecutor, CodingPublisherExecutor } from "./types.
 const projectId = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "odorik-tx-260720-c58d";
 const codingRegion = process.env.CODING_REGION?.trim() || "europe-west1";
 const dispatcherJob = process.env.CODING_DISPATCHER_JOB?.trim() || "erik-coding-dispatcher";
+const runnerJob = process.env.CODING_RUNNER_JOB?.trim() || "erik-coding-runner";
+const authJob = process.env.GROK_AUTH_JOB?.trim() || "erik-grok-auth";
 const callbackUrl = process.env.CODING_CALLBACK_URL?.trim()
   || "https://agent-erik-app.web.app/callbacks/coding";
 
@@ -80,12 +82,21 @@ export function createCloudRunCodingPublisherExecutor(): CodingPublisherExecutor
   };
 }
 
-function canonicalExecutionName(value: string): string {
+export function canonicalCodingExecutionName(value: string): string {
   if (/^projects\/[^/]+\/locations\/[^/]+\/jobs\/[^/]+\/executions\/[^/]+$/.test(value)) {
     return value;
   }
   if (/^[a-z][a-z0-9-]{0,62}$/.test(value)) {
-    return `projects/${projectId}/locations/${codingRegion}/jobs/erik-coding-runner/executions/${value}`;
+    const job = value.startsWith(`${dispatcherJob}-`)
+      ? dispatcherJob
+      : value.startsWith(`${runnerJob}-`)
+        ? runnerJob
+        : value.startsWith(`${authJob}-`)
+          ? authJob
+        : null;
+    if (job) {
+      return `projects/${projectId}/locations/${codingRegion}/jobs/${job}/executions/${value}`;
+    }
   }
   throw new Error("Invalid Cloud Run execution name");
 }
@@ -93,7 +104,7 @@ function canonicalExecutionName(value: string): string {
 export async function cancelCodingExecution(executionName: string): Promise<void> {
   const client = await authentication.getClient();
   await client.request({
-    url: `https://run.googleapis.com/v2/${canonicalExecutionName(executionName)}:cancel`,
+    url: `https://run.googleapis.com/v2/${canonicalCodingExecutionName(executionName)}:cancel`,
     method: "POST",
     data: {},
   });
