@@ -485,7 +485,7 @@ export type SourceCapabilityDescriptor = {
   direction: 'observe'
   resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
   requiredScopes: string[]
-  syncMode: 'webhook' | 'incremental' | 'manual'
+  syncMode: 'webhook' | 'incremental' | 'reconcile' | 'manual'
   requiresApproval: false
 }
 
@@ -535,6 +535,12 @@ export type SourceResource = {
   itemCount: number
   lastObservedAt?: string | null
   sync?: SourceSyncState
+  document?: {
+    recursive: boolean
+    markdownCount: number
+    plainTextCount: number
+    metadataOnlyCount: number
+  }
 }
 
 export type SourceConnection = {
@@ -604,6 +610,14 @@ export type KnowledgeIndexStatus = {
   freshnessSampleSize: number
   freshnessSampleTruncated: boolean
   targetMs: number
+  sourceFreshness: Array<{
+    capabilityId: string
+    trigger: string
+    sampleSize: number
+    p95SourceToContextMs: number | null
+    p95SourceToSearchMs: number | null
+    targetMs: number
+  }>
   attentionDeliveries: Array<{
     id: string
     kind: string
@@ -1044,6 +1058,7 @@ export type SelectableFolder = {
   description: string | null
   shared: boolean
   selected: boolean
+  enabled: boolean
 }
 
 export async function startGoogleWorkspaceAuthorization(
@@ -1077,8 +1092,16 @@ export async function getGoogleDriveFolders(connectionId: string): Promise<Selec
   return trpc.sources.googleDrive.folders.query({ connectionId }) as Promise<SelectableFolder[]>
 }
 
-export async function selectGoogleDriveFolders(connectionId: string, folderIds: string[]) {
-  return trpc.sources.googleDrive.select.mutate({ connectionId, folderIds })
+export async function selectGoogleDriveFolders(
+  connectionId: string,
+  folderIds: string[],
+  confirmBroadening = false,
+) {
+  return trpc.sources.googleDrive.select.mutate({
+    connectionId,
+    folderIds,
+    confirmBroadening,
+  })
 }
 
 export async function syncGoogleDrive(connectionId: string) {

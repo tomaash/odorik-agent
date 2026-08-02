@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Timestamp } from "firebase-admin/firestore";
+import { GoogleApiError } from "../connectors/google-oauth.js";
 import {
   acquireConnectorSyncLease,
   claimConnectorSyncRun,
@@ -431,6 +432,45 @@ test("a queued run from before disconnect is skipped after reconnect", async () 
   assert.equal(context.memory.read(`${connectionPath}/syncRuns/${created.runId}`)?.status, "skipped");
 });
 
+test("a queued run from an older capability selection is fenced and replaced", async () => {
+  const context = fixture();
+  const created = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "selection",
+    resourceIds: [resourceId],
+  }, context.dependencies);
+  await context.dependencies.database.doc(capabilityPath).set({
+    syncGeneration: 1,
+  }, { merge: true });
+  const stale = await claimConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: created.runId,
+  }, context.dependencies);
+  assert.equal(stale.claimed, false);
+  assert.equal(context.memory.read(`${connectionPath}/syncRuns/${created.runId}`)?.status, "skipped");
+
+  const replacement = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "selection",
+    resourceIds: [resourceId],
+  }, context.dependencies);
+  assert.equal(replacement.created, true);
+  assert.notEqual(replacement.runId, created.runId);
+  const claimed = await claimConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: replacement.runId,
+  }, context.dependencies);
+  assert.equal(claimed.claimed, true);
+});
+
 test("a permanent failure becomes attention immediately", async () => {
   const context = fixture();
   const { runId, attempt } = await createAndClaim(context);
@@ -470,6 +510,54 @@ test("a permanent failure becomes attention immediately", async () => {
   assert.equal(result.status, "attention");
   assert.equal(context.memory.read(capabilityPath)?.status, "attention");
   assert.equal(context.memory.read(connectionPath)?.status, "attention");
+});
+
+test("typed Google failures distinguish retry, reauthorization, and permanent errors", () => {
+  assert.equal(classifyConnectorSyncError(new GoogleApiError({
+    label: "Google Drive",
+    status: 429,
+    message: "Rate limit exceeded",
+    reasons: ["rateLimitExceeded"],
+  })), "transient");
+  assert.equal(classifyConnectorSyncError(new GoogleApiError({
+    label: "Google Calendar",
+    status: 401,
+    message: "Invalid credentials",
+    reasons: ["authError"],
+  })), "reauthorization_required");
+  assert.equal(classifyConnectorSyncError(new GoogleApiError({
+    label: "Google Drive",
+    status: 403,
+    message: "Insufficient permission",
+    reasons: ["insufficientPermissions"],
+  })), "reauthorization_required");
+  assert.equal(classifyConnectorSyncError(new GoogleApiError({
+    label: "Google Calendar",
+    status: 410,
+    message: "Sync token expired",
+  })), "permanent");
+});
+
+test("reauthorization failure marks the capability and connection explicitly", async () => {
+  const context = fixture();
+  const { runId, attempt } = await createAndClaim(context);
+  const result = await completeConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId,
+    attempt,
+    results: [{
+      resourceId,
+      status: "attention",
+      changes: 0,
+      failureKind: "reauthorization_required",
+      error: "Google Workspace permission is incomplete",
+    }],
+  }, context.dependencies);
+  assert.equal(result.status, "attention");
+  assert.equal(context.memory.read(capabilityPath)?.status, "reauthorization_required");
+  assert.equal(context.memory.read(connectionPath)?.status, "attention");
+  assert.equal(context.memory.read(connectionPath)?.reauthorizationRequired, true);
 });
 
 test("a retry never erases a terminal sibling-resource failure", async () => {

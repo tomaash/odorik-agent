@@ -2,9 +2,14 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
-import { companyAudience, normalizeResourceAudience } from "../access.js";
+import {
+  audienceEquals,
+  companyAudience,
+  normalizeResourceAudience,
+} from "../access.js";
 import {
   authorizedGoogleCapability,
+  GoogleApiError,
   connectionRef,
   googleGet,
 } from "./google-oauth.js";
@@ -53,7 +58,10 @@ export type CalendarEvent = {
   visibility?: string;
   created?: string;
   updated?: string;
+  sequence?: number;
+  eventType?: string;
   recurringEventId?: string;
+  recurrence?: string[];
   iCalUID?: string;
   organizer?: { email?: string; displayName?: string; self?: boolean };
   creator?: { email?: string; displayName?: string; self?: boolean };
@@ -65,6 +73,7 @@ export type CalendarEvent = {
   }>;
   start?: { date?: string; dateTime?: string; timeZone?: string };
   end?: { date?: string; dateTime?: string; timeZone?: string };
+  originalStartTime?: { date?: string; dateTime?: string; timeZone?: string };
   conferenceData?: {
     entryPoints?: Array<{ entryPointType?: string; uri?: string; label?: string }>;
   };
@@ -176,6 +185,13 @@ export function calendarEventContextItem(input: {
   observedAt?: Timestamp;
   audience?: unknown;
   audienceRevision?: number;
+  observation?: {
+    runId: string;
+    trigger: ConnectorSyncTrigger;
+    providerUpdatedAt: string | null;
+    providerVersion: string;
+    freshnessEligible: boolean;
+  };
 }): Record<string, unknown> | null {
   if (!input.event.id || input.event.status === "cancelled") return null;
   const start = input.event.start?.dateTime || input.event.start?.date || null;
@@ -233,7 +249,11 @@ export function calendarEventContextItem(input: {
       attendees,
       organizer: input.event.organizer || null,
       status: input.event.status || "confirmed",
+      eventType: input.event.eventType || "default",
+      sequence: Number(input.event.sequence || 0),
       recurringEventId: input.event.recurringEventId || null,
+      recurrence: input.event.recurrence || [],
+      originalStartTime: input.event.originalStartTime || null,
       iCalUID: input.event.iCalUID || null,
       sourceUrl: input.event.htmlLink || null,
       conferenceLinks,
@@ -242,8 +262,12 @@ export function calendarEventContextItem(input: {
     provenance: {
       rawRef: `google-calendar/${input.calendarId}/events/${input.event.id}`,
       checksum,
-      ingestionVersion: "google-calendar-v1",
+      ingestionVersion: "google-calendar-v2",
     },
+    observation: input.observation ? {
+      ...input.observation,
+      observedAt: input.observedAt || Timestamp.now(),
+    } : null,
     indexingEnabled: true,
     updatedAt: FieldValue.serverTimestamp(),
   };
@@ -278,6 +302,38 @@ export function calendarSyncTokenForRun(
   return typeof resource.syncToken === "string" ? resource.syncToken : "";
 }
 
+function nestedRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function timestampMillis(value: unknown): number | null {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+export function calendarContextMatches(
+  existing: FirebaseFirestore.DocumentData | undefined,
+  next: Record<string, unknown>,
+): boolean {
+  const existingSource = nestedRecord(existing?.source);
+  const nextSource = nestedRecord(next.source);
+  const existingProvenance = nestedRecord(existing?.provenance);
+  const nextProvenance = nestedRecord(next.provenance);
+  return existingSource.version === nextSource.version
+    && existingSource.resourceId === nextSource.resourceId
+    && existingProvenance.checksum === nextProvenance.checksum
+    && existing?.title === next.title
+    && existing?.text === next.text
+    && audienceEquals(existing?.access, next.access)
+    && Number(existing?.accessRevision || 1) === Number(next.accessRevision || 1)
+    && existing?.indexingEnabled !== false;
+}
+
 async function syncCalendarResource(input: {
   companyId: string;
   connectionId: string;
@@ -286,21 +342,30 @@ async function syncCalendarResource(input: {
   lease: import("./sync-runtime.js").ConnectorSyncLease;
   dependencies: ConnectorSyncDependencies;
   forceFullSync?: boolean;
+  trigger: ConnectorSyncTrigger;
 }): Promise<ConnectorSyncResourceCompletion> {
   const data = input.resource.data;
   const calendarId = String(data.externalId);
   const calendarName = String(data.displayName || calendarId);
   let pageToken = "";
   let nextSyncToken = "";
-  let synced = 0;
+  let changes = 0;
   const storedSyncToken = calendarSyncTokenForRun(data, input.forceFullSync);
+  const isFullSync = !storedSyncToken;
+  const now = input.dependencies.now?.() || Timestamp.now();
+  const existing = await contextItems(input.companyId, input.dependencies.database)
+    .where("source.connectionId", "==", input.connectionId)
+    .where("source.resourceId", "==", input.resource.id)
+    .get();
+  const existingById = new Map(existing.docs.map((item) => [item.id, item]));
+  const observedContextIds = new Set<string>();
   do {
     const url = calendarEventsUrl({
       calendarId,
       syncToken: storedSyncToken,
       pageToken,
       timeMin: new Date(
-        (input.dependencies.now?.() || Timestamp.now()).toMillis()
+        now.toMillis()
           - 365 * 24 * 60 * 60 * 1000,
       ).toISOString(),
     });
@@ -313,7 +378,7 @@ async function syncCalendarResource(input: {
         input.accessToken,
       );
     } catch (error) {
-      if (storedSyncToken && error instanceof Error && error.message.includes("(410)")) {
+      if (storedSyncToken && error instanceof GoogleApiError && error.status === 410) {
         return syncCalendarResource({ ...input, forceFullSync: true });
       }
       throw error;
@@ -330,6 +395,7 @@ async function syncCalendarResource(input: {
         "contextItems",
         calendarContextItemId(input.connectionId, calendarId, event.id),
       ));
+      observedContextIds.add(itemRef.id);
       const contextItem = calendarEventContextItem({
         companyId: input.companyId,
         connectionId: input.connectionId,
@@ -337,11 +403,34 @@ async function syncCalendarResource(input: {
         calendarId,
         calendarName,
         event,
+        observedAt: now,
         audience: input.resource.data.audience,
         audienceRevision: Number(input.resource.data.audienceRevision || 1),
+        observation: {
+          runId: input.lease.runId,
+          trigger: input.trigger,
+          providerUpdatedAt: event.updated || null,
+          providerVersion: event.updated || sha256Hex(JSON.stringify(event)).slice(0, 16),
+          freshnessEligible: (() => {
+            const providerUpdatedAt = timestampMillis(event.updated);
+            const lastSuccessAt = timestampMillis(
+              nestedRecord(input.resource.data.sync).lastSuccessAt
+                || input.resource.data.lastSyncAt,
+            );
+            return providerUpdatedAt !== null
+              && lastSuccessAt !== null
+              && providerUpdatedAt >= lastSuccessAt;
+          })(),
+        },
       });
-      writes.push({ ref: itemRef, value: contextItem });
-      synced += 1;
+      if (contextItem) {
+        if (calendarContextMatches(existingById.get(itemRef.id)?.data(), contextItem)) continue;
+        writes.push({ ref: itemRef, value: contextItem });
+        changes += 1;
+      } else if (existingById.has(itemRef.id)) {
+        writes.push({ ref: itemRef, value: null });
+        changes += 1;
+      }
     }
     for (let offset = 0; offset < writes.length; offset += 400) {
       const pageWrites = writes.slice(offset, offset + 400);
@@ -362,6 +451,23 @@ async function syncCalendarResource(input: {
     nextSyncToken = page.nextSyncToken || nextSyncToken;
   } while (pageToken);
 
+  if (isFullSync) {
+    const staleItems = existing.docs.filter((item) => !observedContextIds.has(item.id));
+    for (let offset = 0; offset < staleItems.length; offset += 400) {
+      const pageDeletes = staleItems.slice(offset, offset + 400);
+      await commitConnectorSyncWrites({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        resourceId: input.resource.id,
+        lease: input.lease,
+        apply: (transaction) => {
+          for (const item of pageDeletes) transaction.delete(item.ref);
+        },
+      }, input.dependencies);
+    }
+    changes += staleItems.length;
+  }
+
   const itemCount = (await contextItems(input.companyId, input.dependencies.database)
     .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resource.id)
@@ -369,7 +475,7 @@ async function syncCalendarResource(input: {
     .get()).data().count;
   const finalSyncToken = nextSyncToken || (storedSyncToken ? String(data.syncToken || "") : "");
   return {
-    changes: synced,
+    changes,
     itemCount,
     cursorAfter: finalSyncToken || null,
     cursorMode: storedSyncToken ? "incremental" : "full",
@@ -429,13 +535,20 @@ async function executeGoogleCalendarSyncRun(
     },
     cursorBefore: (resource) => calendarSyncTokenForRun(resource.data) || null,
     cursorMode: (resource) => calendarSyncTokenForRun(resource.data) ? "incremental" : "full",
-    synchronizeResource: ({ preparation, resource, lease, dependencies: runDependencies }) => (
+    synchronizeResource: ({
+      preparation,
+      resource,
+      trigger,
+      lease,
+      dependencies: runDependencies,
+    }) => (
       syncCalendarResource({
         companyId: input.companyId,
         connectionId: input.connectionId,
         resource,
         accessToken: preparation.accessToken,
         lease,
+        trigger,
         dependencies: runDependencies,
       })
     ),

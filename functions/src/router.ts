@@ -64,6 +64,7 @@ import {
   syncGoogleCalendarConnection,
 } from "./connectors/google-calendar.js";
 import {
+  DriveSelectionBroadeningError,
   listGoogleDriveFolders,
   replayGoogleDriveSyncRun,
   selectGoogleDriveFolders,
@@ -600,15 +601,28 @@ export const appRouter = router({
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
           folderIds: z.array(z.string().min(1).max(1000)).max(50),
+          confirmBroadening: z.boolean().default(false),
         }))
-        .mutation(({ ctx, input }) => selectGoogleDriveFolders({
-          companyId: ctx.companyId,
-          ...input,
-          actorUid: ctx.uid,
-          clientId: googleConnectorClientId.value(),
-          clientSecret: googleConnectorClientSecret.value(),
-          credentialKey: connectorCredentialKey.value(),
-        })),
+        .mutation(async ({ ctx, input }) => {
+          try {
+            return await selectGoogleDriveFolders({
+              companyId: ctx.companyId,
+              ...input,
+              actorUid: ctx.uid,
+              clientId: googleConnectorClientId.value(),
+              clientSecret: googleConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+          } catch (error) {
+            if (error instanceof DriveSelectionBroadeningError) {
+              throw new TRPCError({
+                code: "PRECONDITION_FAILED",
+                message: error.code,
+              });
+            }
+            throw error;
+          }
+        }),
       sync: adminProcedure
         .input(z.object({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),

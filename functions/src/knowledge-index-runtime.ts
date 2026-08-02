@@ -66,6 +66,14 @@ export type KnowledgeIndexStatus = {
   freshnessSampleSize: number;
   freshnessSampleTruncated: boolean;
   targetMs: number;
+  sourceFreshness: Array<{
+    capabilityId: string;
+    trigger: string;
+    sampleSize: number;
+    p95SourceToContextMs: number | null;
+    p95SourceToSearchMs: number | null;
+    targetMs: number;
+  }>;
   attentionDeliveries: Array<{
     id: string;
     kind: KnowledgeKind;
@@ -82,6 +90,7 @@ export const knowledgeIndexLeaseMs = 12 * 60 * 1_000;
 export const knowledgeIndexMaxAttempts = 4;
 export const knowledgeIndexRetryDelaysMs = [60_000, 5 * 60_000, 30 * 60_000] as const;
 export const knowledgeIndexFreshnessTargetMs = 2 * 60 * 1_000;
+export const scheduledSourceFreshnessTargetMs = 45 * 60 * 1_000;
 const deletedDeliveryRetentionMs = 90 * 24 * 60 * 60 * 1_000;
 const freshnessSampleLimit = 1_000;
 
@@ -166,11 +175,42 @@ function sourceScope(value: FirebaseFirestore.DocumentData | undefined): Record<
     : null;
   if (!source) return null;
   const scope = Object.fromEntries(
-    ["adapterId", "capabilityId", "connectionId", "resourceId"]
+    ["adapterId", "providerId", "capabilityId", "connectionId", "resourceId", "externalId"]
       .filter((field) => typeof source[field] === "string" && String(source[field]).length > 0)
       .map((field) => [field, String(source[field])]),
   );
   return Object.keys(scope).length > 0 ? scope : null;
+}
+
+type SourceObservation = {
+  runId: string;
+  trigger: string;
+  providerUpdatedAt: unknown;
+  providerVersion: string;
+  observedAt: unknown;
+  freshnessEligible: boolean;
+};
+
+function sourceObservation(
+  value: FirebaseFirestore.DocumentData | undefined,
+): SourceObservation | null {
+  const observation = value?.observation && typeof value.observation === "object"
+    ? value.observation as Record<string, unknown>
+    : null;
+  if (
+    !observation
+    || typeof observation.runId !== "string"
+    || typeof observation.trigger !== "string"
+    || typeof observation.providerVersion !== "string"
+  ) return null;
+  return {
+    runId: observation.runId,
+    trigger: observation.trigger,
+    providerUpdatedAt: observation.providerUpdatedAt,
+    providerVersion: observation.providerVersion,
+    observedAt: observation.observedAt,
+    freshnessEligible: observation.freshnessEligible === true,
+  };
 }
 
 export async function enqueueKnowledgeIndexDelivery(input: {
@@ -219,6 +259,14 @@ export async function enqueueKnowledgeIndexDelivery(input: {
       || (current.sourceScope && typeof current.sourceScope === "object"
         ? current.sourceScope as Record<string, string>
         : null);
+    const observation = sourceObservation(input.sourceData);
+    const sourceVersionKey = observation && scope?.capabilityId
+      ? `${scope.capabilityId}:${scope.connectionId || ""}:${scope.resourceId || ""}:${input.recordId}:${observation.providerVersion}`
+      : null;
+    const sourceFreshnessEligible = input.trigger !== "operator_backfill"
+      && observation?.freshnessEligible === true
+      && sourceVersionKey !== null
+      && sourceVersionKey !== current.sampledSourceVersionKey;
     transaction.set(reference, {
       companyId: input.companyId,
       deliveryId,
@@ -227,6 +275,9 @@ export async function enqueueKnowledgeIndexDelivery(input: {
       recordId: input.recordId,
       sourcePath: `companies/${input.companyId}/${input.collection}/${input.recordId}`,
       sourceScope: scope,
+      sourceObservation: observation,
+      sourceVersionKey,
+      sourceFreshnessEligible,
       sourceExists: input.sourceExists,
       indexingEnabled: input.sourceData?.indexingEnabled !== false,
       freshnessEligible: input.trigger !== "operator_backfill",
@@ -371,6 +422,15 @@ async function completeKnowledgeIndexDelivery(input: {
     const contextToSearchMs = data.freshnessEligible === false
       ? null
       : Math.max(0, now.toMillis() - sourceCommittedAt);
+    const observation = data.sourceObservation && typeof data.sourceObservation === "object"
+      ? data.sourceObservation as Record<string, unknown>
+      : null;
+    const providerUpdatedAt = timestampMillis(observation?.providerUpdatedAt);
+    const sourceObservedAt = timestampMillis(observation?.observedAt);
+    const sourceFreshnessEligible = data.sourceFreshnessEligible === true
+      && typeof data.sourceVersionKey === "string"
+      && providerUpdatedAt !== null
+      && sourceObservedAt !== null;
     transaction.set(reference, {
       status: "succeeded" satisfies KnowledgeIndexDeliveryStatus,
       action: input.completion.action,
@@ -383,6 +443,12 @@ async function completeKnowledgeIndexDelivery(input: {
       lastSuccessAt: now,
       searchableAt: now,
       contextToSearchMs,
+      ...(sourceFreshnessEligible ? {
+        sourceToContextMs: Math.max(0, sourceObservedAt - providerUpdatedAt),
+        sourceToSearchMs: Math.max(0, now.toMillis() - providerUpdatedAt),
+        sampledSourceVersionKey: data.sourceVersionKey,
+        sourceFreshnessSampledAt: now,
+      } : {}),
       finishedAt: now,
       expiresAt: input.completion.action === "deleted"
         ? Timestamp.fromMillis(now.toMillis() + deletedDeliveryRetentionMs)
@@ -625,6 +691,7 @@ export async function getKnowledgeIndexStatus(
     attention,
     lastSuccess,
     freshnessSuccesses,
+    sourceFreshnessSuccesses,
     ...oldestSnapshots
   ] = await Promise.all([
     Promise.all(statuses.map((status) => queryCount(collection.where("status", "==", status)))),
@@ -652,6 +719,10 @@ export async function getKnowledgeIndexStatus(
       .orderBy("lastSuccessAt", "desc")
       .limit(freshnessSampleLimit)
       .get(),
+    collection.where("status", "==", "succeeded")
+      .orderBy("lastSuccessAt", "desc")
+      .limit(freshnessSampleLimit)
+      .get(),
     ...(["queued", "running", "retrying"] as const).map((status) => (
       collection.where("status", "==", status)
         .orderBy("queuedAt", "asc")
@@ -675,6 +746,58 @@ export async function getKnowledgeIndexStatus(
   const durations = freshnessSuccesses.docs
     .map((document) => document.data().contextToSearchMs)
     .filter((value): value is number => typeof value === "number" && Number.isFinite(value) && value >= 0);
+  const sourceFreshnessGroups = new Map<string, {
+    capabilityId: string;
+    trigger: string;
+    sourceToContext: number[];
+    sourceToSearch: number[];
+  }>();
+  for (const document of sourceFreshnessSuccesses.docs) {
+    const data = document.data();
+    const scope = data.sourceScope && typeof data.sourceScope === "object"
+      ? data.sourceScope as Record<string, unknown>
+      : {};
+    const observation = data.sourceObservation && typeof data.sourceObservation === "object"
+      ? data.sourceObservation as Record<string, unknown>
+      : {};
+    const capabilityId = String(scope.capabilityId || "");
+    const trigger = String(observation.trigger || "");
+    const sourceToContextMs = data.sourceToContextMs;
+    const sourceToSearchMs = data.sourceToSearchMs;
+    if (
+      !["context.calendar.read", "context.document.read"].includes(capabilityId)
+      || !["scheduled", "manual", "selection", "operator_replay"].includes(trigger)
+      || typeof sourceToContextMs !== "number"
+      || !Number.isFinite(sourceToContextMs)
+      || sourceToContextMs < 0
+      || typeof sourceToSearchMs !== "number"
+      || !Number.isFinite(sourceToSearchMs)
+      || sourceToSearchMs < 0
+    ) continue;
+    const key = `${capabilityId}:${trigger}`;
+    const group = sourceFreshnessGroups.get(key) || {
+      capabilityId,
+      trigger,
+      sourceToContext: [],
+      sourceToSearch: [],
+    };
+    group.sourceToContext.push(sourceToContextMs);
+    group.sourceToSearch.push(sourceToSearchMs);
+    sourceFreshnessGroups.set(key, group);
+  }
+  const sourceFreshness = [...sourceFreshnessGroups.values()]
+    .map((group) => ({
+      capabilityId: group.capabilityId,
+      trigger: group.trigger,
+      sampleSize: group.sourceToSearch.length,
+      p95SourceToContextMs: percentile95(group.sourceToContext),
+      p95SourceToSearchMs: percentile95(group.sourceToSearch),
+      targetMs: group.trigger === "scheduled"
+        ? scheduledSourceFreshnessTargetMs
+        : knowledgeIndexFreshnessTargetMs,
+    }))
+    .sort((left, right) => left.capabilityId.localeCompare(right.capabilityId)
+      || left.trigger.localeCompare(right.trigger));
   const lastSuccessAt = lastSuccess.docs
     .map((document) => timestampMillis(document.data().lastSuccessAt))
     .filter((value): value is number => value !== null)
@@ -704,6 +827,7 @@ export async function getKnowledgeIndexStatus(
     freshnessSampleSize: durations.length,
     freshnessSampleTruncated: freshnessSuccesses.size >= freshnessSampleLimit,
     targetMs: knowledgeIndexFreshnessTargetMs,
+    sourceFreshness,
     attentionDeliveries: attention.docs.map((document) => {
       const data = document.data();
       return {

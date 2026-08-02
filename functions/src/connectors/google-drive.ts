@@ -1,8 +1,14 @@
 import { Timestamp } from "firebase-admin/firestore";
+import { convert as convertPdfToMarkdown } from "@pdf2md/core";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
-import { companyAudience, normalizeResourceAudience } from "../access.js";
+import {
+  audienceEquals,
+  companyAudience,
+  isAudienceBroadened,
+  normalizeResourceAudience,
+} from "../access.js";
 import {
   authorizedGoogleCapability,
   requireGoogleSuccess,
@@ -54,11 +60,43 @@ export type SelectableFolder = {
   description: string | null;
   shared: boolean;
   selected: boolean;
+  enabled: boolean;
 };
 
 /** Bounded searchable text retained per document. */
 const maxDocumentTextLength = 50_000;
+const maxPdfBytes = 15 * 1024 * 1024;
+const pdfConversionTimeoutMs = 45_000;
 type FetchLike = typeof fetch;
+export type DriveContentFormat = "markdown" | "plain_text" | "metadata";
+
+export type DriveExtractedContent = {
+  text: string;
+  format: DriveContentFormat;
+  extraction: {
+    method: "pdf2md" | "google_export" | "download" | "metadata";
+    status: "success" | "partial" | "metadata_only";
+    pageCount?: number;
+    wordCount?: number;
+    warnings?: string[];
+  };
+};
+
+export class DriveSelectionBroadeningError extends Error {
+  readonly code = "DRIVE_SELECTION_BROADENING_REQUIRES_CONFIRMATION";
+  constructor() {
+    super("Removing this folder selection would broaden access through an ancestor. Confirm the broader audience to continue.");
+    this.name = "DriveSelectionBroadeningError";
+  }
+}
+
+export class DriveContentExtractionError extends Error {
+  readonly code = "DRIVE_CONTENT_EXTRACTION_FAILED";
+  constructor(message: string) {
+    super(message);
+    this.name = "DriveContentExtractionError";
+  }
+}
 
 export function folderResourceId(folderId: string): string {
   return `folder_${sha256Hex(folderId).slice(0, 24)}`;
@@ -66,10 +104,11 @@ export function folderResourceId(folderId: string): string {
 
 export function driveContextItemId(
   connectionId: string,
-  folderId: string,
-  fileId: string,
+  fileIdOrFolderId: string,
+  legacyFileId?: string,
 ): string {
-  return `drive_${sha256Hex(`${connectionId}:${folderId}:${fileId}`).slice(0, 32)}`;
+  const fileId = legacyFileId || fileIdOrFolderId;
+  return `drive_${sha256Hex(`${connectionId}:${fileId}`).slice(0, 32)}`;
 }
 
 export function driveFolderFilesQuery(
@@ -78,8 +117,8 @@ export function driveFolderFilesQuery(
 ): URLSearchParams {
   return new URLSearchParams({
     q: `'${folderId}' in parents and trashed = false`,
-    fields: "nextPageToken, files(id, name, mimeType, description, webViewLink, createdTime, modifiedTime, md5Checksum, size)",
-    pageSize: "50",
+    fields: "nextPageToken, files(id, name, mimeType, parents, description, shared, webViewLink, createdTime, modifiedTime, md5Checksum, size)",
+    pageSize: "1000",
     ...(pageToken ? { pageToken } : {}),
   });
 }
@@ -90,8 +129,6 @@ export function importableDriveFiles(
   return files.filter(
     (file): file is DriveFileEntry & { id: string; name: string } =>
       Boolean(file.id && file.name)
-      // The current contract imports direct files only. Subfolders are
-      // independently selectable resources rather than implicit recursion.
       && file.mimeType !== "application/vnd.google-apps.folder",
   );
 }
@@ -102,9 +139,19 @@ export function driveContextItem(input: {
   folderId: string;
   file: DriveFileEntry & { id: string; name: string };
   contentText: string;
+  contentFormat?: DriveContentFormat;
+  extraction?: DriveExtractedContent["extraction"];
   observedAt: Timestamp;
   audience?: unknown;
   audienceRevision?: number;
+  resourceId?: string;
+  observation?: {
+    runId: string;
+    trigger: ConnectorSyncTrigger;
+    providerUpdatedAt: string | null;
+    providerVersion: string;
+    freshnessEligible: boolean;
+  };
 }): Record<string, unknown> {
   return {
     companyId: input.companyId,
@@ -113,7 +160,7 @@ export function driveContextItem(input: {
       providerId: "google",
       capabilityId: driveCapabilityId,
       connectionId: input.connectionId,
-      resourceId: folderResourceId(input.folderId),
+      resourceId: input.resourceId || folderResourceId(input.folderId),
       externalId: input.file.id,
       version: input.file.md5Checksum || input.file.modifiedTime || "v1",
     },
@@ -125,9 +172,21 @@ export function driveContextItem(input: {
     accessRevision: Math.max(1, Number(input.audienceRevision || 1)),
     provenance: {
       checksum: sha256Hex(input.contentText),
-      ingestionVersion: "google-drive-v1",
+      ingestionVersion: "google-drive-v2",
       modifiedTime: input.file.modifiedTime || null,
     },
+    metadata: {
+      folderId: input.folderId,
+      mimeType: input.file.mimeType || null,
+      size: input.file.size || null,
+      sourceUrl: input.file.webViewLink || null,
+      contentFormat: input.contentFormat || "plain_text",
+      extraction: input.extraction || null,
+    },
+    observation: input.observation ? {
+      ...input.observation,
+      observedAt: input.observedAt,
+    } : null,
     observedAt: input.observedAt.toDate().toISOString(),
     createdAt: input.observedAt,
     updatedAt: input.observedAt,
@@ -205,11 +264,14 @@ export async function listGoogleDriveFolders(input: {
   const resourceSnapshots = await connection.ref.collection("resources")
     .where("capabilityId", "==", driveCapabilityId)
     .get();
-  const selectedMap = new Map<string, boolean>();
+  const selectedMap = new Map<string, "enabled" | "disabled">();
   for (const resource of resourceSnapshots.docs) {
     const data = resource.data();
     if (data.resourceType === "folder") {
-      selectedMap.set(String(data.externalId), data.status === "enabled");
+      selectedMap.set(
+        String(data.externalId),
+        data.status === "enabled" ? "enabled" : "disabled",
+      );
     }
   }
 
@@ -226,7 +288,8 @@ export async function listGoogleDriveFolders(input: {
       displayName: folder.name,
       description: folder.description || null,
       shared: Boolean(folder.shared),
-      selected: selectedMap.get(folder.id) === true,
+      selected: selectedMap.has(folder.id),
+      enabled: selectedMap.get(folder.id) === "enabled",
     }))
     .sort((a, b) => a.displayName.localeCompare(b.displayName));
 }
@@ -239,12 +302,13 @@ export async function selectGoogleDriveFolders(input: {
   clientSecret: string;
   credentialKey: string;
   actorUid?: string;
+  confirmBroadening?: boolean;
   database?: FirebaseFirestore.Firestore;
   fetcher?: FetchLike;
   now?: () => Timestamp;
 }): Promise<SelectableFolder[]> {
   const database = input.database || db;
-  const { accessToken, connection } = await authorizedDriveConnection(input);
+  const { accessToken, connection, capability } = await authorizedDriveConnection(input);
   const folders = await fetchDriveFolders(accessToken, input.fetcher);
   const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
   const selectedSet = new Set(input.folderIds);
@@ -262,14 +326,57 @@ export async function selectGoogleDriveFolders(input: {
       .map((resource) => [String(resource.data().externalId), resource]),
   );
 
+  const folderAncestors = (folderId: string): string[] => {
+    const ancestors: string[] = [];
+    const visited = new Set([folderId]);
+    let parentId = folderMap.get(folderId)?.parents?.[0];
+    while (parentId && !visited.has(parentId)) {
+      ancestors.push(parentId);
+      visited.add(parentId);
+      parentId = folderMap.get(parentId)?.parents?.[0];
+    }
+    return ancestors;
+  };
+  const selectedByDepth = [...selectedSet].sort(
+    (left, right) => folderAncestors(left).length - folderAncestors(right).length,
+  );
+  const plannedAudiences = new Map<string, ReturnType<typeof normalizeResourceAudience>>();
+  for (const folderId of selectedByDepth) {
+    const existing = existingMap.get(folderId);
+    if (existing) {
+      plannedAudiences.set(folderId, normalizeResourceAudience(existing.data().audience));
+      continue;
+    }
+    const ownerId = folderAncestors(folderId).find((ancestorId) => plannedAudiences.has(ancestorId));
+    plannedAudiences.set(
+      folderId,
+      ownerId ? plannedAudiences.get(ownerId)! : companyAudience,
+    );
+  }
+  if (!input.confirmBroadening) {
+    for (const [folderId, resource] of existingMap.entries()) {
+      if (selectedSet.has(folderId)) continue;
+      const ownerId = folderAncestors(folderId).find((ancestorId) => selectedSet.has(ancestorId));
+      if (
+        ownerId
+        && isAudienceBroadened(resource.data().audience, plannedAudiences.get(ownerId))
+      ) throw new DriveSelectionBroadeningError();
+    }
+  }
+
   const now = input.now?.() || Timestamp.now();
   const batch = database.batch();
+  batch.set(capability.ref, {
+    syncGeneration: Number(capability.data()?.syncGeneration || 0) + 1,
+    updatedAt: now,
+  }, { merge: true });
 
   for (const folderId of selectedSet) {
     const folder = folderMap.get(folderId)!;
     const displayName = folder.name || `Folder ${folderId}`;
     const resourceRef = resourceCollection.doc(folderResourceId(folderId));
     const existing = existingMap.get(folderId);
+    const ancestorIds = folderAncestors(folderId);
     if (!existing) {
       batch.set(resourceRef, {
         connectionId: input.connectionId,
@@ -277,31 +384,52 @@ export async function selectGoogleDriveFolders(input: {
         resourceType: "folder",
         externalId: folderId,
         displayName,
+        parentId: folder.parents?.[0] || null,
+        ancestorIds,
+        selectionDepth: ancestorIds.length,
         status: "enabled",
-        audience: companyAudience,
+        audience: plannedAudiences.get(folderId) || companyAudience,
         audienceRevision: 1,
         itemCount: 0,
+        syncLeaseGeneration: 0,
         createdAt: now,
         updatedAt: now,
       });
-    } else if (existing.data().status !== "enabled") {
-      batch.update(existing.ref, { status: "enabled", updatedAt: now });
+    } else {
+      batch.set(existing.ref, {
+        displayName,
+        parentId: folder.parents?.[0] || null,
+        ancestorIds,
+        selectionDepth: ancestorIds.length,
+        syncLease: null,
+        syncLeaseGeneration: Number(existing.data().syncLeaseGeneration || 0) + 1,
+        updatedAt: now,
+      }, { merge: true });
     }
   }
 
-  // Deselecting a folder removes its resource and every context item it
-  // produced, so the Qdrant deletion trigger drops the derived chunks too.
+  // Deselecting removes the ownership boundary. Its files are deleted before
+  // the remaining ancestor roots reconcile and re-ingest them with their
+  // owning audience.
+  const removedResources: FirebaseFirestore.QueryDocumentSnapshot[] = [];
   for (const [folderId, resource] of existingMap.entries()) {
     if (selectedSet.has(folderId)) continue;
     batch.delete(resource.ref);
+    removedResources.push(resource);
+  }
+
+  await batch.commit();
+  for (const resource of removedResources) {
     const items = await contextItems(input.companyId, database)
       .where("source.connectionId", "==", input.connectionId)
       .where("source.resourceId", "==", resource.id)
       .get();
-    for (const item of items.docs) batch.delete(item.ref);
+    for (let offset = 0; offset < items.docs.length; offset += 400) {
+      const deleteBatch = database.batch();
+      for (const item of items.docs.slice(offset, offset + 400)) deleteBatch.delete(item.ref);
+      await deleteBatch.commit();
+    }
   }
-
-  await batch.commit();
   await syncGoogleDriveConnection({
     ...input,
     trigger: "selection",
@@ -310,17 +438,37 @@ export async function selectGoogleDriveFolders(input: {
   return listGoogleDriveFolders(input);
 }
 
-/** Read one file's searchable text, falling back to a metadata summary. */
-async function driveFileText(
-  file: DriveFileEntry & { id: string; name: string },
-  accessToken: string,
-  fetcher: FetchLike = fetch,
-): Promise<string> {
-  const metadataSummary = [
+async function requireDriveDownloadSuccess(label: string, response: Response): Promise<void> {
+  if (response.ok) return;
+  const body = await response.json().catch(() => ({})) as { error?: string };
+  requireGoogleSuccess(label, response, body);
+}
+
+function driveMetadataSummary(file: DriveFileEntry & { id: string; name: string }): string {
+  return [
     `File: ${file.name}`,
     `Type: ${file.mimeType || "unknown"}`,
     `Description: ${file.description || "N/A"}`,
   ].join("\n");
+}
+
+function conversionWarnings(messages: unknown[]): string[] {
+  return messages.slice(0, 20).map((message) => {
+    if (typeof message === "string") return message;
+    if (message && typeof message === "object" && "message" in message) {
+      return String((message as { message?: unknown }).message || "PDF conversion warning");
+    }
+    return JSON.stringify(message).slice(0, 500);
+  });
+}
+
+/** Read one file's searchable content with explicit format/provenance. */
+export async function driveFileContent(
+  file: DriveFileEntry & { id: string; name: string },
+  accessToken: string,
+  fetcher: FetchLike = fetch,
+): Promise<DriveExtractedContent> {
+  const metadataSummary = driveMetadataSummary(file);
   const isPlainText = file.mimeType?.startsWith("text/")
     || [".md", ".txt", ".json", ".csv"].some((suffix) => file.name.endsWith(suffix));
   if (file.mimeType === "application/vnd.google-apps.document") {
@@ -331,10 +479,12 @@ async function driveFileText(
         signal: AbortSignal.timeout(30_000),
       },
     );
-    if (!exported.ok) {
-      throw new Error(`Google Drive document export failed (${exported.status})`);
-    }
-    return exported.text();
+    await requireDriveDownloadSuccess("Google Drive document export", exported);
+    return {
+      text: await exported.text(),
+      format: "plain_text",
+      extraction: { method: "google_export", status: "success" },
+    };
   }
   if (isPlainText) {
     const downloaded = await fetcher(
@@ -344,12 +494,109 @@ async function driveFileText(
         signal: AbortSignal.timeout(30_000),
       },
     );
-    if (!downloaded.ok) {
-      throw new Error(`Google Drive file download failed (${downloaded.status})`);
-    }
-    return downloaded.text();
+    await requireDriveDownloadSuccess("Google Drive file download", downloaded);
+    return {
+      text: await downloaded.text(),
+      format: file.mimeType === "text/markdown" || file.name.toLowerCase().endsWith(".md")
+        ? "markdown"
+        : "plain_text",
+      extraction: { method: "download", status: "success" },
+    };
   }
-  return metadataSummary;
+  if (file.mimeType === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")) {
+    const declaredSize = Number(file.size || 0);
+    if (declaredSize > maxPdfBytes) {
+      return {
+        text: `${metadataSummary}\nContent: Metadata only (PDF exceeds the extraction limit).`,
+        format: "metadata",
+        extraction: {
+          method: "metadata",
+          status: "metadata_only",
+          warnings: ["policy_limited"],
+        },
+      };
+    }
+    const signal = AbortSignal.timeout(pdfConversionTimeoutMs);
+    const downloaded = await fetcher(
+      `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+      {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal,
+      },
+    );
+    await requireDriveDownloadSuccess("Google Drive PDF download", downloaded);
+    const bytes = await downloaded.arrayBuffer();
+    if (bytes.byteLength > maxPdfBytes) {
+      return {
+        text: `${metadataSummary}\nContent: Metadata only (PDF exceeds the extraction limit).`,
+        format: "metadata",
+        extraction: {
+          method: "metadata",
+          status: "metadata_only",
+          warnings: ["policy_limited"],
+        },
+      };
+    }
+    let result: Awaited<ReturnType<typeof convertPdfToMarkdown>>;
+    try {
+      result = await convertPdfToMarkdown(bytes, {
+        includeMetadata: true,
+        chunkBy: "heading",
+        signal,
+      });
+    } catch (error) {
+      if (
+        String((error as { name?: unknown })?.name || "").includes("Timeout")
+        || String((error as { name?: unknown })?.name || "").includes("Abort")
+      ) throw error;
+      throw new DriveContentExtractionError(
+        `Google Drive PDF extraction failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    const markdown = result.markdown.trim();
+    if (result.messages.some((message) => message.code === "no_extractable_text")) {
+      return {
+        text: `${metadataSummary}\nContent: Metadata only (the PDF has no embedded text).`,
+        format: "metadata",
+        extraction: {
+          method: "metadata",
+          status: "metadata_only",
+          pageCount: result.stats.pageCount,
+          wordCount: result.stats.wordCount,
+          warnings: ["no_embedded_text", ...conversionWarnings(result.messages || [])],
+        },
+      };
+    }
+    if (result.status === "failed" || !markdown) {
+      const warnings = conversionWarnings(result.messages || []);
+      if (result.messages.some((message) => ["timeout", "cancelled"].includes(message.code))) {
+        throw new Error(`Google Drive PDF extraction timed out (408)${warnings[0] ? `: ${warnings[0]}` : ""}`);
+      }
+      throw new DriveContentExtractionError(
+        `Google Drive PDF extraction failed${warnings[0] ? `: ${warnings[0]}` : ""}`,
+      );
+    }
+    return {
+      text: markdown,
+      format: "markdown",
+      extraction: {
+        method: "pdf2md",
+        status: result.status === "partial" ? "partial" : "success",
+        pageCount: result.stats.pageCount,
+        wordCount: result.stats.wordCount,
+        warnings: conversionWarnings(result.messages || []),
+      },
+    };
+  }
+  return {
+    text: metadataSummary,
+    format: "metadata",
+    extraction: { method: "metadata", status: "metadata_only" },
+  };
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
 }
 
 function timestampMillis(value: unknown): number | null {
@@ -362,10 +609,6 @@ function timestampMillis(value: unknown): number | null {
   return null;
 }
 
-function nestedRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" ? value as Record<string, unknown> : {};
-}
-
 function driveContextMatches(
   existing: FirebaseFirestore.DocumentData | undefined,
   next: Record<string, unknown>,
@@ -375,8 +618,13 @@ function driveContextMatches(
   const existingProvenance = nestedRecord(existing?.provenance);
   const nextProvenance = nestedRecord(next.provenance);
   return existingSource.version === nextSource.version
+    && existingSource.resourceId === nextSource.resourceId
     && existingProvenance.checksum === nextProvenance.checksum
-    && existing?.title === next.title;
+    && existing?.title === next.title
+    && existing?.text === next.text
+    && audienceEquals(existing?.access, next.access)
+    && Number(existing?.accessRevision || 1) === Number(next.accessRevision || 1)
+    && existing?.indexingEnabled !== false;
 }
 
 async function syncDriveFolderResource(input: {
@@ -387,10 +635,11 @@ async function syncDriveFolderResource(input: {
   lease: import("./sync-runtime.js").ConnectorSyncLease;
   dependencies: ConnectorSyncDependencies;
   fetcher?: FetchLike;
+  ownershipBoundaries: Set<string>;
+  trigger: ConnectorSyncTrigger;
 }): Promise<ConnectorSyncResourceCompletion> {
-  let pageToken: string | undefined;
   let changes = 0;
-  const folderId = String(input.resource.data.externalId);
+  const rootFolderId = String(input.resource.data.externalId);
   const now = input.dependencies.now?.() || Timestamp.now();
   const existing = await contextItems(input.companyId, input.dependencies.database)
     .where("source.connectionId", "==", input.connectionId)
@@ -398,74 +647,125 @@ async function syncDriveFolderResource(input: {
     .get();
   const existingById = new Map(existing.docs.map((item) => [item.id, item]));
   const observedContextIds = new Set<string>();
-  const lastChangeMillis = timestampMillis(
-    nestedRecord(input.resource.data.sync).lastChangeObservedAt,
-  );
-
-  do {
-    const body = await driveFiles(
-      input.accessToken,
-      driveFolderFilesQuery(folderId, pageToken),
-      input.fetcher,
-    );
-
-    const files = importableDriveFiles(body.files || []);
-    const writes: Array<{
-      ref: FirebaseFirestore.DocumentReference;
-      value: Record<string, unknown>;
-    }> = [];
-    for (const file of files) {
-      const itemId = driveContextItemId(input.connectionId, folderId, file.id);
-      observedContextIds.add(itemId);
-      const itemRef = input.dependencies.database.doc(companyDocumentPath(
-        input.companyId,
-        "contextItems",
-        itemId,
-      ));
-      const prior = existingById.get(itemId)?.data();
-      const providerVersion = file.md5Checksum || file.modifiedTime || "v1";
-      const priorVersion = nestedRecord(prior?.source).version;
-      if (prior && priorVersion === providerVersion) {
-        const modifiedMillis = timestampMillis(file.modifiedTime);
+  const extractionCounts: Record<DriveContentFormat, number> = {
+    markdown: 0,
+    plain_text: 0,
+    metadata: 0,
+  };
+  const pendingFolders = [rootFolderId];
+  const visitedFolders = new Set<string>();
+  for (let folderIndex = 0; folderIndex < pendingFolders.length; folderIndex += 1) {
+    const folderId = pendingFolders[folderIndex]!;
+    if (visitedFolders.has(folderId)) continue;
+    visitedFolders.add(folderId);
+    let pageToken: string | undefined;
+    do {
+      const body = await driveFiles(
+        input.accessToken,
+        driveFolderFilesQuery(folderId, pageToken),
+        input.fetcher,
+      );
+      for (const child of body.files || []) {
         if (
-          modifiedMillis !== null
-          && (lastChangeMillis === null || modifiedMillis > lastChangeMillis)
-        ) changes += 1;
-        continue;
+          child.id
+          && child.mimeType === "application/vnd.google-apps.folder"
+          && !input.ownershipBoundaries.has(child.id)
+        ) pendingFolders.push(child.id);
       }
-      const contentText = await driveFileText(file, input.accessToken, input.fetcher);
-      const value = driveContextItem({
-        companyId: input.companyId,
-        connectionId: input.connectionId,
-        folderId,
-        file,
-        contentText,
-        observedAt: now,
-        audience: input.resource.data.audience,
-        audienceRevision: Number(input.resource.data.audienceRevision || 1),
-      });
-      if (!driveContextMatches(prior, value)) {
-        writes.push({ ref: itemRef, value });
-        changes += 1;
-      }
-    }
-    for (let offset = 0; offset < writes.length; offset += 350) {
-      const pageWrites = writes.slice(offset, offset + 350);
-      await commitConnectorSyncWrites({
-        companyId: input.companyId,
-        connectionId: input.connectionId,
-        resourceId: input.resource.id,
-        lease: input.lease,
-        apply: (transaction) => {
-          for (const write of pageWrites) {
-            transaction.set(write.ref, write.value, { merge: false });
-          }
-        },
-      }, input.dependencies);
-    }
 
-    pageToken = body.nextPageToken;
-  } while (pageToken);
+      const files = importableDriveFiles(body.files || []);
+      const writes: Array<{
+        ref: FirebaseFirestore.DocumentReference;
+        value: Record<string, unknown>;
+      }> = [];
+      for (const file of files) {
+        const itemId = driveContextItemId(input.connectionId, file.id);
+        observedContextIds.add(itemId);
+        const itemRef = input.dependencies.database.doc(companyDocumentPath(
+          input.companyId,
+          "contextItems",
+          itemId,
+        ));
+        const prior = existingById.get(itemId)?.data();
+        const providerVersion = file.md5Checksum || file.modifiedTime || "v1";
+        const priorSource = nestedRecord(prior?.source);
+        const priorMetadata = nestedRecord(prior?.metadata);
+        const ownershipAndAudienceMatch = priorSource.resourceId === input.resource.id
+          && audienceEquals(prior?.access, input.resource.data.audience)
+          && Number(prior?.accessRevision || 1)
+            === Number(input.resource.data.audienceRevision || 1)
+          && prior?.indexingEnabled !== false;
+        if (prior && priorSource.version === providerVersion && ownershipAndAudienceMatch) {
+          const priorFormat = ["markdown", "plain_text", "metadata"].includes(
+            String(priorMetadata.contentFormat),
+          ) ? priorMetadata.contentFormat as DriveContentFormat : "plain_text";
+          extractionCounts[priorFormat] += 1;
+          continue;
+        }
+        const extracted = prior && priorSource.version === providerVersion
+          ? {
+            text: String(prior.text || driveMetadataSummary(file)),
+            format: (priorMetadata.contentFormat || "plain_text") as DriveContentFormat,
+            extraction: (priorMetadata.extraction || {
+              method: "metadata",
+              status: "metadata_only",
+            }) as DriveExtractedContent["extraction"],
+          }
+          : await driveFileContent(file, input.accessToken, input.fetcher);
+        extractionCounts[extracted.format] += 1;
+        const value = driveContextItem({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceId: input.resource.id,
+          folderId,
+          file,
+          contentText: extracted.text,
+          contentFormat: extracted.format,
+          extraction: extracted.extraction,
+          observedAt: now,
+          audience: input.resource.data.audience,
+          audienceRevision: Number(input.resource.data.audienceRevision || 1),
+          observation: {
+            runId: input.lease.runId,
+            trigger: input.trigger,
+            providerUpdatedAt: file.modifiedTime || null,
+            providerVersion,
+            freshnessEligible: (() => {
+              const providerUpdatedAt = timestampMillis(file.modifiedTime);
+              const lastSuccessAt = timestampMillis(
+                nestedRecord(input.resource.data.sync).lastSuccessAt
+                  || input.resource.data.lastSyncAt,
+              );
+              return priorSource.version !== providerVersion
+                && providerUpdatedAt !== null
+                && lastSuccessAt !== null
+                && providerUpdatedAt >= lastSuccessAt;
+            })(),
+          },
+        });
+        if (!driveContextMatches(prior, value)) {
+          writes.push({ ref: itemRef, value });
+          changes += 1;
+        }
+      }
+      for (let offset = 0; offset < writes.length; offset += 350) {
+        const pageWrites = writes.slice(offset, offset + 350);
+        await commitConnectorSyncWrites({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceId: input.resource.id,
+          lease: input.lease,
+          apply: (transaction) => {
+            for (const write of pageWrites) {
+              transaction.set(write.ref, write.value, { merge: false });
+            }
+          },
+        }, input.dependencies);
+      }
+
+      pageToken = body.nextPageToken;
+    } while (pageToken);
+  }
 
   const staleItems = existing.docs.filter((item) => !observedContextIds.has(item.id));
   for (let offset = 0; offset < staleItems.length; offset += 400) {
@@ -487,6 +787,14 @@ async function syncDriveFolderResource(input: {
     itemCount: observedContextIds.size,
     cursorAfter: null,
     cursorMode: "full",
+    resourcePatch: {
+      recursive: true,
+      extractionCounts,
+      selectionDepth: Number(input.resource.data.selectionDepth || 0),
+      ancestorIds: Array.isArray(input.resource.data.ancestorIds)
+        ? input.resource.data.ancestorIds.map(String)
+        : [],
+    },
   };
 }
 
@@ -529,16 +837,62 @@ async function executeGoogleDriveSyncRun(
     runId: input.runId,
     capabilityId: driveCapabilityId,
     serviceId: "drive",
-    prepare: () => authorizedDriveConnection(input),
-    listResources: async ({ connection }) => {
-      const snapshot = await connection.ref.collection("resources")
+    prepare: async () => {
+      const authorization = await authorizedDriveConnection(input);
+      const snapshot = await authorization.connection.ref.collection("resources")
         .where("capabilityId", "==", driveCapabilityId)
-        .where("status", "==", "enabled")
         .get();
-      return snapshot.docs.map((resource) => ({ id: resource.id, data: resource.data() }));
+      const needsFolderGraph = snapshot.docs.some(
+        (resource) => !Number.isFinite(Number(resource.data().selectionDepth)),
+      );
+      const folders = needsFolderGraph
+        ? await fetchDriveFolders(authorization.accessToken, input.fetcher)
+        : [];
+      const folderMap = new Map(folders.map((folder) => [String(folder.id), folder]));
+      const ancestry = (folderId: string): string[] => {
+        const ancestors: string[] = [];
+        const visited = new Set([folderId]);
+        let parentId = folderMap.get(folderId)?.parents?.[0];
+        while (parentId && !visited.has(parentId)) {
+          ancestors.push(parentId);
+          visited.add(parentId);
+          parentId = folderMap.get(parentId)?.parents?.[0];
+        }
+        return ancestors;
+      };
+      const driveResources = snapshot.docs.map((resource) => {
+        const data = resource.data();
+        if (Number.isFinite(Number(data.selectionDepth))) {
+          return { id: resource.id, data };
+        }
+        const ancestorIds = ancestry(String(data.externalId));
+        return {
+          id: resource.id,
+          data: {
+            ...data,
+            ancestorIds,
+            selectionDepth: ancestorIds.length,
+          },
+        };
+      });
+      return { ...authorization, driveResources };
+    },
+    listResources: async ({ driveResources }) => {
+      return driveResources
+        .filter((resource) => resource.data.status === "enabled")
+        .sort((left, right) => (
+          Number(left.data.selectionDepth || 0) - Number(right.data.selectionDepth || 0)
+          || left.id.localeCompare(right.id)
+        ));
     },
     cursorMode: () => "full",
-    synchronizeResource: ({ preparation, resource, lease, dependencies: runDependencies }) => (
+    synchronizeResource: ({
+      preparation,
+      resource,
+      trigger,
+      lease,
+      dependencies: runDependencies,
+    }) => (
       syncDriveFolderResource({
         companyId: input.companyId,
         connectionId: input.connectionId,
@@ -547,6 +901,10 @@ async function executeGoogleDriveSyncRun(
         lease,
         dependencies: runDependencies,
         fetcher: input.fetcher,
+        trigger,
+        ownershipBoundaries: new Set(preparation.driveResources.map(
+          (selected) => String(selected.data.externalId),
+        )),
       })
     ),
   }, dependencies);

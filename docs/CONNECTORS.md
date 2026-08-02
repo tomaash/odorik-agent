@@ -128,11 +128,28 @@ For each selection:
 
 1. Initial sync imports event instances from the previous year onward.
 2. The returned `nextSyncToken` is stored on the calendar resource.
-3. Later runs request only changes.
-4. HTTP 410 clears an expired token and starts a bounded full sync.
-5. Cancelled events delete their context.
-6. Deselecting a calendar deletes its normalized context.
-7. A private scheduled function reconciles every 30 minutes.
+3. Later runs request only changes with the same expanded-instance and deleted
+   event contract across every page.
+4. HTTP 410 marks a bounded full rebuild, enumerates a complete replacement
+   snapshot, reconciles stale observations, and commits the replacement token
+   only after the final page succeeds.
+5. Recurring instances retain their series ID, original start time, iCal UID,
+   sequence, event type, and cancellation metadata. Cancelling one occurrence
+   removes only its deterministic instance; series deletion removes every
+   returned cancellation or stale instance.
+6. Content no-ops do not rewrite context, while provider version, source
+   ownership, audience, and audience revision changes still reconcile.
+7. Deselecting a calendar deletes its normalized context.
+8. A private scheduled function reconciles every 30 minutes.
+
+Google API and refresh failures are normalized into sanitized typed errors.
+Network failures, rate limits, and server errors follow bounded retry. An
+expired Calendar cursor is recovery rather than reauthorization. Invalid
+grants, a repeated provider 401 after forced refresh, or a missing capability
+scope produce explicit account/capability reauthorization state; inaccessible
+selected resources produce scoped permanent attention instead. Same-identity
+reauthorization preserves resources, cursors, context, and audiences and queues
+their reconciliation.
 
 Calendar, Drive, and GitHub polling reconciliation create durable capability
 runs with immutable per-resource attempts. A fenced lease prevents two workers
@@ -146,27 +163,45 @@ one safe successor when it includes a newly selected resource.
 
 Calendar resources remain company-visible by default for compatibility, and an
 administrator can restrict each selected calendar to specific active members.
+Every incremental page, cancellation, full rebuild, stale deletion, and
+re-index uses that resource's current audience and revision behind the same
+connection/resource lifecycle and lease fences.
 
 ## Google Drive adapter
 
-OAuth currently uses `drive.readonly`. After authorization, an administrator
-explicitly selects folders; nothing is selected implicitly. The deployed
-implementation imports non-folder files that are direct children of each
-selected folder. It extracts Google Docs and text-like files and otherwise
-stores searchable metadata plus a provider link.
+OAuth uses `drive.readonly`. After authorization, an administrator explicitly
+selects folders; nothing is selected implicitly. Each enabled selected folder
+is traversed recursively with pagination, visited-folder protection, shared
+Drive request flags, and bounded depth/item/page work. A selected descendant
+owns its subtree, so overlapping parent and child roots never produce duplicate
+context. Disabled descendants remain exclusion boundaries. The closest
+selected ancestor owns each provider file, with deterministic resource-ID
+tie-breaking.
 
 Drive sync runs when a folder is selected, when an administrator requests it,
 and every 30 minutes. Each selected folder is an independently leased full
-reconciliation. Healthy folders finish while a failing folder retries. After a
-complete direct-child enumeration, context for files deleted, trashed, moved
-out of that folder, or no longer visible is removed. Supported Google Docs and
-text extraction failures are actionable; unsupported binaries remain honest
-metadata-only records. `source.resourceId` uses the same hashed internal folder
-identity as the resource document.
+reconciliation. Healthy folders finish while a failing folder retries. Stale
+context is removed only after complete traversal and extraction; partial
+enumeration, safety-limit breach, extraction failure, or invalidated selection
+generation cannot advance reconciliation or delete unseen items. Creation,
+update, rename, move, trash, provider deletion, ownership transfer, root
+disable/re-enable, and deselection converge on one canonical context ID per
+provider file within the connection and document capability. Stored context,
+not the latest page, determines each root's item count.
 
-Recursive selection, overlapping-root deduplication, and PDF extraction are not
-yet implemented. Administrators can restrict each selected folder to specific
-active members through its deployed resource audience.
+Google Docs export as text; text and Markdown blobs download as plain text.
+Text-bearing PDFs up to 15 MB are converted to semantic Markdown by exactly
+pinned `@pdf2md/core` 0.3.0 with a 45-second conversion limit and the common
+50,000-character content ceiling. Image-only and policy-limited PDFs, plus
+unsupported binaries, remain explicitly metadata-only with MIME type,
+description, size, modified time, and provider link. A malformed or failed
+supported extraction is actionable and prevents stale reconciliation rather
+than pretending the file was read.
+
+Administrators can restrict each selected folder to specific active members.
+Ownership transfers copy the destination root's current audience and revision;
+a selection change that would broaden retained content requires a second
+confirmation against the current selection revision.
 
 ## GitHub adapter
 
@@ -212,6 +247,28 @@ event.
 - Connector health confirms provider-to-Firestore reconciliation. The separate
   search-index card confirms Firestore-to-Qdrant delivery; neither one is
   allowed to overwrite or stand in for the other.
+- Calendar and Drive observations retain run, trigger, observed time, provider
+  update time, and provider version. The durable index delivery samples each
+  eligible provider version once and reports provider-to-context,
+  context-to-search, and source-to-search p95 by capability and trigger.
+  Historical backfill is excluded. Sources compares manual changes with a
+  two-minute target and scheduled polling with a 45-minute target.
+
+## C5 test-production evidence
+
+On 2026-08-02 a real recurring Calendar series reconciled from two expanded
+instances to one after a single-occurrence cancellation, returned a cited
+agent answer, recovered a deliberately expired sync token through a successful
+full-cursor rebuild, and then reconciled to zero after provider deletion. A
+real nested Drive PDF converted through `@pdf2md/core`, returned a cited answer,
+remained one canonical record while overlapping roots transferred ownership,
+and disappeared from exact and hybrid retrieval after its subtree moved to
+recoverable trash. Scheduler samples reached search in 14.904 seconds for
+Calendar and 32.791 seconds for Drive. The active fixture was restored to
+`České svátky` with 341 company-visible items and `test` with one
+company-visible item; search settled at 519/519, zero pending, zero
+intervention, and 16-second p95 context-to-search. The C4 migration was not run
+again.
 
 Google Auth Platform is currently in testing mode. Only listed test users may
 authorize Calendar, and refresh tokens expire after seven days. Complete OAuth

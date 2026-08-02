@@ -131,16 +131,44 @@ export function sanitizeConnectorSyncError(error: unknown): string {
 }
 
 export function classifyConnectorSyncError(error: unknown): ConnectorSyncFailureKind {
-  const code = String((error as { code?: unknown })?.code || "").toUpperCase();
+  const typed = error as {
+    code?: unknown;
+    status?: unknown;
+    reasons?: unknown;
+    googleStatus?: unknown;
+  };
+  const code = String(typed?.code || "").toUpperCase();
   const name = String((error as { name?: unknown })?.name || "");
   const message = sanitizeConnectorSyncError(error).toLowerCase();
+  const status = Number(typed?.status || 0);
+  const reasons = Array.isArray(typed?.reasons)
+    ? typed.reasons.map((reason) => String(reason).toLowerCase())
+    : [];
   if (
     code === "GOOGLE_REAUTHORIZATION_REQUIRED"
     || name === "GoogleReauthorizationRequiredError"
   ) return "reauthorization_required";
   if (
+    code === "GOOGLE_API_ERROR"
+    && (
+      status === 401
+      || (
+        status === 403
+        && reasons.some((reason) => [
+          "autherror",
+          "insufficientpermissions",
+          "insufficient_scope",
+        ].includes(reason))
+      )
+    )
+  ) return "reauthorization_required";
+  if (
     name === "AbortError"
     || name === "TimeoutError"
+    || (
+      code === "GOOGLE_API_ERROR"
+      && ([408, 409, 425, 429].includes(status) || status >= 500)
+    )
     || /\((408|409|425|429|5\d\d)\)/.test(message)
     || /\b(timeout|timed out|temporar|network|fetch failed|socket|econnreset|rate limit)\b/.test(message)
   ) return "transient";
@@ -203,6 +231,7 @@ function connectorSyncRunDocument(input: {
   resourceIds: string[];
   replayOfRunId?: string | null;
   connectionGeneration: number;
+  capabilityGeneration: number;
   now: Timestamp;
 }): Record<string, unknown> {
   return {
@@ -214,6 +243,7 @@ function connectorSyncRunDocument(input: {
     requestedBy: input.requestedBy || null,
     replayOfRunId: input.replayOfRunId || null,
     connectionGeneration: input.connectionGeneration,
+    capabilityGeneration: input.capabilityGeneration,
     resourceIds: [...new Set(input.resourceIds)],
     status: "queued" satisfies ConnectorSyncRunStatus,
     attempt: 0,
@@ -260,7 +290,12 @@ export async function createConnectorSyncRun(input: {
     const activeRunId = String(capabilitySnapshot.data()?.stats?.activeRunId || "");
     if (activeRunId) {
       const activeRun = await transaction.get(syncRunRef({ ...input, database: deps.database, runId: activeRunId }));
-      if (activeRun.exists && activeRunStatuses.has(activeRun.data()?.status)) {
+      if (
+        activeRun.exists
+        && activeRunStatuses.has(activeRun.data()?.status)
+        && Number(activeRun.data()?.capabilityGeneration || 0)
+          === Number(capabilitySnapshot.data()?.syncGeneration || 0)
+      ) {
         const currentResourceIds = Array.isArray(activeRun.data()?.resourceIds)
           ? activeRun.data()!.resourceIds.map(String)
           : [];
@@ -317,6 +352,7 @@ export async function createConnectorSyncRun(input: {
         transaction.create(runRef, connectorSyncRunDocument({
           ...input,
           connectionGeneration: Number(connectionSnapshot.data()?.syncGeneration || 0),
+          capabilityGeneration: Number(capabilitySnapshot.data()?.syncGeneration || 0),
           now,
         }));
         transaction.set(capability, {
@@ -335,6 +371,7 @@ export async function createConnectorSyncRun(input: {
     transaction.create(runRef, connectorSyncRunDocument({
       ...input,
       connectionGeneration: Number(connectionSnapshot.data()?.syncGeneration || 0),
+      capabilityGeneration: Number(capabilitySnapshot.data()?.syncGeneration || 0),
       now,
     }));
     transaction.set(capability, {
@@ -378,6 +415,8 @@ export async function claimConnectorSyncRun(input: {
       !capabilitySnapshot.exists
       || !connectionSnapshot.exists
       || !activeConnectionStatuses.has(String(connectionSnapshot.data()?.status))
+      || Number(capabilitySnapshot.data()?.syncGeneration || 0)
+        !== Number(data.capabilityGeneration || 0)
       || Number(connectionSnapshot.data()?.syncGeneration || 0)
         !== Number(data.connectionGeneration || 0)
     ) {
@@ -816,6 +855,7 @@ export async function executeConnectorSyncRun<
     preparation: TPreparation;
     resource: ConnectorSyncExecutionResource<TResourceData>;
     attempt: number;
+    trigger: ConnectorSyncTrigger;
     lease: ConnectorSyncLease;
     attemptRef: FirebaseFirestore.DocumentReference;
     dependencies: ConnectorSyncDependencies;
@@ -876,6 +916,7 @@ export async function executeConnectorSyncRun<
           preparation,
           resource,
           attempt: claimed.attempt,
+          trigger: claimed.data.trigger as ConnectorSyncTrigger,
           lease: acquired.lease,
           attemptRef: acquired.attemptRef,
           dependencies: deps,
@@ -966,6 +1007,8 @@ export async function completeConnectorSyncRun(input: {
   const retryAt = connectorSyncRetryAt(input.attempt, now);
   const hasTransientFailure = input.preparationFailureKind === "transient"
     || input.results.some((result) => result.failureKind === "transient");
+  const hasReauthorizationFailure = input.preparationFailureKind === "reauthorization_required"
+    || input.results.some((result) => result.failureKind === "reauthorization_required");
   const canRetry = hasTransientFailure
     && input.attempt < Number(runData.maxAttempts || connectorSyncMaxAttempts)
     && retryAt !== null;
@@ -1034,8 +1077,9 @@ export async function completeConnectorSyncRun(input: {
     const capabilityStats = capabilityData.stats || {};
     const currentStatus = String(capabilityData.status || "attention");
     const capabilityStatus = currentStatus === "disabled"
-      || currentStatus === "reauthorization_required"
       ? currentStatus
+      : hasReauthorizationFailure || currentStatus === "reauthorization_required"
+        ? "reauthorization_required"
       : status === "attention" ? "attention" : "active";
     transaction.set(run, {
       ...runResult,
@@ -1056,7 +1100,9 @@ export async function completeConnectorSyncRun(input: {
     ) return;
     if (
       Number(latestConnection.data()?.syncGeneration || 0)
-      !== Number(runData.connectionGeneration || 0)
+        !== Number(runData.connectionGeneration || 0)
+      || Number(latestCapability.data()?.syncGeneration || 0)
+        !== Number(runData.capabilityGeneration || 0)
     ) {
       const ownsActiveRun = capabilityStats.activeRunId === input.runId;
       const ownsPendingRun = capabilityStats.pendingRunId === input.runId;
@@ -1118,6 +1164,14 @@ export async function completeConnectorSyncRun(input: {
       },
       updatedAt: now,
     }, { merge: true });
+    if (hasReauthorizationFailure) {
+      transaction.set(latestConnectionRef, {
+        status: "attention",
+        reauthorizationRequired: true,
+        stats: { lastError: error },
+        updatedAt: now,
+      }, { merge: true });
+    }
   });
   await refreshConnectorSyncAggregates({
     companyId: input.companyId,

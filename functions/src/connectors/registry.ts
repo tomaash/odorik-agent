@@ -39,7 +39,7 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     direction: "observe",
     resourceType: "folder",
     requiredScopes: [...driveScopes],
-    syncMode: "manual",
+    syncMode: "reconcile",
     requiresApproval: false,
   },
   "context.github.issue.read": {
