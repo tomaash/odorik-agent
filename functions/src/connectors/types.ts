@@ -53,7 +53,7 @@ export type SourceCapabilityDescriptor = {
   direction: "observe";
   resourceType: ResourceType;
   requiredScopes: string[];
-  syncMode: "webhook" | "incremental" | "manual";
+  syncMode: "webhook" | "incremental" | "reconcile" | "manual";
   requiresApproval: false;
 };
 
@@ -143,6 +143,12 @@ export type ConnectionResourcePublicView = {
   itemCount: number;
   lastObservedAt?: string | null;
   sync?: SyncOperationalPublicView;
+  document?: {
+    recursive: boolean;
+    markdownCount: number;
+    plainTextCount: number;
+    metadataOnlyCount: number;
+  };
   createdAt?: string | null;
   updatedAt?: string | null;
 };

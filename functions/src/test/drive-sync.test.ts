@@ -3,9 +3,11 @@ import test from "node:test";
 import { Timestamp } from "firebase-admin/firestore";
 import {
   driveContextItemId,
+  driveFileContent,
   folderResourceId,
   replayGoogleDriveSyncRun,
   retryDueGoogleDriveSyncRuns,
+  selectGoogleDriveFolders,
   syncGoogleDriveConnection,
 } from "../connectors/google-drive.js";
 import { encryptCredentials } from "../connectors/credentials.js";
@@ -22,6 +24,29 @@ function jsonResponse(value: unknown, status = 200): Response {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function singlePagePdf(text: string): Uint8Array {
+  const escaped = text.replace(/([\\()])/g, "\\$1");
+  const stream = `BT /F1 18 Tf 72 720 Td (${escaped}) Tj ET`;
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  for (let index = 0; index < objects.length; index += 1) {
+    offsets.push(Buffer.byteLength(pdf));
+    pdf += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`;
+  }
+  const xrefOffset = Buffer.byteLength(pdf);
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += offsets.slice(1).map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`).join("");
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "binary");
 }
 
 function fixture(folderIds: string[]) {
@@ -56,6 +81,7 @@ function fixture(folderIds: string[]) {
       displayName: folderId,
       status: "enabled",
       itemCount: 0,
+      selectionDepth: 0,
     });
   }
   return {
@@ -229,5 +255,216 @@ test("Drive permanent extraction failure becomes replayable attention", async ()
   assert.equal(
     context.memory.read(`${connectionPath}/syncRuns/${replayed.runId}`)?.replayOfRunId,
     failed.runId,
+  );
+});
+
+test("Drive recursively traverses roots while selected descendants form audience boundaries", async () => {
+  const context = fixture(["root", "child"]);
+  const rootResourceId = folderResourceId("root");
+  const childResourceId = folderResourceId("child");
+  context.memory.patch(`${connectionPath}/resources/${rootResourceId}`, {
+    audience: { visibility: "company" },
+    audienceRevision: 2,
+    selectionDepth: 0,
+  });
+  context.memory.patch(`${connectionPath}/resources/${childResourceId}`, {
+    audience: { visibility: "restricted", memberIds: ["member-a"] },
+    audienceRevision: 7,
+    selectionDepth: 1,
+  });
+  const listedFolders: string[] = [];
+  const fetcher = (async (request: string | URL | Request) => {
+    const url = new URL(String(request));
+    if (url.pathname === "/drive/v3/files") {
+      const query = url.searchParams.get("q") || "";
+      const folderId = ["root", "child", "grand"].find((id) => query.includes(`'${id}'`));
+      if (!folderId) return jsonResponse({ error: { message: "unexpected folder" } }, 404);
+      listedFolders.push(folderId);
+      if (folderId === "root") return jsonResponse({ files: [{
+        id: "root-file",
+        name: "root.txt",
+        mimeType: "text/plain",
+        modifiedTime: "2026-08-02T09:00:00.000Z",
+      }, {
+        id: "child",
+        name: "Child",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["root"],
+      }] });
+      if (folderId === "child") return jsonResponse({ files: [{
+        id: "child-file",
+        name: "child.md",
+        mimeType: "text/markdown",
+        modifiedTime: "2026-08-02T09:10:00.000Z",
+      }, {
+        id: "grand",
+        name: "Grandchild",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["child"],
+      }] });
+      return jsonResponse({ files: [{
+        id: "grand-file",
+        name: "grand.txt",
+        mimeType: "text/plain",
+        modifiedTime: "2026-08-02T09:20:00.000Z",
+      }] });
+    }
+    const fileId = ["root-file", "child-file", "grand-file"].find(
+      (id) => url.pathname.endsWith(`/${id}`),
+    );
+    if (fileId && url.searchParams.get("alt") === "media") {
+      return new Response(`${fileId} body`, { status: 200 });
+    }
+    return jsonResponse({ error: { message: "unexpected request" } }, 404);
+  }) as typeof fetch;
+
+  const result = await syncGoogleDriveConnection({
+    companyId,
+    connectionId,
+    clientId: "google-client",
+    clientSecret: "google-secret",
+    credentialKey,
+    database: context.database,
+    fetcher,
+    now: context.now,
+  });
+  assert.equal(result.status, "succeeded");
+  assert.equal(result.changes, 3);
+  assert.deepEqual(listedFolders, ["root", "child", "grand"]);
+  const rootItem = context.memory.read(
+    `companies/${companyId}/contextItems/${driveContextItemId(connectionId, "root-file")}`,
+  ) || {};
+  const childItem = context.memory.read(
+    `companies/${companyId}/contextItems/${driveContextItemId(connectionId, "child-file")}`,
+  ) || {};
+  const grandItem = context.memory.read(
+    `companies/${companyId}/contextItems/${driveContextItemId(connectionId, "grand-file")}`,
+  ) || {};
+  assert.equal((rootItem.source as Record<string, unknown>).resourceId, rootResourceId);
+  assert.deepEqual(rootItem.access, { visibility: "company" });
+  for (const item of [childItem, grandItem]) {
+    assert.equal((item.source as Record<string, unknown>).resourceId, childResourceId);
+    assert.deepEqual(item.access, { visibility: "restricted", memberIds: ["member-a"] });
+    assert.equal(item.accessRevision, 7);
+  }
+  assert.equal(context.memory.read(`${connectionPath}/resources/${rootResourceId}`)?.itemCount, 1);
+  assert.equal(context.memory.read(`${connectionPath}/resources/${childResourceId}`)?.itemCount, 2);
+});
+
+test("Drive requires confirmation before a deselected child inherits broader ancestor access", async () => {
+  const context = fixture(["root", "child"]);
+  const rootResourceId = folderResourceId("root");
+  const childResourceId = folderResourceId("child");
+  context.memory.patch(`${connectionPath}/resources/${rootResourceId}`, {
+    audience: { visibility: "company" },
+    audienceRevision: 2,
+    selectionDepth: 0,
+  });
+  context.memory.patch(`${connectionPath}/resources/${childResourceId}`, {
+    audience: { visibility: "restricted", memberIds: ["member-a"] },
+    audienceRevision: 5,
+    selectionDepth: 1,
+  });
+  const fetcher = (async (request: string | URL | Request) => {
+    const url = new URL(String(request));
+    if (url.pathname === "/drive/v3/files") {
+      const query = url.searchParams.get("q") || "";
+      if (query.startsWith("mimeType =")) return jsonResponse({ files: [{
+        id: "root",
+        name: "Root",
+        mimeType: "application/vnd.google-apps.folder",
+      }, {
+        id: "child",
+        name: "Child",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["root"],
+      }] });
+      if (query.includes("'root'")) return jsonResponse({ files: [{
+        id: "child",
+        name: "Child",
+        mimeType: "application/vnd.google-apps.folder",
+        parents: ["root"],
+      }] });
+      if (query.includes("'child'")) return jsonResponse({ files: [] });
+    }
+    return jsonResponse({ error: { message: "unexpected request" } }, 404);
+  }) as typeof fetch;
+  const selection = {
+    companyId,
+    connectionId,
+    folderIds: ["root"],
+    clientId: "google-client",
+    clientSecret: "google-secret",
+    credentialKey,
+    actorUid: "admin-1",
+    database: context.database,
+    fetcher,
+    now: context.now,
+  };
+  await assert.rejects(
+    selectGoogleDriveFolders(selection),
+    (error: unknown) => (
+      error instanceof Error
+      && (error as { code?: string }).code === "DRIVE_SELECTION_BROADENING_REQUIRES_CONFIRMATION"
+    ),
+  );
+  assert.ok(context.memory.read(`${connectionPath}/resources/${childResourceId}`));
+  const selected = await selectGoogleDriveFolders({ ...selection, confirmBroadening: true });
+  assert.deepEqual(selected.filter((folder) => folder.selected).map((folder) => folder.id), ["root"]);
+  assert.equal(context.memory.read(`${connectionPath}/resources/${childResourceId}`), undefined);
+});
+
+test("Drive converts text PDFs to semantic Markdown with pdf2md", async () => {
+  const pdf = singlePagePdf("C5 PDF handover context");
+  const pdfBody = pdf.buffer.slice(pdf.byteOffset, pdf.byteOffset + pdf.byteLength) as ArrayBuffer;
+  const extracted = await driveFileContent({
+    id: "pdf-a",
+    name: "handover.pdf",
+    mimeType: "application/pdf",
+    size: String(pdf.byteLength),
+  }, "drive-access-token", (async () => new Response(pdfBody, {
+    status: 200,
+    headers: { "content-type": "application/pdf" },
+  })) as typeof fetch);
+  assert.equal(extracted.format, "markdown");
+  assert.equal(extracted.extraction.method, "pdf2md");
+  assert.equal(extracted.extraction.pageCount, 1);
+  assert.match(extracted.text, /C5 PDF handover context/);
+  assert.doesNotMatch(extracted.text, /data:image|base64,/i);
+});
+
+test("Drive labels policy-limited PDFs as metadata-only without downloading them", async () => {
+  let downloads = 0;
+  const extracted = await driveFileContent({
+    id: "pdf-large",
+    name: "archive.pdf",
+    mimeType: "application/pdf",
+    size: String(15 * 1024 * 1024 + 1),
+  }, "drive-access-token", (async () => {
+    downloads += 1;
+    return new Response("not expected", { status: 200 });
+  }) as typeof fetch);
+  assert.equal(downloads, 0);
+  assert.equal(extracted.format, "metadata");
+  assert.equal(extracted.extraction.status, "metadata_only");
+  assert.deepEqual(extracted.extraction.warnings, ["policy_limited"]);
+  assert.match(extracted.text, /Metadata only/);
+});
+
+test("Drive treats malformed in-policy PDFs as actionable extraction failures", async () => {
+  await assert.rejects(
+    driveFileContent({
+      id: "pdf-bad",
+      name: "broken.pdf",
+      mimeType: "application/pdf",
+      size: "14",
+    }, "drive-access-token", (async () => new Response("not a real pdf", {
+      status: 200,
+      headers: { "content-type": "application/pdf" },
+    })) as typeof fetch),
+    (error: unknown) => (
+      error instanceof Error
+      && (error as { code?: string }).code === "DRIVE_CONTENT_EXTRACTION_FAILED"
+    ),
   );
 });

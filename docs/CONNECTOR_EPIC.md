@@ -2,9 +2,9 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C5 — Harden Google Workspace Calendar and Drive
+**Current implementation slice:** C5 complete — Gmail decision gate is next
 
-**Last plan revision:** 2026-07-31
+**Last plan revision:** 2026-08-02
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -128,17 +128,17 @@ and sends the draft in the mailbox that owns it.
 
 ## Current baseline
 
-The baseline was inspected in the deployed test environment on 2026-07-31.
+The baseline was last accepted in the deployed test environment on 2026-08-02.
 
 | Area | Working now | Important limitation |
 | --- | --- | --- |
-| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources | Durable run history, leases, retry, and honest aggregate health remain C3 |
+| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources, durable sync runs/recovery, and separate durable search delivery | Google provider failures still need precise capability/resource and reauthorization classification in C5 |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
-| Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, cancellation deletion, and 30-minute reconciliation | Imported items are company-visible; no measured freshness target |
-| Google Drive | Workspace subsystem with least-privilege consent, explicit direct-folder selection, Google Docs/text extraction, manual sync, and consistent internal resource identity | No scheduled sync, recursive selection, stale-file deletion, or PDF text extraction |
-| Context | Provider/capability/connection/resource identity, provenance, indexing, citations, and `company`/`restricted` envelope | Google capabilities still write `company`; provider ACLs are not projected |
-| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; C3–G3 must prove provider recovery and execution |
-| Connector catalog | Only working Odorik and Google Workspace capabilities are shown | Gmail remains deliberately absent until G1 has a complete operating loop |
+| Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, deterministic recurrence/cancellation handling, bounded expired-token full rebuild, typed reauthorization state, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Google Auth Platform verification remains an operational release gate |
+| Google Drive | Workspace subsystem with least-privilege consent, recursive folder selection, deterministic overlapping-root ownership, canonical per-file identity, Google Docs/text/PDF extraction, honest metadata-only fallbacks, complete-snapshot stale cleanup, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Provider ACLs are deliberately not mirrored; administrators choose the Erik audience explicitly |
+| Context | Provider/capability/connection/resource identity, provenance, durable indexing, citations, enforced `company`/`restricted` envelopes, and provider-to-context/search freshness samples | Provider ACLs are deliberately not projected; the selected Erik resource remains the governing access boundary |
+| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; G1–G3 must prove the mail evidence and execution loop |
+| Connector catalog | Working Odorik, Google Workspace, GitHub, and isolated Grok subscription entries are shown | Gmail remains deliberately absent until G1 has a complete operating loop |
 
 The first slices protect and improve this baseline rather than immediately
 adding another provider.
@@ -242,7 +242,7 @@ Every action capability must define:
 | C2 | Put internal actions behind an extensible typed action registry | Completed | Existing workflow approvals behave unchanged |
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Completed | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Completed | Accepted in test production |
-| C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
+| C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Pending | Cross-source call + email answer succeeds |
 | G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
@@ -697,6 +697,330 @@ test-production acceptance record below closes this checkpoint.
 dependable enough to be the foundation for Gmail rather than permanent
 prototypes.
 
+**Planning checkpoint (2026-08-02):** C5 starts from deployed and accepted C4
+commit `93572dd`. The C4 audience migration has already been applied in test
+production. C5 must not invoke it again. Any C5 data rewrite first records the
+target connection, resources, audience revisions, context counts, and pending
+index deliveries, then uses normal fenced reconciliation rather than a blanket
+migration.
+
+#### C5 invariants and contract decisions
+
+- Keep the existing Google OAuth scopes, one Workspace connection, explicit
+  resource selection, 30-minute polling, C3 durable runs, and C4 application
+  audiences. C5 adds no provider write grant, webhook, Gmail data, or provider
+  ACL claim.
+- A cursor or enumeration result is committed only by the resource lease that
+  observed it. A failed or incomplete enumeration may upsert observations but
+  may not perform stale deletion, advance the cursor, or report reconciliation
+  success.
+- Every Calendar event instance has one context item per Workspace connection,
+  calendar, and Google event ID. Every Drive provider file has one context item
+  per Workspace connection and document capability, independent of how many
+  selected roots cover it.
+- `source.resourceId`, `access`, and `accessRevision` always come from the
+  selected resource that currently owns the item. Synchronization, token
+  recovery, metadata refresh, and reauthorization never replace an existing
+  resource audience with a default.
+- New Calendar and Drive resources continue to default to company visibility
+  for C4 compatibility. A resource audience is changed only through the C4
+  audience action. Drive selection changes that would transfer existing items
+  to a broader root audience require the same second explicit confirmation.
+- Unsupported Drive binaries are searchable only by honest metadata. A
+  supported extraction failure is actionable and prevents the affected root
+  from claiming a successful reconciliation.
+- Firestore remains authoritative. All C5 writes and deletes use the existing
+  durable index-delivery path; C5 does not write Qdrant directly.
+
+Drive overlap has one deterministic ownership rule. The closest selected
+ancestor folder owns a file; ties are resolved by internal resource ID. A
+selected descendant is therefore a traversal boundary for its parent. If the
+descendant is disabled, it remains an exclusion boundary so disabling a
+restricted child cannot make its files reappear through a broader parent.
+This gives each file exactly one `source.resourceId`, lets a more-specific root
+carry a more-specific C4 audience, and keeps resource counts additive. Moving a
+file to another selected root applies that destination root's explicit
+audience. Deselecting an overlap that would expose retained files to a broader
+ancestor is confirmation-protected.
+
+Calendar event identity continues to use Google's per-calendar event ID. For a
+recurring instance, `recurringEventId`, `originalStartTime`, and `iCalUID` are
+retained as recurrence metadata rather than substituted for the event ID.
+This matches Google's expanded-instance model and lets a cancelled occurrence
+delete exactly its prior context item.
+
+#### C5 execution plan
+
+##### C5.0 — Confirm the deployed starting state
+
+Before changing code or provider data:
+
+1. Record the deployed commit and function revisions, Scheduler job state,
+   selected Calendar/Drive resources, each resource audience and revision,
+   item counts, capability health, last successful/reconciled timestamps, and
+   search-index health.
+2. Confirm that the accepted C4 fixture is enabled and company-visible, and
+   that search is settled at the expected tracked/expected count with no
+   pending or attention deliveries. Do not run
+   `migrate:resource-audiences`, including as an acceptance shortcut.
+3. Run one no-provider-change manual Calendar sync and one Drive sync. Verify
+   that both use durable runs, preserve counts and audiences, produce no
+   duplicates, advance reconciliation timestamps, and leave search healthy.
+4. Confirm one current Calendar citation and one current Drive citation from
+   the deployed account. Inspect recent Calendar, Drive, API, index-delivery,
+   and recovery logs for errors.
+5. Record any difference between this observation and `CONNECTORS.md` before
+   implementation. `CONNECTORS.md` remains a description of deployed behavior
+   and is updated only after C5 deployment succeeds.
+
+This checkpoint is read-mostly and uses the already connected account. Any
+disposable Calendar, folder, or document needed for later mutation scenarios
+is created only after the baseline is recorded.
+
+##### C5.1 — Typed Google failure and authorization recovery
+
+Replace status-code string matching with a sanitized Google provider error
+that retains HTTP status, provider reason, retryability, and whether the
+failure concerns the account credential, capability grant, or one selected
+resource. Use it consistently for token refresh, Calendar, Drive listing,
+export, and download.
+
+Classification rules:
+
+- timeouts, network failures, `408`, `429`, and `5xx` are transient and use the
+  C3 bounded retry schedule, honoring `Retry-After` where available;
+- Calendar `410 fullSyncRequired` is cursor recovery, not a provider failure;
+- refresh-token `invalid_grant`, or a provider `401` that still fails after one
+  forced refresh, is `reauthorization_required` and must not retry forever;
+- a missing required capability scope is reauthorization for that capability;
+  other enabled capabilities continue when the credential itself remains
+  valid; and
+- a selected calendar/folder becoming inaccessible is permanent resource
+  attention, not falsely classified as global reauthorization.
+
+Marking and clearing reauthorization state must use the injected Firestore
+dependency, preserve resources, audiences, context, and cursors, and never log
+tokens or provider payloads. Same-account reauthorization restores the
+affected capability and queues reconciliation of its existing enabled
+resources. Choosing another Google identity continues to fail closed.
+
+##### C5.2 — Calendar incremental and recurrence hardening
+
+- Keep `showDeleted=true` and `singleEvents=true` identical across the initial
+  and incremental request sequence. Persist a new sync token only from the
+  final page after every page has succeeded.
+- Normalize and compare event content so a replay is a no-op, `changes` is an
+  actual stored create/update/delete count, deep links and provider versions
+  remain stable, and an audience/source revision difference is never skipped
+  merely because the Google event version is unchanged.
+- Retain `originalStartTime`, recurrence owner, sequence, event type, and
+  cancellation metadata needed to distinguish a series, an expanded
+  occurrence, and an overridden occurrence. A cancelled one-off or occurrence
+  deletes the deterministic instance item.
+- On `410`, transactionally mark the resource as requiring a full sync, clear
+  the obsolete cursor under the current fence, and perform one bounded full
+  rebuild from the existing one-year lower boundary. Collect the complete
+  observed identity set; only after all pages succeed, remove old resource
+  items not in that set, store the replacement token, and clear the rebuild
+  flag. A failed rebuild retains attention/full-sync-required state and does
+  not perform stale deletion.
+- Apply the same complete-snapshot stale reconciliation to initial and forced
+  full syncs so expired-token recovery removes cancelled, deleted, or now
+  out-of-bound items instead of only overlaying the old store.
+- Keep every page write, cancellation, stale deletion, cursor change, and
+  audience copy behind C3 connection/resource lifecycle and lease fencing.
+
+##### C5.3 — Recursive Drive reconciliation and one-file identity
+
+- Change the Drive capability's declared sync mode from the obsolete `manual`
+  label to `reconcile`; manual requests remain one trigger of the scheduled
+  full-reconciliation contract.
+- Enumerate each enabled root breadth-first through all descendant folders,
+  with paginated `files.list`, visited-folder cycle protection, shared-drive
+  request flags, and explicit item/page/depth/time limits. Treat an incomplete
+  Drive search or a limit breach as attention and do not stale-delete.
+- Snapshot a capability `selectionRevision` into the run's coverage plan.
+  Increment it when roots are selected, deselected, enabled, disabled, or
+  deleted. Every write verifies that revision; a concurrent selection change
+  invalidates the attempt and coalesces one successor run.
+- Include enabled and disabled selected descendants in the coverage plan.
+  Enabled descendants own their subtree; disabled descendants are exclusion
+  boundaries. Process roots in deterministic ancestor-before-descendant order.
+- Treat resource existence as selected independently of enabled/disabled
+  lifecycle. The folder picker must show a paused selected root as paused and
+  must not silently deselect it when another selection is saved.
+- Change Drive context identity to a canonical hash of connection,
+  `context.document.read`, and provider file ID. `source.resourceId` names the
+  deterministic owning root and may change without changing the context item
+  ID. During the first successful C5 reconciliation, replace old
+  root-scoped IDs and delete legacy duplicates through fenced, conditional
+  writes; no standalone C4 migration is used.
+- Before stale deletion, finish the complete traversal and extraction pass.
+  Re-read a candidate in the deletion transaction and delete it only if it is
+  still owned by that resource and selection revision. This prevents a parent
+  cleanup from deleting a context item just reassigned to a child root.
+- Reconcile file create, content update, rename, move within a root, transfer
+  between selected roots, move outside all selected roots, trash, provider
+  deletion, root disable/re-enable, and root deselection. Query stored context
+  after reconciliation for each root's `itemCount`; never derive the public
+  count from the latest page or add overlapping root counts.
+- Have the folder-selection endpoint preview ownership/access impact. If an
+  existing item would transfer to a broader audience, return a stable
+  confirmation requirement and make Sources submit the exact selection a
+  second time with the expected selection revision. Narrowing and no-op
+  changes need no extra confirmation.
+
+##### C5.4 — Drive extraction and honest document metadata
+
+Use one extraction result contract for every file:
+
+```text
+contentMode: extracted | metadata_only
+extractionKind: google_doc | text | pdf | unsupported
+extractionStatus: succeeded | no_embedded_text | unsupported | policy_limited
+contentFormat: markdown | plain_text | metadata
+mimeType, providerModifiedAt, size, sourceUrl
+```
+
+- Continue exporting Google Docs as plain text and downloading text/Markdown
+  blobs. Add bounded PDF download and prefer semantic Markdown conversion with
+  an exactly pinned `@pdf2md/core` version. Retain textual headings, lists,
+  tables, links, and page/section boundaries when the converter reconstructs
+  them; do not retain base64 page renders or image-only Markdown as searchable
+  content. Keep the existing 50,000-character text ceiling and define
+  byte/page/time limits before enabling production parsing.
+- Gate `@pdf2md/core` on a Node 22/Cloud Functions fixture spike covering
+  headings, lists, tables, multiple columns, Czech text, malformed input,
+  memory, timeout, deterministic output, and package/license review. If it
+  fails that gate, use `unpdf` plain-text extraction behind the same result
+  contract rather than weakening reconciliation or labeling.
+- A text-bearing PDF is `extracted`. An image-only PDF is honest
+  `metadata_only/no_embedded_text`. A file beyond a declared safety limit is
+  `metadata_only/policy_limited`. A malformed, encrypted, forbidden, or failed
+  download of a file within the supported contract is an actionable extraction
+  failure and prevents successful stale reconciliation for that root.
+- Unsupported binaries retain only filename, MIME type, description, size,
+  modified time, and provider deep link. Their searchable text explicitly says
+  metadata only and must never imply that binary content was read.
+- Content comparison includes provider version, owning resource, C4 access and
+  revision, extraction contract/version, title, and deep link. A content no-op
+  does not rewrite the item; an audience or ownership transition does.
+
+##### C5.5 — Freshness and operator truth
+
+- Add adapter observation metadata containing run ID, trigger, observed time,
+  provider update time, and provider version. Initial historical imports are
+  excluded from freshness samples. After a resource has a prior successful
+  reconciliation, a newly observed provider version is eligible.
+- Extend durable index delivery to sample a provider version once, even if an
+  audience projection later re-indexes it. Store provider-to-context,
+  context-to-search, and end-to-end source-to-search durations without mixing
+  Calendar/Drive polling latency with historical backfill.
+- Aggregate freshness by provider, capability, and run trigger. Sources shows
+  Calendar and Drive scheduled sample size and p95 source-to-search latency
+  separately from the existing context-to-search metric. The scheduled target
+  is below 45 minutes; manual acceptance changes must become searchable within
+  two minutes. The existing 75-minute stale threshold remains a separate
+  missed-poll health boundary.
+- Show recursive-root semantics, overlap ownership, extraction mode/counts,
+  metadata-only counts, reauthorization, and actionable resource errors
+  truthfully. A healthy connector cannot hide a failed root or unsettled search
+  delivery.
+
+##### C5.6 — Automated verification
+
+Add provider-adapter integration tests around real request/response shapes and
+the Firestore harness, plus focused public-contract and UI tests.
+
+Calendar cases:
+
+- paginated initial sync, paginated incremental update, no-op replay, one-off
+  cancellation, recurring series expansion, overridden occurrence,
+  single-occurrence cancellation, series change, and full series deletion;
+- `410` on an old cursor, successful full rebuild, failed rebuild without stale
+  deletion, and replacement-token commit only after the final page;
+- preserved deep link, source version, resource audience, audience revision,
+  lifecycle fencing, and stored count; and
+- transient refresh/API failure, bounded retry, invalid grant, provider `401`,
+  incomplete grant, resource access loss, same-account reauthorization, and
+  recovery without duplicate context.
+
+Drive cases:
+
+- paginated recursion, nested folders, traversal cycle/limit protection,
+  parent-plus-child overlap, disabled-child exclusion, deterministic owner,
+  canonical per-file identity, and zero duplicate active items;
+- Google Doc, text, Markdown, text PDF, image-only PDF, policy-limited PDF,
+  structured Markdown PDF, multi-column/table PDF, malformed supported file,
+  and unsupported binary labeling;
+- create/update/rename, move within one root, move between roots with different
+  audiences, move out, trash, delete, disable/re-enable, deselect, and
+  confirmation-protected audience broadening;
+- partial enumeration or extraction failure without stale deletion, transient
+  retry, terminal attention, operator replay, concurrent selection revision,
+  lifecycle invalidation, and idempotent scheduled reconciliation; and
+- C4 enforcement for restricted create, update, ownership change, deletion,
+  re-index, exact lookup, hybrid search, and citation paths.
+
+The complete shared, Functions, and frontend suites, production builds,
+Firestore index validation, and a dependency/security review for the PDF
+converter/parser must pass before deployment.
+
+##### C5.7 — Rollout and real-account acceptance
+
+Roll out additively: required indexes/configuration first, then backend workers
+and API, then Sources. Increase Drive worker memory or timeout only from a
+measured PDF/recursive fixture. Do not run the C4 migration. Before the first
+C5 reconciliation, capture exact Drive legacy/canonical target counts and
+audience revisions. After each rollout step, wait for durable index delivery to
+settle before judging search.
+
+Calendar acceptance on a disposable selected calendar:
+
+1. Restrict its C4 audience, then create and update a one-off event; create a
+   short recurring series, override one occurrence, cancel another, change the
+   series, and leave one final event imported. At each step verify deterministic
+   counts, metadata, citation/deep link, allowed/denied member retrieval, and no
+   active duplicate.
+2. Delete that final event at Google, then use a narrowly scoped acceptance
+   harness to replace only the disposable resource's sync token with a known
+   invalid token, keeping a record of its audience and revision. Manual sync
+   must take the typed `410` full-rebuild path, remove the now-stale real event
+   observation, obtain a new token, and preserve the audience and revision.
+3. Create one final event immediately after a successful scheduled poll and let
+   the next real Scheduler cycle ingest it. Record provider mutation,
+   Firestore observation, and searchable timestamps for the polling sample.
+
+Drive acceptance beneath a disposable subtree of the existing selected test
+folder:
+
+1. Create nested parent/child folders and select both. Give the child a
+   restricted audience, then create a Google Doc, Markdown/text file,
+   text-bearing PDF, image-only PDF, and unsupported binary below it. Verify
+   recursion, one canonical item per file, child ownership/access, extracted
+   answers, honest metadata-only labeling, citations, and deep links.
+2. Update and rename content, move a file within the child, move it between the
+   child and parent, move it outside all selected roots, restore it, trash it,
+   and reconcile. Verify destination-root access, no stale retrieval, correct
+   stored counts, and zero duplicates after every complete run.
+3. Disable and re-enable the child root to prove the broader parent cannot
+   resurrect it. Attempt to deselect the restricted child beneath the broader
+   parent and verify the second-confirmation contract before accepting the
+   transfer. Restore the intended final selection and audiences.
+4. Create one final nested document after a successful scheduled poll and use
+   the real Scheduler cycle to record a Drive source-to-search sample.
+
+Finally, revoke the test Google grant in a controlled window with the account
+owner present for the unverified-app handoff. The next sync must classify
+reauthorization without a retry loop or data/audience loss. Reauthorize the
+same identity and verify both capabilities recover and reconcile. Ask one
+allowed member a cited question spanning an existing call, the disposable
+event, and the extracted document; verify a disallowed member cannot retrieve
+the restricted event/document. Settle Sources and search health, inspect recent
+deployed logs, clean up or retain disposable provider evidence deliberately,
+restore fixture state, and add a dated C5 progress entry before changing the
+roadmap status to completed.
+
 Calendar:
 
 - retain incremental sync-token and cancellation behavior;
@@ -735,7 +1059,13 @@ Exit criteria:
 - real Calendar and Drive subsystems pass create/update/delete/move/deselect
   scenarios within one Workspace account;
 - extracted and metadata-only documents are labeled honestly;
-- connection health remains correct through token expiry and recovery; and
+- connection health remains correct through token expiry and recovery;
+- zero active duplicate Drive context exists for one provider file within the
+  Workspace connection;
+- every Calendar/Drive ingestion, update, ownership transfer, deletion, and
+  re-index preserves the governing C4 audience and fails closed while stale;
+- manual changes are searchable within two minutes and measured scheduled p95
+  source-to-search freshness is below 45 minutes; and
 - the agent answers a cited question spanning one call, event, and document.
 
 ## Gmail slices
@@ -1016,7 +1346,10 @@ Provider count is not a success metric.
 - [Google OpenID Connect identity](https://developers.google.com/identity/openid-connect/openid-connect)
 - [Gmail push notifications](https://developers.google.com/workspace/gmail/api/guides/push)
 - [Google Calendar incremental synchronization](https://developers.google.com/workspace/calendar/api/guides/sync)
+- [Google Calendar event-list and recurrence semantics](https://developers.google.com/workspace/calendar/api/v3/reference/events/list)
 - [Google Drive changes](https://developers.google.com/workspace/drive/api/guides/manage-changes)
+- [Google Drive file and folder search](https://developers.google.com/workspace/drive/api/guides/search-files)
+- [Google Drive download and export behavior](https://developers.google.com/workspace/drive/api/guides/manage-downloads)
 - [Microsoft Graph Outlook mail API](https://learn.microsoft.com/en-us/graph/api/resources/mail-api-overview)
 - [Microsoft Graph calendar delta query](https://learn.microsoft.com/en-us/graph/delta-query-events)
 - [Microsoft identity platform scopes and incremental consent](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc)
@@ -1335,3 +1668,53 @@ YYYY-MM-DD — Slice
   recent API, projection, index, and workflow service logs contained no errors.
 - **Decision:** C4 is accepted in test production. Continue to C5 Calendar and
   Drive hardening.
+
+### 2026-08-02 — C5 test-production acceptance
+
+- **Rollout:** pinned `@pdf2md/core` 0.3.0 and deployed the Calendar, Drive,
+  OAuth/recovery, durable indexing, API, and Sources changes. The already
+  applied C4 migration was not run again.
+- **Calendar recurrence and recovery:** a real two-occurrence weekly series
+  produced two deterministic instance records with `recurringEventId`,
+  `originalStartTime`, `iCalUID`, event type, sequence, deep link, and the
+  calendar's company audience. Cancelling one occurrence changed the stored
+  count from two to one and removed only that instance. Agent search returned
+  the remaining event with a citation. Replacing only the disposable selected
+  resource's sync token with a known-invalid value exercised the live HTTP 410
+  path: its attempt completed in `full` cursor mode, committed a replacement
+  token, retained all 472 current observations, and left the capability fresh.
+  Deleting the series then removed the final instance.
+- **Drive recursion, Markdown, and ownership:** a text-bearing PDF placed in a
+  nested folder beneath the selected `test` root was discovered recursively,
+  converted to Markdown by `@pdf2md/core`, indexed, and returned by agent
+  search with a Drive citation. Selecting the nested child as an overlapping
+  root transferred ownership to that closest selected ancestor while the
+  canonical provider-file record count stayed exactly one. Restoring the
+  parent-only selection reassigned the same canonical item without broadening
+  its company audience. Moving the disposable subtree to recoverable Drive
+  trash reconciled the root from two items back to one and removed both exact
+  lookup and search retrieval for the PDF.
+- **Polling freshness:** Scheduler-triggered mutations produced one eligible
+  sample per provider. Calendar measured 13.747 seconds source-to-context and
+  14.904 seconds source-to-search. Drive measured 31.058 seconds
+  source-to-context and 32.791 seconds source-to-search. Both were below the
+  45-minute scheduled target and the two-minute acceptance target; both index
+  deliveries succeeded on their first attempt. Scheduled cleanup then removed
+  both disposable observations.
+- **Audience and failure coverage:** every live C5 item retained its selected
+  resource's company audience through create, recurrence cancellation,
+  expired-token rebuild, overlapping-root transfer, deletion, and re-indexing.
+  Automated adapter/runtime tests additionally cover restricted audiences,
+  confirmation-protected broadening, lifecycle and selection-generation
+  fences, paginated traversal, extraction and enumeration failures, retry,
+  terminal resource attention, invalid grant, capability reauthorization, and
+  recovery without stale deletion.
+- **Cleanup and settled state:** the active Google fixtures were restored to
+  only `České svátky` (341 company-visible Calendar items) and `test` (one
+  company-visible Drive item, `Samikovo`). Disposable Calendar records were
+  deleted and disposable Drive artifacts are in recoverable provider trash.
+  Sources settled at 519/519 searchable records, zero pending deliveries, zero
+  intervention, and 16-second p95 context-to-search delay.
+- **Decision:** C5 is accepted in test production. The Gmail decision gate may
+  now be evaluated; no Gmail scope or provider write capability was added by
+  C5.

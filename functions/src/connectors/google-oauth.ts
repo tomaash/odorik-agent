@@ -24,6 +24,16 @@ export type GoogleTokens = {
   error_description?: string;
 };
 
+type GoogleErrorBody = {
+  error?: string | {
+    code?: number;
+    message?: string;
+    status?: string;
+    errors?: Array<{ reason?: string; message?: string }>;
+  };
+  error_description?: string;
+};
+
 export type GoogleCredential = {
   accessToken: string;
   refreshToken: string;
@@ -49,10 +59,56 @@ const refreshSkewMs = 60_000;
 
 export class GoogleReauthorizationRequiredError extends Error {
   readonly code = "GOOGLE_REAUTHORIZATION_REQUIRED";
-  constructor() {
-    super("Google Workspace access has expired. Reconnect the account to continue.");
+  readonly status?: number;
+  constructor(
+    message = "Google Workspace access has expired. Reconnect the account to continue.",
+    status?: number,
+  ) {
+    super(message);
     this.name = "GoogleReauthorizationRequiredError";
+    this.status = status;
   }
+}
+
+export class GoogleApiError extends Error {
+  readonly code = "GOOGLE_API_ERROR";
+  readonly status: number;
+  readonly reasons: string[];
+  readonly googleStatus: string | null;
+
+  constructor(input: {
+    label: string;
+    status: number;
+    message: string;
+    reasons?: string[];
+    googleStatus?: string | null;
+  }) {
+    super(`${input.label} API failed (${input.status}): ${input.message.slice(0, 1000)}`);
+    this.name = "GoogleApiError";
+    this.status = input.status;
+    this.reasons = input.reasons || [];
+    this.googleStatus = input.googleStatus || null;
+  }
+}
+
+function googleErrorDetails(body: GoogleErrorBody): {
+  message: string;
+  reasons: string[];
+  googleStatus: string | null;
+} {
+  if (typeof body.error === "string") {
+    return {
+      message: body.error_description || body.error,
+      reasons: [body.error],
+      googleStatus: null,
+    };
+  }
+  const errors = body.error?.errors || [];
+  return {
+    message: body.error?.message || body.error_description || JSON.stringify(body.error || body),
+    reasons: [...new Set(errors.flatMap((error) => error.reason ? [error.reason] : []))],
+    googleStatus: body.error?.status || null,
+  };
 }
 
 function isInvalidGrant(body: GoogleTokens): boolean {
@@ -117,13 +173,11 @@ export function capabilityGrantState(
 export function requireGoogleSuccess<T>(
   label: string,
   response: Response,
-  body: T & { error?: unknown },
+  body: T & GoogleErrorBody,
 ): T {
   if (!response.ok) {
-    const message = typeof body.error === "string"
-      ? body.error
-      : JSON.stringify(body.error || body);
-    throw new Error(`${label} API failed (${response.status}): ${message.slice(0, 1000)}`);
+    const details = googleErrorDetails(body);
+    throw new GoogleApiError({ label, status: response.status, ...details });
   }
   return body;
 }
@@ -137,7 +191,7 @@ export async function googleGet<T>(
     headers: { authorization: `Bearer ${accessToken}` },
     signal: AbortSignal.timeout(60_000),
   });
-  return requireGoogleSuccess(label, response, await response.json() as T & { error?: unknown });
+  return requireGoogleSuccess(label, response, await response.json() as T & GoogleErrorBody);
 }
 
 export async function revokeGoogleToken(token: string): Promise<boolean> {
@@ -160,7 +214,7 @@ async function googleUserInfo(accessToken: string): Promise<GoogleUserInfo> {
   return requireGoogleSuccess(
     "Google identity",
     response,
-    await response.json() as GoogleUserInfo & { error?: unknown },
+    await response.json() as GoogleUserInfo & GoogleErrorBody,
   );
 }
 
@@ -390,9 +444,10 @@ export async function revokeGoogleWorkspaceAuthorization(input: {
 
 async function markGoogleReauthorizationRequired(
   connection: FirebaseFirestore.DocumentSnapshot,
+  database: FirebaseFirestore.Firestore,
 ): Promise<void> {
   const capabilities = await connection.ref.collection("capabilities").get();
-  const batch = db.batch();
+  const batch = database.batch();
   batch.set(connection.ref, {
     status: "attention",
     reauthorizationRequired: true,
@@ -458,7 +513,9 @@ export async function authorizedGoogleCapability(
   ) as GoogleCredential;
   const grantedScopes = new Set(credentials.scope.split(/\s+/).filter(Boolean));
   if (!descriptor.requiredScopes.every((scope) => grantedScopes.has(scope))) {
-    throw new Error(`Google Workspace ${descriptor.serviceId} permission is incomplete`);
+    throw new GoogleReauthorizationRequiredError(
+      `Google Workspace ${descriptor.serviceId} permission is incomplete. Reconnect the account to continue.`,
+    );
   }
   if (
     credentials.accessToken
@@ -481,7 +538,7 @@ export async function authorizedGoogleCapability(
   });
   const refreshBody = await response.json() as GoogleTokens;
   if (!response.ok && isInvalidGrant(refreshBody)) {
-    await markGoogleReauthorizationRequired(connection);
+    await markGoogleReauthorizationRequired(connection, input.database || db);
     throw new GoogleReauthorizationRequiredError();
   }
 

@@ -45,6 +45,7 @@ function fixture(synchronize?: KnowledgeIndexDependencies["synchronize"]) {
     enqueue(eventId = "event-1", options: {
       committedAt?: Timestamp;
       exists?: boolean;
+      observation?: Record<string, unknown>;
     } = {}) {
       return enqueueKnowledgeIndexDelivery({
         companyId,
@@ -61,6 +62,7 @@ function fixture(synchronize?: KnowledgeIndexDependencies["synchronize"]) {
             connectionId: "google-1",
             resourceId: "folder-1",
           },
+          ...(options.observation ? { observation: options.observation } : {}),
         },
       }, dependencies);
     },
@@ -107,6 +109,37 @@ test("knowledge-index delivery records measurable success and ignores duplicate 
   assert.equal(status.counts.succeeded, 1);
   assert.equal(status.p95ContextToSearchMs, 2_000);
   assert.equal(status.lastSuccessAt, "2026-08-02T10:00:02.000Z");
+});
+
+test("source freshness samples each provider version once across later re-indexing", async () => {
+  const context = fixture();
+  const observation = {
+    runId: "run-scheduled-1",
+    trigger: "scheduled",
+    providerUpdatedAt: "2026-08-02T09:30:00.000Z",
+    providerVersion: "provider-v2",
+    observedAt: context.now(),
+    freshnessEligible: true,
+  };
+  await context.enqueue("provider-write", { observation });
+  context.advance(2_000);
+  await executeKnowledgeIndexDelivery({ companyId, deliveryId }, context.dependencies);
+  assert.equal(context.memory.read(deliveryPath)?.sourceToContextMs, 30 * 60 * 1_000);
+  assert.equal(context.memory.read(deliveryPath)?.sourceToSearchMs, 30 * 60 * 1_000 + 2_000);
+
+  context.advance(1_000);
+  await context.enqueue("audience-projection", { observation });
+  assert.equal(context.memory.read(deliveryPath)?.sourceFreshnessEligible, false);
+  await executeKnowledgeIndexDelivery({ companyId, deliveryId }, context.dependencies);
+  const status = await getKnowledgeIndexStatus(companyId, context.dependencies.database);
+  assert.deepEqual(status.sourceFreshness, [{
+    capabilityId: "context.document.read",
+    trigger: "scheduled",
+    sampleSize: 1,
+    p95SourceToContextMs: 30 * 60 * 1_000,
+    p95SourceToSearchMs: 30 * 60 * 1_000 + 2_000,
+    targetMs: 45 * 60 * 1_000,
+  }]);
 });
 
 test("existing Firestore records remain unmeasured until an administrator queues the backfill", async () => {

@@ -950,10 +950,17 @@ async function saveFolderSelection() {
   saving.value = true
   error.value = ''
   try {
-    await selectGoogleDriveFolders(
-      driveConnection.value.id,
-      selectedFolders.value.map((folder) => folder.id),
-    )
+    const folderIds = selectedFolders.value.map((folder) => folder.id)
+    try {
+      await selectGoogleDriveFolders(driveConnection.value.id, folderIds)
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      if (
+        !message.includes('DRIVE_SELECTION_BROADENING_REQUIRES_CONFIRMATION')
+        || !window.confirm(t('sources.folderBroadeningConfirm'))
+      ) throw cause
+      await selectGoogleDriveFolders(driveConnection.value.id, folderIds, true)
+    }
     driveConnection.value = null
     await load()
   } catch (cause) {
@@ -1658,6 +1665,23 @@ onUnmounted(() => {
               <strong class="text-surface-700">{{ formatDate(searchIndex.oldestOutstandingAt) }}</strong>
             </p>
 
+            <div v-if="searchIndex.sourceFreshness?.length" class="grid gap-2 sm:grid-cols-2">
+              <div
+                v-for="sample in searchIndex.sourceFreshness"
+                :key="`${sample.capabilityId}:${sample.trigger}`"
+                class="rounded-xl border border-surface-200 bg-surface-50 p-3 text-xs"
+              >
+                <div class="font-semibold text-surface-800">
+                  {{ capabilityName(sample.capabilityId) }} · {{ t(`sources.searchIndex.triggers.${sample.trigger}`) }}
+                </div>
+                <div class="mt-2 grid gap-1 text-surface-500">
+                  <span>{{ t('sources.searchIndex.sourceToContext') }}: <strong class="text-surface-700">{{ formatIndexDuration(sample.p95SourceToContextMs) }}</strong></span>
+                  <span>{{ t('sources.searchIndex.sourceToSearch') }}: <strong class="text-surface-700">{{ formatIndexDuration(sample.p95SourceToSearchMs) }}</strong></span>
+                  <span>{{ t('sources.searchIndex.sourceTarget', { target: formatIndexDuration(sample.targetMs), count: sample.sampleSize }) }}</span>
+                </div>
+              </div>
+            </div>
+
             <div v-if="searchIndex.attentionDeliveries.length" class="grid gap-2">
               <div class="text-sm font-semibold text-surface-800">{{ t('sources.searchIndex.failedTitle') }}</div>
               <div
@@ -2022,6 +2046,13 @@ onUnmounted(() => {
                         <div class="min-w-0">
                           <div class="font-medium text-sm truncate">{{ resourceName(resource) }}</div>
                           <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
+                          <div v-if="resource.document" class="mt-1 text-xs text-surface-400">
+                            {{ t('sources.driveExtractionSummary', {
+                              markdown: resource.document.markdownCount,
+                              text: resource.document.plainTextCount,
+                              metadata: resource.document.metadataOnlyCount,
+                            }) }}
+                          </div>
                         </div>
                         <div class="flex shrink-0 items-center gap-1">
                           <Tag :value="audienceLabel(resource)" icon="pi pi-users" severity="secondary" rounded />

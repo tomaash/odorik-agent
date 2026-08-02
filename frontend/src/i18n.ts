@@ -495,6 +495,8 @@ const messages = {
       emptyResources: 'V tomto účtu zatím nejsou nastavené žádné podzdroje.',
       emptyCalendars: 'Vyberte kalendáře, které se mají zahrnout do firemního kontextu.',
       emptyFolders: 'Vyberte složky, které se mají zahrnout do firemního kontextu.',
+      folderBroadeningConfirm: 'Tento výběr zpřístupní dokumenty z omezené podsložky širšímu publiku nadřazené složky. Chcete pokračovat?',
+      driveExtractionSummary: 'Rekurzivně · Markdown {markdown} · text {text} · pouze metadata {metadata}',
       emptyPhoneLines: 'Linka se objeví automaticky po přijetí první nahrávky.',
       emptyRepositories: 'Vyberte repozitáře, jejichž issues se mají zahrnout do firemního kontextu.',
       lastObserved: 'Naposledy přijato',
@@ -543,7 +545,7 @@ const messages = {
           document: {
             read: {
               name: 'Dokumenty',
-              description: 'Načítat dokumenty pouze z výslovně vybraných složek na Disku.',
+              description: 'Rekurzivně načítat dokumenty z vybraných složek. Vybraná podsložka tvoří vlastní hranici přístupu a PDF se převádějí do Markdownu.',
             },
           },
           github: {
@@ -699,6 +701,15 @@ const messages = {
         minutes: '{value} min',
         target: 'Cíl je {target}. Metrika vychází z {count} posledních stavů záznamů.',
         targetMissed: 'P95 překračuje cíl {target}. Zkontrolujte čekající nebo selhaná doručení.',
+        sourceToContext: 'P95 zdroj → kontext',
+        sourceToSearch: 'P95 zdroj → hledání',
+        sourceTarget: 'Cíl je {target}; vzorků: {count}.',
+        triggers: {
+          scheduled: 'plánovaná synchronizace',
+          manual: 'ruční synchronizace',
+          selection: 'změna výběru',
+          operator_replay: 'opakování operátorem',
+        },
         oldestOutstanding: 'Nejstarší čekající doručení',
         failedTitle: 'Doručení vyžadující zásah',
         unknownError: 'Indexování selhalo bez dostupného veřejného detailu.',
@@ -1253,6 +1264,8 @@ const messages = {
       emptyResources: 'No sub-sources are configured in this account yet.',
       emptyCalendars: 'Choose which calendars should be included in company context.',
       emptyFolders: 'Choose which folders should be included in company context.',
+      folderBroadeningConfirm: 'This selection would make documents from a restricted subfolder visible to the broader ancestor audience. Continue?',
+      driveExtractionSummary: 'Recursive · Markdown {markdown} · text {text} · metadata only {metadata}',
       emptyPhoneLines: 'A line appears automatically after its first recording is received.',
       emptyRepositories: 'Choose which repositories should contribute issues to company context.',
       lastObserved: 'Last received',
@@ -1301,7 +1314,7 @@ const messages = {
           document: {
             read: {
               name: 'Documents',
-              description: 'Import documents only from explicitly selected Drive folders.',
+              description: 'Recursively import documents from selected Drive folders. A selected child folder owns its access boundary, and PDFs are converted to Markdown.',
             },
           },
           github: {
@@ -1457,6 +1470,15 @@ const messages = {
         minutes: '{value} min',
         target: 'The target is {target}. The metric uses {count} latest record states.',
         targetMissed: 'P95 exceeds the {target} target. Inspect pending or failed deliveries.',
+        sourceToContext: 'P95 source → context',
+        sourceToSearch: 'P95 source → search',
+        sourceTarget: 'Target {target}; {count} samples.',
+        triggers: {
+          scheduled: 'scheduled sync',
+          manual: 'manual sync',
+          selection: 'selection change',
+          operator_replay: 'operator replay',
+        },
         oldestOutstanding: 'Oldest outstanding delivery',
         failedTitle: 'Deliveries needing intervention',
         unknownError: 'Indexing failed without a public error detail.',

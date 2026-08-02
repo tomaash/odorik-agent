@@ -79,6 +79,20 @@ export function sourceResourcePublicView(
         ].includes(capabilityId) ? { staleAfterMs: 75 * 60 * 1_000 } : {}),
       }) as ConnectionResourcePublicView["sync"],
     } : {}),
+    ...(capabilityId === "context.document.read" ? {
+      document: {
+        recursive: safe.recursive === true,
+        markdownCount: Number(
+          (safe.extractionCounts as Record<string, unknown> | undefined)?.markdown || 0,
+        ),
+        plainTextCount: Number(
+          (safe.extractionCounts as Record<string, unknown> | undefined)?.plain_text || 0,
+        ),
+        metadataOnlyCount: Number(
+          (safe.extractionCounts as Record<string, unknown> | undefined)?.metadata || 0,
+        ),
+      },
+    } : {}),
     createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
     updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
   };

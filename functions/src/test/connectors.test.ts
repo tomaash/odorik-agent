@@ -165,6 +165,12 @@ test("source public views retain operational state and exclude credentials", asy
       nextRetryAt: "2026-07-30T10:05:00.000Z",
       lastError: "Provider temporarily unavailable",
     },
+    document: {
+      recursive: false,
+      markdownCount: 0,
+      plainTextCount: 0,
+      metadataOnlyCount: 0,
+    },
     createdAt: "2026-07-29T10:00:00.000Z",
     updatedAt: "2026-07-30T10:00:00.000Z",
   });
@@ -607,11 +613,11 @@ test("Calendar incremental sync keeps stable identity and deletes cancellations"
   );
 });
 
-test("Drive sync characterizes direct-child selection and normalized provenance", () => {
+test("Drive sync uses recursive listings, canonical file identity, and normalized provenance", () => {
   const query = driveFolderFilesQuery("folder-a", "page-2");
   assert.equal(query.get("q"), "'folder-a' in parents and trashed = false");
   assert.equal(query.get("pageToken"), "page-2");
-  assert.equal(query.get("pageSize"), "50");
+  assert.equal(query.get("pageSize"), "1000");
 
   const importable = importableDriveFiles([
     {
@@ -657,9 +663,13 @@ test("Drive sync characterizes direct-child selection and normalized provenance"
     driveContextItemId("drive-connection", "folder-a", "doc-1"),
     driveContextItemId("drive-connection", "folder-a", "doc-1"),
   );
-  assert.notEqual(
+  assert.equal(
     driveContextItemId("drive-connection", "folder-a", "doc-1"),
     driveContextItemId("drive-connection", "folder-b", "doc-1"),
+  );
+  assert.notEqual(
+    driveContextItemId("drive-connection", "doc-1"),
+    driveContextItemId("other-connection", "doc-1"),
   );
   assert.deepEqual(item.source, {
     providerId: "google",
@@ -676,7 +686,7 @@ test("Drive sync characterizes direct-child selection and normalized provenance"
   ]);
   assert.deepEqual(item.provenance, {
     checksum: "0e9b432e4e6e1ed0aeef70fc4b2d6c4218cf1c15f83fa473299d23cd6e15ff49",
-    ingestionVersion: "google-drive-v1",
+    ingestionVersion: "google-drive-v2",
     modifiedTime: "2026-07-30T10:00:00.000Z",
   });
 });
