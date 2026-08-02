@@ -610,7 +610,8 @@ Exit criteria:
 recovering sources and can safely replay a failed resource.
 
 **Implementation status (2026-08-02):** C3A, C3B, and C3C are implemented in
-the repository and await test-production acceptance. Calendar, Drive, and GitHub
+the repository. C3C has passed test-production acceptance; the remaining C3
+gate is real-account provider acceptance for C3B. Calendar, Drive, and GitHub
 manual, selection/enable, scheduled, and recovery paths now share durable
 capability runs, distinct resource attempts, fenced resource leases, four
 bounded attempts (one initial attempt plus 1/5/30-minute backoff), stale-run
@@ -623,7 +624,7 @@ Firestore-to-Qdrant plane now records deterministic per-record deliveries,
 generation-fenced leases, bounded retry, stale-lease recovery, terminal
 attention, targeted replay, one-time existing-record backfill, and measured
 context-to-search p95. Provider reconciliation and search-index health remain
-separate. C3 remains in progress until its real-account and search-freshness
+separate. C3 remains in progress until the remaining real-account provider
 acceptance evidence is recorded.
 
 Build:
@@ -1218,3 +1219,35 @@ YYYY-MM-DD — Slice
   the existing-record backfill once, then complete real create/update/disable/
   delete, retry/replay, scheduled recovery, and two-minute freshness
   acceptance before marking C3 complete or starting C4.
+
+### 2026-08-02 — C3C test-production acceptance
+
+- **Rollout:** deployed the six `knowledgeIndexDeliveries` composite indexes
+  and `expiresAt` TTL before updating `api`, `syncKnowledgeIndex`, and
+  `recoverKnowledgeIndexDeliveries`, then released the Sources frontend. All
+  three Gen-2 functions are active on the `odorik-crm` service account, the
+  five-minute Scheduler job is enabled with the same OIDC identity, all six
+  indexes are ready, and TTL is active.
+- **Backfill:** the administrator action queued all 501 existing expected
+  records. Bounded recovery drained them in 50-record batches to 501/501
+  tracked, zero pending, zero attention, and searchable health. Historical
+  backfill deliveries correctly remained outside the freshness sample.
+- **Live delivery:** an isolated context probe created and updated through the
+  real Firestore trigger and Qdrant path on the first attempt. Measured
+  context-to-search delay was 1,172 ms for create and 676 ms for update.
+  Disabling the probe produced a zero-point Qdrant deletion; deleting its
+  Firestore source produced the next fenced deletion generation and recorded
+  TTL without leaving the source document behind.
+- **Recovery and replay:** the isolated tombstone recovered from a due
+  synthetic retry through the real Scheduler on attempt two. A synthetic
+  attention state then appeared in Sources and the tenant-scoped administrator
+  replay completed generation five, cleared attention, restored TTL, and
+  measured 94,183 ms from the original source commit—inside the two-minute
+  target.
+- **Evidence:** the settled dashboard reported 501/501 tracked, zero pending,
+  zero attention, and searchable health. Recent API, trigger, and recovery
+  service logs contained no errors, and the deployed browser session contained
+  no warnings or errors.
+- **Decision:** C3C is accepted in test production. C3 remains open only for
+  the separate real Drive/GitHub C3B acceptance scenarios; provider health and
+  search-index health continue to be evaluated independently.
