@@ -31,6 +31,7 @@ import { reconcileCodingRuns } from "../coding/reconcile.js";
 import {
   requestCodingImplementationApproval,
   requestCodingPullRequestChangesApproval,
+  requestCodingRetryApproval,
 } from "../coding/proposal.js";
 import { inspectGitHubPublication } from "../coding/github-recovery.js";
 import { canonicalCodingExecutionName } from "../coding/cloud-run.js";
@@ -1100,4 +1101,138 @@ test("reconciliation treats publisher cancellation without a callback as outcome
   assert.deepEqual(result, { inspected: 1, repaired: 1, failures: 0 });
   assert.equal(memory.read(runPath)?.status, "outcome_unknown");
   assert.equal(memory.read(runPath)?.phase, "publication_cancellation_unknown");
+});
+
+
+test("coding retries accept empty instructions and allocate unique attempt numbers", async () => {
+  const memory = new MemoryFirestore();
+  seedCodingSources(memory);
+  const pair = generateKeyPairSync("rsa", { modulusLength: 2048 });
+  const privateKey = pair.privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+  const configuration = {
+    appId: 4447426,
+    clientId: "Iv23liy3QUr30tDzuO2F",
+    appSlug: "agent-erik-development",
+    privateKey,
+  };
+  const fetcher = (async (request: string | URL | Request) => {
+    const url = new URL(String(request));
+    if (url.pathname.endsWith("/access_tokens")) {
+      return new Response(JSON.stringify({
+        token: "read-token",
+        expires_at: "2026-08-01T12:00:00Z",
+        permissions: {
+          contents: "read",
+          issues: "read",
+          metadata: "read",
+          pull_requests: "read",
+        },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/repos/tomaash/elixir-play") {
+      return new Response(JSON.stringify({
+        id: 987654,
+        name: "elixir-play",
+        full_name: "tomaash/elixir-play",
+        private: false,
+        default_branch: "main",
+        html_url: "https://github.com/tomaash/elixir-play",
+        owner: { login: "tomaash" },
+      }), { status: 200, headers: { "content-type": "application/json" } });
+    }
+    if (url.pathname === "/repos/tomaash/elixir-play/commits/main") {
+      return new Response(JSON.stringify({ sha: "a".repeat(40) }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ message: "unexpected request" }), {
+      status: 404,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  const rootRunId = codingAction().runId;
+  memory.seed(`companies/${companyId}/codingRuns/${rootRunId}`, {
+    status: "no_changes",
+    phase: "no_changes",
+    github: {
+      connectionId,
+      repoResourceId: resourceId,
+      repositoryId: 987654,
+      owner: "tomaash",
+      repo: "elixir-play",
+      issueNumber: 17,
+      issueContextItemId: contextItemId,
+      issueUrl: "https://github.com/tomaash/elixir-play/issues/17",
+    },
+    git: {
+      baseBranch: "main",
+      sourceBranch: "main",
+      baseSha: "a".repeat(40),
+      proposedBranch: `erik/issue-17-${rootRunId.slice(-8)}`,
+    },
+  });
+
+  const first = await requestCodingRetryApproval({
+    companyId,
+    actorUid: "admin-1",
+    preferredApproverUid: "admin-1",
+    runId: rootRunId,
+    configuration,
+    fetcher,
+    database: memory.asFirestore(),
+  });
+  assert.equal(first.status, "pending");
+  const firstAction = first.action as CodingIssueImplementAction;
+  assert.equal(firstAction.linkedAttempt?.kind, "retry");
+  assert.equal(firstAction.linkedAttempt?.attempt, 2);
+  assert.equal(firstAction.linkedAttempt?.parentRunId, rootRunId);
+  assert.match(firstAction.linkedAttempt?.instructions || "", /Retry the previous coding attempt/);
+
+  // Simulate the first retry already finishing without changes, then request again.
+  memory.seed(`companies/${companyId}/actionApprovals/${first.id}`, {
+    ...first,
+    decisionStatus: "approved",
+    status: "approved",
+    executionStatus: "succeeded",
+  });
+  memory.seed(`companies/${companyId}/codingRuns/${firstAction.runId}`, {
+    status: "no_changes",
+    phase: "no_changes",
+    github: {
+      connectionId,
+      repoResourceId: resourceId,
+      repositoryId: 987654,
+      owner: "tomaash",
+      repo: "elixir-play",
+      issueNumber: 17,
+      issueContextItemId: contextItemId,
+      issueUrl: "https://github.com/tomaash/elixir-play/issues/17",
+    },
+    linkedAttempt: firstAction.linkedAttempt,
+    git: {
+      baseBranch: "main",
+      sourceBranch: "main",
+      baseSha: "a".repeat(40),
+      proposedBranch: firstAction.git.resultBranch,
+    },
+  });
+
+  // A second request against the same parent must not fingerprint to the same
+  // approval, or operators cannot re-run after a failed/no-change attempt.
+  const second = await requestCodingRetryApproval({
+    companyId,
+    actorUid: "admin-1",
+    preferredApproverUid: "admin-1",
+    runId: rootRunId,
+    instructions: "  ",
+    configuration,
+    fetcher,
+    database: memory.asFirestore(),
+  });
+  assert.equal(second.status, "pending");
+  assert.notEqual(second.id, first.id);
+  const secondAction = second.action as CodingIssueImplementAction;
+  assert.equal(secondAction.linkedAttempt?.attempt, 3);
+  assert.notEqual(secondAction.runId, firstAction.runId);
 });

@@ -78,7 +78,8 @@ export class GoogleCodingArtifactStore implements CodingArtifactStore {
   async readText(object: string, maxBytes: number): Promise<{ text: string; truncated: boolean }> {
     const [metadata] = await (await this.file(object)).getMetadata();
     const size = Number(metadata.size || 0);
-    const end = Math.max(0, Math.min(size, maxBytes) - 1);
+    if (size <= 0) return { text: "", truncated: false };
+    const end = Math.min(size, maxBytes) - 1;
     const [bytes] = await (await this.file(object)).download({ start: 0, end });
     return { text: bytes.toString("utf8"), truncated: size > maxBytes };
   }

@@ -293,27 +293,67 @@ export async function requestCodingImplementationApproval(input: {
   }) as Promise<Record<string, unknown>>;
 }
 
-function linkedAttemptIdentity(runId: string, run: Record<string, unknown>): {
-  rootRunId: string;
-  attempt: number;
-} {
-  const prior = run.linkedAttempt as Record<string, unknown> | undefined;
-  const priorAttempt = Number(prior?.attempt || 1);
-  const attempt = priorAttempt + 1;
+export const DEFAULT_CODING_RETRY_INSTRUCTIONS =
+  "Retry the previous coding attempt without additional instructions.";
+
+/**
+ * Next attempt number for a coding chain. Must scan every run and pending
+ * approval for the root, not only the immediate parent — otherwise retrying the
+ * same failed parent twice fingerprints to the same approval/run and becomes a
+ * no-op duplicate.
+ */
+async function nextLinkedAttemptIdentity(input: {
+  companyId: string;
+  runId: string;
+  run: Record<string, unknown>;
+  database: FirebaseFirestore.Firestore;
+}): Promise<{ rootRunId: string; attempt: number }> {
+  const prior = input.run.linkedAttempt as Record<string, unknown> | undefined;
+  const rootRunId = String(prior?.rootRunId || input.runId);
+  let maxAttempt = 1;
+  const [runs, approvals] = await Promise.all([
+    input.database.collection(`companies/${input.companyId}/codingRuns`).get(),
+    input.database.collection(`companies/${input.companyId}/actionApprovals`).get(),
+  ]);
+  for (const document of runs.docs) {
+    if (document.id === rootRunId) maxAttempt = Math.max(maxAttempt, 1);
+    const linked = document.data()?.linkedAttempt as Record<string, unknown> | undefined;
+    if (linked && String(linked.rootRunId || "") === rootRunId) {
+      const attempt = Number(linked.attempt || 0);
+      if (Number.isSafeInteger(attempt)) maxAttempt = Math.max(maxAttempt, attempt);
+    }
+  }
+  for (const document of approvals.docs) {
+    const action = document.data()?.action as Record<string, unknown> | undefined;
+    const linked = action?.linkedAttempt as Record<string, unknown> | undefined;
+    if (!linked || String(linked.rootRunId || "") !== rootRunId) continue;
+    const attempt = Number(linked.attempt || 0);
+    if (Number.isSafeInteger(attempt)) maxAttempt = Math.max(maxAttempt, attempt);
+  }
+  const attempt = maxAttempt + 1;
   if (!Number.isSafeInteger(attempt) || attempt < 2 || attempt > 100) {
     throw new CodingRunError("This coding attempt chain reached its limit", 409);
   }
-  return {
-    rootRunId: String(prior?.rootRunId || runId),
-    attempt,
-  };
+  return { rootRunId, attempt };
+}
+
+function normalizeCodingFollowUpInstructions(
+  value: string | undefined,
+  fallback: string,
+): string {
+  const instructions = String(value || "").trim();
+  if (!instructions) return fallback;
+  if (instructions.length > 20_000) {
+    throw new CodingRunError("Follow-up instructions are too long", 400);
+  }
+  return instructions;
 }
 
 export async function requestCodingRetryApproval(input: {
   companyId: string;
   actorUid: string;
   runId: string;
-  instructions: string;
+  instructions?: string;
   configuration: GitHubAppConfiguration;
   preferredApproverUid?: string;
   database?: FirebaseFirestore.Firestore;
@@ -328,11 +368,16 @@ export async function requestCodingRetryApproval(input: {
   if (!["failed", "cancelled", "no_changes"].includes(String(prior.status))) {
     throw new CodingRunError("Reconcile uncertain publication outcomes before retrying", 409);
   }
-  const instructions = input.instructions.trim();
-  if (!instructions || instructions.length > 20_000) {
-    throw new CodingRunError("Retry instructions are required", 400);
-  }
-  const identity = linkedAttemptIdentity(input.runId, prior);
+  const instructions = normalizeCodingFollowUpInstructions(
+    input.instructions,
+    DEFAULT_CODING_RETRY_INSTRUCTIONS,
+  );
+  const identity = await nextLinkedAttemptIdentity({
+    companyId: input.companyId,
+    runId: input.runId,
+    run: prior,
+    database,
+  });
   const github = prior.github as Record<string, unknown> | undefined;
   return requestCodingImplementationApproval({
     companyId: input.companyId,
@@ -407,7 +452,12 @@ export async function requestCodingPullRequestChangesApproval(input: {
     || pull.headSha !== expectedSha
     || snapshot.branchSha !== expectedSha
   ) throw new CodingRunError("The pull request changed; reconcile it before requesting changes", 409);
-  const identity = linkedAttemptIdentity(input.runId, prior);
+  const identity = await nextLinkedAttemptIdentity({
+    companyId: input.companyId,
+    runId: input.runId,
+    run: prior,
+    database,
+  });
   return requestCodingImplementationApproval({
     companyId: input.companyId,
     actorUid: input.actorUid,
