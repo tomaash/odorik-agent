@@ -143,6 +143,86 @@ test("a missing Qdrant search becomes a stable temporary-unavailable tool result
   });
 });
 
+test("search tools authorize vector hits again before creating citations", async () => {
+  const hit = {
+    id: "company-a:context_item:secret:0",
+    companyId: "company-a",
+    kind: "context_item" as const,
+    recordId: "secret",
+    sourcePath: "companies/company-a/contextItems/secret",
+    title: "Restricted plan",
+    text: "Restricted plan\n\nDo not disclose",
+    occurredAt: null,
+    metadata: {},
+    score: 0.9,
+    retrieval: "hybrid_rrf" as const,
+  };
+  const tools = new CompanyFactTools({
+    getRecord: async () => null,
+  } as never, {
+    search: async () => [hit],
+  });
+  assert.deepEqual(await tools.execute("search_company_data", { query: "plan" }), {
+    result: { matches: [] },
+    citationIds: [],
+  });
+  assert.deepEqual(tools.citations.all(), []);
+});
+
+test("Qdrant search applies member eligibility to dense and lexical paths and rejects bad payloads", async () => {
+  const requests: Array<Record<string, unknown>> = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)) as Record<string, unknown>);
+    return new Response(JSON.stringify({
+      result: {
+        points: [{
+          id: "point-a",
+          score: 0.9,
+          payload: {
+            id: "company-a:context_item:secret:0",
+            companyId: "company-a",
+            kind: "context_item",
+            recordId: "secret",
+            sourcePath: "companies/company-a/contextItems/secret",
+            title: "Secret",
+            text: "Secret",
+            occurredAt: null,
+            accessVisibility: "restricted",
+            accessMemberIds: ["member-b"],
+            metadata: {},
+          },
+        }],
+      },
+      status: "ok",
+    }), { status: 200, headers: { "content-type": "application/json" } });
+  };
+  try {
+    const search = new QdrantHybridSearch(
+      "https://qdrant.test",
+      "test-key",
+      {
+        dimensions: 1536,
+        embedDocument: async () => Array.from({ length: 1536 }, () => 0.01),
+        embedQuery: async () => Array.from({ length: 1536 }, () => 0.01),
+      },
+      "company-a",
+      qdrantCollection,
+      "member-a",
+    );
+    assert.deepEqual(await search.search({ query: "secret" }), []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+  const prefetch = requests[0]?.prefetch as Array<{ filter?: unknown }>;
+  assert.equal(prefetch.length, 2);
+  for (const path of prefetch) {
+    assert.match(JSON.stringify(path.filter), /accessVisibility/);
+    assert.match(JSON.stringify(path.filter), /accessMemberIds/);
+    assert.match(JSON.stringify(path.filter), /member-a/);
+  }
+});
+
 test("Gemini Embedding 2 uses 1536 dimensions and retrieval prompt prefixes", async () => {
   const requests: Array<Record<string, unknown>> = [];
   const originalFetch = globalThis.fetch;

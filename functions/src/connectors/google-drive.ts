@@ -2,6 +2,7 @@ import { Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
+import { companyAudience, normalizeResourceAudience } from "../access.js";
 import {
   authorizedGoogleCapability,
   requireGoogleSuccess,
@@ -102,6 +103,8 @@ export function driveContextItem(input: {
   file: DriveFileEntry & { id: string; name: string };
   contentText: string;
   observedAt: Timestamp;
+  audience?: unknown;
+  audienceRevision?: number;
 }): Record<string, unknown> {
   return {
     companyId: input.companyId,
@@ -118,7 +121,8 @@ export function driveContextItem(input: {
     text: input.contentText.slice(0, maxDocumentTextLength),
     artifactRefs: input.file.webViewLink ? [input.file.webViewLink] : [],
     participantRefs: [],
-    access: { visibility: "company" },
+    access: normalizeResourceAudience(input.audience),
+    accessRevision: Math.max(1, Number(input.audienceRevision || 1)),
     provenance: {
       checksum: sha256Hex(input.contentText),
       ingestionVersion: "google-drive-v1",
@@ -274,6 +278,8 @@ export async function selectGoogleDriveFolders(input: {
         externalId: folderId,
         displayName,
         status: "enabled",
+        audience: companyAudience,
+        audienceRevision: 1,
         itemCount: 0,
         createdAt: now,
         updatedAt: now,
@@ -435,6 +441,8 @@ async function syncDriveFolderResource(input: {
         file,
         contentText,
         observedAt: now,
+        audience: input.resource.data.audience,
+        audienceRevision: Number(input.resource.data.audienceRevision || 1),
       });
       if (!driveContextMatches(prior, value)) {
         writes.push({ ref: itemRef, value });

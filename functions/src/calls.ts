@@ -3,6 +3,7 @@ import { db } from "./firestore.js";
 import { sha256Hex } from "./hash.js";
 import { normalizePhone } from "./phone.js";
 import { companyDocumentPath } from "./tenancy.js";
+import { companyAudience, normalizeResourceAudience, type ResourceAudience } from "./access.js";
 
 /**
  * Completed calls, and how they reach the internal CRM.
@@ -50,6 +51,30 @@ export function callContactId(phoneE164: string): string {
   return `phone_${sha256Hex(phoneE164).slice(0, 24)}`;
 }
 
+export function projectedCallContactAccess(input: {
+  existing: Record<string, unknown> | undefined;
+  call: Record<string, unknown>;
+}): { access: ResourceAudience; indexingEnabled: boolean } {
+  const existingEnabled = Boolean(input.existing)
+    && input.existing?.indexingEnabled !== false;
+  const callEnabled = input.call.indexingEnabled !== false
+    && input.call.contextEnabled !== false;
+  const audiences = [
+    ...(existingEnabled ? [normalizeResourceAudience(input.existing?.access)] : []),
+    ...(callEnabled ? [normalizeResourceAudience(input.call.access)] : []),
+  ];
+  if (audiences.some((audience) => audience.visibility === "company")) {
+    return { access: companyAudience, indexingEnabled: true };
+  }
+  const memberIds = [...new Set(audiences.flatMap((audience) => (
+    audience.visibility === "restricted" ? audience.memberIds : []
+  )))].sort();
+  return {
+    access: { visibility: "restricted", memberIds },
+    indexingEnabled: audiences.length > 0 && memberIds.length > 0,
+  };
+}
+
 /**
  * Upsert the caller of a completed call as a contact.
  *
@@ -61,39 +86,77 @@ export async function projectCallContact(input: {
   callId: string;
   call: Record<string, unknown> | undefined;
 }): Promise<string | null> {
-  const call = input.call;
-  if (!call || call.status !== "completed") return null;
-  const phoneRaw = typeof call.from === "string" ? call.from : null;
-  const phoneE164 = normalizePhone(phoneRaw);
-  if (!phoneE164) return null;
+  if (!input.call || input.call.status !== "completed") return null;
+  const callRef = db.doc(companyDocumentPath(input.companyId, "calls", input.callId));
+  return db.runTransaction(async (transaction) => {
+    const currentCall = await transaction.get(callRef);
+    const call = currentCall.data();
+    if (!currentCall.exists || !call || call.status !== "completed") return null;
 
-  const contactId = callContactId(phoneE164);
-  const contactRef = db.doc(
-    companyDocumentPath(input.companyId, "contacts", contactId),
-  );
-  const existing = await contactRef.get();
-  await contactRef.set({
-    companyId: input.companyId,
-    phoneE164,
-    phoneRaw,
-    lastCallAt: call.odorikTime || call.uploadedAt || FieldValue.serverTimestamp(),
-    ...(existing.exists ? {} : {
-      createdFromCallId: input.callId,
-      origin: "call",
-      createdAt: FieldValue.serverTimestamp(),
-    }),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+    const connectionId = typeof call.connectionId === "string" ? call.connectionId : null;
+    const resourceId = typeof call.resourceId === "string" ? call.resourceId : null;
+    const connectionRef = connectionId
+      ? db.doc(companyDocumentPath(input.companyId, "connections", connectionId))
+      : null;
+    const resourceRef = connectionRef && resourceId
+      ? connectionRef.collection("resources").doc(resourceId)
+      : null;
+    const [connection, resource] = await Promise.all([
+      connectionRef ? transaction.get(connectionRef) : Promise.resolve(null),
+      resourceRef ? transaction.get(resourceRef) : Promise.resolve(null),
+    ]);
+    const sourceEnabled = (!connectionRef || (
+      connection?.exists && connection.data()?.status !== "disconnected"
+    )) && (!resourceRef || (
+      resource?.exists && resource.data()?.status !== "disabled"
+    ));
+    const effectiveCall = {
+      ...call,
+      ...(resource?.exists ? {
+        access: normalizeResourceAudience(resource.data()?.audience),
+      } : {}),
+      ...(!sourceEnabled ? {
+        indexingEnabled: false,
+        contextEnabled: false,
+      } : {}),
+    };
+    const phoneRaw = typeof call.from === "string" ? call.from : null;
+    const phoneE164 = normalizePhone(phoneRaw);
+    if (!phoneE164) return null;
 
-  // Link the call back to the contact so a contact can list its own calls and
-  // the workflow runtime can skip the phone lookup. This write re-enters the
-  // call trigger, but `shouldProcessCallUpdate` rejects it: the status is
-  // already `completed` and no backfill was requested.
-  if (call.contactId !== contactId) {
-    await db.doc(companyDocumentPath(input.companyId, "calls", input.callId)).set({
-      contactId,
+    const contactId = callContactId(phoneE164);
+    const contactRef = db.doc(
+      companyDocumentPath(input.companyId, "contacts", contactId),
+    );
+    const existing = await transaction.get(contactRef);
+    const contactAccess = projectedCallContactAccess({
+      existing: existing.data(),
+      call: effectiveCall,
+    });
+    transaction.set(contactRef, {
+      companyId: input.companyId,
+      phoneE164,
+      phoneRaw,
+      lastCallAt: call.odorikTime || call.uploadedAt || FieldValue.serverTimestamp(),
+      ...(existing.exists ? {} : {
+        createdFromCallId: input.callId,
+        origin: "call",
+        createdAt: FieldValue.serverTimestamp(),
+      }),
+      ...contactAccess,
       updatedAt: FieldValue.serverTimestamp(),
     }, { merge: true });
-  }
-  return contactId;
+
+    // Link the call back to the contact so a contact can list its own calls and
+    // the workflow runtime can skip the phone lookup. This write re-enters the
+    // call trigger, but `shouldProcessCallUpdate` rejects it: the status is
+    // already `completed` and no backfill was requested.
+    if (call.contactId !== contactId) {
+      transaction.set(callRef, {
+        contactId,
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true });
+    }
+    return contactId;
+  });
 }

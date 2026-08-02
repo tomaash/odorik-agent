@@ -201,6 +201,7 @@ export class QdrantHybridSearch implements KnowledgeSearch {
     private readonly embedder: EmbeddingProvider,
     private readonly companyId: string,
     private readonly collection = qdrantCollection,
+    private readonly memberId?: string,
   ) {
     this.baseUrl = url.replace(/\/$/, "");
   }
@@ -258,6 +259,7 @@ export class QdrantHybridSearch implements KnowledgeSearch {
   }
 
   async ensureCollection(reset = false): Promise<void> {
+    const existingPayloadIndexes = new Set<string>();
     if (reset) {
       await this.request(`/collections/${encodeURIComponent(this.collection)}`, { method: "DELETE" })
         .catch((error) => {
@@ -276,22 +278,37 @@ export class QdrantHybridSearch implements KnowledgeSearch {
           + "run a full reindex into a fresh collection",
         );
       }
-      return;
-    }
-    if (exists.status !== 404) throw new Error(`Qdrant collection check failed: ${exists.status}`);
-    await this.request(`/collections/${encodeURIComponent(this.collection)}`, {
-      method: "PUT",
-      body: JSON.stringify({
-        vectors: {
-          dense: {
-            ...qdrantDenseVectorConfig,
-            size: this.embedder.dimensions,
+      const result = payload.result && typeof payload.result === "object"
+        ? payload.result as Record<string, unknown>
+        : {};
+      const payloadSchema = result.payload_schema && typeof result.payload_schema === "object"
+        ? result.payload_schema as Record<string, unknown>
+        : {};
+      Object.keys(payloadSchema).forEach((field) => existingPayloadIndexes.add(field));
+    } else {
+      if (exists.status !== 404) throw new Error(`Qdrant collection check failed: ${exists.status}`);
+      await this.request(`/collections/${encodeURIComponent(this.collection)}`, {
+        method: "PUT",
+        body: JSON.stringify({
+          vectors: {
+            dense: {
+              ...qdrantDenseVectorConfig,
+              size: this.embedder.dimensions,
+            },
           },
-        },
-        sparse_vectors: { bm25: { modifier: "idf" } },
-      }),
-    });
-    for (const field of ["companyId", "kind", "recordId", "sourcePath"]) {
+          sparse_vectors: { bm25: { modifier: "idf" } },
+        }),
+      });
+    }
+    for (const field of [
+      "companyId",
+      "kind",
+      "recordId",
+      "sourcePath",
+      "accessVisibility",
+      "accessMemberIds",
+    ]) {
+      if (existingPayloadIndexes.has(field)) continue;
       await this.request(`/collections/${encodeURIComponent(this.collection)}/index?wait=true`, {
         method: "PUT",
         body: JSON.stringify({
@@ -438,6 +455,15 @@ export class QdrantHybridSearch implements KnowledgeSearch {
       { key: "companyId", match: { value: this.companyId } },
     ];
     if (input.kinds?.length) must.push({ key: "kind", match: { any: input.kinds } });
+    const accessFilter = this.memberId ? {
+      min_should: {
+        conditions: [
+          { key: "accessVisibility", match: { value: "company" } },
+          { key: "accessMemberIds", match: { value: this.memberId } },
+        ],
+        min_count: 1,
+      },
+    } : {};
     const payload = await this.request(`/collections/${encodeURIComponent(this.collection)}/points/query`, {
       method: "POST",
       body: JSON.stringify({
@@ -446,13 +472,13 @@ export class QdrantHybridSearch implements KnowledgeSearch {
             query: dense,
             using: "dense",
             limit: Math.max(20, limit * 3),
-            filter: { must },
+            filter: { must, ...accessFilter },
           },
           {
             query: { text: input.query, model: "qdrant/bm25", options: bm25Options },
             using: "bm25",
             limit: Math.max(20, limit * 3),
-            filter: { must },
+            filter: { must, ...accessFilter },
           },
         ],
         query: { rrf: { k: 60 } },
@@ -475,6 +501,15 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         typeof value.title !== "string" || typeof value.text !== "string" ||
         value.companyId !== this.companyId
       ) return [];
+      const accessVisibility = value.accessVisibility === "restricted" ? "restricted" : "company";
+      const accessMemberIds = Array.isArray(value.accessMemberIds)
+        ? value.accessMemberIds.map(String)
+        : [];
+      if (
+        this.memberId
+        && accessVisibility === "restricted"
+        && !accessMemberIds.includes(this.memberId)
+      ) return [];
       return [{
         id: value.id,
         companyId: String(value.companyId || this.companyId),
@@ -484,6 +519,8 @@ export class QdrantHybridSearch implements KnowledgeSearch {
         title: value.title,
         text: value.text,
         occurredAt: typeof value.occurredAt === "string" ? value.occurredAt : null,
+        accessVisibility,
+        accessMemberIds,
         metadata: (value.metadata || {}) as KnowledgeDocument["metadata"],
         score: Number(point.score || 0),
         retrieval: "hybrid_rrf" as const,
@@ -517,6 +554,7 @@ export function qdrantConfigurationFromEnvironment(
 export function qdrantFromEnvironment(input: {
   geminiApiKey: string;
   companyId: string;
+  memberId?: string;
 }): { search: QdrantRequiredSearch; qdrant?: QdrantHybridSearch } {
   const configuration = qdrantConfigurationFromEnvironment();
   const collection = getQdrantCollection();
@@ -527,6 +565,7 @@ export function qdrantFromEnvironment(input: {
       new GeminiEmbedder(input.geminiApiKey),
       input.companyId,
       collection,
+      input.memberId,
     )
     : undefined;
   return { search: new QdrantRequiredSearch(qdrant), qdrant };

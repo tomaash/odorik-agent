@@ -18,6 +18,8 @@ export type KnowledgeDocument = {
   title: string;
   text: string;
   occurredAt: string | null;
+  accessVisibility?: "company" | "restricted";
+  accessMemberIds?: string[];
   metadata: Record<string, string | number | boolean | null>;
 };
 

@@ -480,6 +480,8 @@ export async function processGitHubWebhookDelivery(input: {
               issue: canonical.issue,
               comments: canonical.comments,
               observedAt,
+              audience: resource.data()?.audience,
+              audienceRevision: Number(resource.data()?.audienceRevision || 1),
             }),
           });
           outcome = committed ? "issue_upserted" : "ignored_inactive_repository";

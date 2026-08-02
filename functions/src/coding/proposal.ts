@@ -12,6 +12,7 @@ import type { CodingIssueImplementAction } from "./action.js";
 import { CodingRunError, getCodingRun } from "./repository.js";
 import type { GitHubPublicationSnapshot } from "./github-recovery.js";
 import { activeCodingRunStatuses } from "./types.js";
+import { canMemberAccessSourceData, normalizeResourceAudience } from "../access.js";
 
 const codingWorkflowVersion = 1;
 
@@ -25,9 +26,13 @@ function boundedTitle(value: unknown): string {
 async function activeApprover(input: {
   companyId: string;
   preferredUid?: string;
+  allowedMemberIds?: string[];
   database: FirebaseFirestore.Firestore;
 }): Promise<{ uid: string; displayName: string; email: string }> {
   if (input.preferredUid) {
+    if (input.allowedMemberIds && !input.allowedMemberIds.includes(input.preferredUid)) {
+      throw new CodingRunError("The coding approver cannot access this issue", 404);
+    }
     const member = await input.database.doc(
       `companies/${input.companyId}/memberships/${input.preferredUid}`,
     ).get();
@@ -48,7 +53,11 @@ async function activeApprover(input: {
     `companies/${input.companyId}/memberships`,
   ).get();
   const admin = memberships.docs
-    .filter((entry) => entry.data().status === "active" && entry.data().role === "admin")
+    .filter((entry) => (
+      entry.data().status === "active"
+      && entry.data().role === "admin"
+      && (!input.allowedMemberIds || input.allowedMemberIds.includes(entry.id))
+    ))
     .sort((left, right) => left.id.localeCompare(right.id))[0];
   if (!admin) throw new CodingRunError("No active administrator can approve coding work", 409);
   return {
@@ -87,11 +96,16 @@ export async function requestCodingImplementationApproval(input: {
   if (!issue.exists || issueData.kind !== "github.issue") {
     throw new CodingRunError("GitHub issue not found", 404);
   }
+  if (!input.actorUid.startsWith("workflow:")
+    && !canMemberAccessSourceData(issueData, input.actorUid)) {
+    throw new CodingRunError("GitHub issue not found", 404);
+  }
   if (issueData.metadata?.state !== "open") {
     throw new CodingRunError("Only an open GitHub issue can be implemented", 409);
   }
   const connectionId = String(issueData.source?.connectionId || "");
   const repoResourceId = String(issueData.source?.resourceId || "");
+  const issueAudience = normalizeResourceAudience(issueData.access);
   const [connection, resource, grok, approver] = await Promise.all([
     database.doc(`companies/${input.companyId}/connections/${connectionId}`).get(),
     database.doc(
@@ -101,6 +115,9 @@ export async function requestCodingImplementationApproval(input: {
     activeApprover({
       companyId: input.companyId,
       preferredUid: input.preferredApproverUid,
+      ...(issueAudience.visibility === "restricted"
+        ? { allowedMemberIds: issueAudience.memberIds }
+        : {}),
       database,
     }),
   ]);
@@ -266,6 +283,7 @@ export async function requestCodingImplementationApproval(input: {
     approverName: approver.displayName,
     action,
     source,
+    access: issueAudience,
   }, {
     database,
     resolveActiveMember: async (_companyId, uid) => {

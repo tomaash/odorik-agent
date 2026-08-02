@@ -9,6 +9,9 @@ export type ConnectorId = typeof connectorIds[number];
 export type ProviderId = "odorik" | "google" | "github" | "grok";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
+export type ResourceAudience =
+  | { visibility: "company" }
+  | { visibility: "restricted"; memberIds: string[] };
 export type CapabilityStatus =
   | "active"
   | "attention"
@@ -135,6 +138,8 @@ export type ConnectionResourcePublicView = {
   externalId: string;
   displayName: string;
   status: ResourceStatus;
+  audience: ResourceAudience;
+  audienceRevision: number;
   itemCount: number;
   lastObservedAt?: string | null;
   sync?: SyncOperationalPublicView;

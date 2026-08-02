@@ -2,7 +2,7 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C4 — Permission-aware resources and context
+**Current implementation slice:** C5 — Harden Google Workspace Calendar and Drive
 
 **Last plan revision:** 2026-07-31
 
@@ -240,8 +240,8 @@ Every action capability must define:
 | C0 | Characterize and protect current connector behavior | Completed | Baseline contract tests pass |
 | C1 | Replace split Google connectors with one Workspace account and capability configurations | Completed | Scoped Google reset succeeds and one real account reconnects |
 | C2 | Put internal actions behind an extensible typed action registry | Completed | Existing workflow approvals behave unchanged |
-| C3 | Add durable sync runs, leases, retries, replay, and useful health | In progress | Failures are recoverable and freshness is measurable |
-| C4 | Make resource audiences and retrieval access explicit | Pending | Restricted-source isolation tests pass |
+| C3 | Add durable sync runs, leases, retries, replay, and useful health | Completed | Failures are recoverable and freshness is measurable |
+| C4 | Make resource audiences and retrieval access explicit | Completed | Accepted in test production |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Pending | Real accounts meet source acceptance scenarios |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Pending | Cross-source call + email answer succeeds |
 | G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
@@ -680,6 +680,16 @@ Exit criteria:
 - changing an audience updates search eligibility;
 - disabling a resource removes it from all retrieval; and
 - cross-company and cross-member isolation tests pass.
+
+Implementation checkpoint (2026-08-02): resource audiences, normalized access
+projection, member-aware Firestore and Qdrant retrieval, authoritative
+post-search authorization, case-evidence filtering, lifecycle removal, Sources
+editing with access-expansion confirmation, and private per-member agent chats
+are implemented and covered by local isolation tests. Existing resources
+default to company visibility. `npm --prefix functions run
+migrate:resource-audiences -- --apply` persists that compatibility default and
+re-enqueues changed context through the durable index-delivery path. The
+test-production acceptance record below closes this checkpoint.
 
 ### C5 — Harden Google Workspace Calendar and Drive
 
@@ -1290,3 +1300,38 @@ YYYY-MM-DD — Slice
   remains closed as inspectable acceptance evidence.
 - **Decision:** C3B and the full C3 slice are accepted in test production.
   Continue to C4 permission-aware resources and context.
+
+### 2026-08-02 — C4 test-production acceptance
+
+- **Rollout and migration:** deployed Firestore rules and indexes, the CRM
+  Functions, and both hosting targets. The compatibility migration completed
+  for two companies, 18 resources, 360 normalized context items, nine calls,
+  and 183 linked derived records. Existing Calendar, Drive, GitHub, and Odorik
+  resources retained company-wide visibility.
+- **Cross-member enforcement:** the isolated Odorik fixture was restricted to
+  Josef, then to Tom. In both directions, the allowed member could retrieve the
+  exact call through the contacts API and `get_company_record` with one
+  citation, while another active member received no record or citation.
+  Hybrid search omitted the exact fixture while Tom was excluded and returned
+  it after Tom was added and the durable projection settled.
+- **Lifecycle and UI:** Sources displayed the selected audience, required a
+  second explicit confirmation before adding a member or restoring company
+  visibility, and re-projected the source on every edit. Disabling the fixture
+  immediately removed the exact call from direct APIs and agent lookup for
+  both tested members and removed it from hybrid results after index delivery.
+  The fixture was re-enabled and restored to company-wide access after the
+  scenario.
+- **Private chat:** two active members each had their own non-empty `chat_`
+  thread list, with zero shared physical thread IDs. The deployed Ask UI also
+  created a new member-owned chat and kept its messages private to that owner.
+- **Tenant isolation:** automated repository and router tests cover identical
+  member and record identifiers across companies. The second live company has
+  no active membership, so a live cross-company identity could not be exercised
+  without changing tenant membership; the production harness failed closed in
+  that condition.
+- **Settled evidence:** Sources finished searchable at 505/505 tracked and
+  expected records, zero pending deliveries, zero intervention, and 16-second
+  p95 context-to-search delay. All deployed composite indexes were ready, and
+  recent API, projection, index, and workflow service logs contained no errors.
+- **Decision:** C4 is accepted in test production. Continue to C5 Calendar and
+  Drive hardening.

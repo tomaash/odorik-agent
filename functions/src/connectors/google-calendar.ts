@@ -2,6 +2,7 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
+import { companyAudience, normalizeResourceAudience } from "../access.js";
 import {
   authorizedGoogleCapability,
   connectionRef,
@@ -173,6 +174,8 @@ export function calendarEventContextItem(input: {
   calendarName: string;
   event: CalendarEvent;
   observedAt?: Timestamp;
+  audience?: unknown;
+  audienceRevision?: number;
 }): Record<string, unknown> | null {
   if (!input.event.id || input.event.status === "cancelled") return null;
   const start = input.event.start?.dateTime || input.event.start?.date || null;
@@ -218,7 +221,8 @@ export function calendarEventContextItem(input: {
     observedAt: input.observedAt || Timestamp.now(),
     artifactRefs: [],
     participantRefs,
-    access: { visibility: "company" },
+    access: normalizeResourceAudience(input.audience),
+    accessRevision: Math.max(1, Number(input.audienceRevision || 1)),
     metadata: {
       calendarId: input.calendarId,
       calendarName: input.calendarName,
@@ -333,6 +337,8 @@ async function syncCalendarResource(input: {
         calendarId,
         calendarName,
         event,
+        audience: input.resource.data.audience,
+        audienceRevision: Number(input.resource.data.audienceRevision || 1),
       });
       writes.push({ ref: itemRef, value: contextItem });
       synced += 1;
@@ -507,6 +513,9 @@ export async function selectGoogleCalendars(input: {
       accessRole: calendar.accessRole,
       timeZone: calendar.timeZone,
       status: "enabled",
+      ...(!resources.docs.some((resource) => resource.id === resourceRef.id)
+        ? { audience: companyAudience, audienceRevision: 1 }
+        : {}),
       updatedBy: input.actorUid,
       ...(!resources.docs.some((resource) => resource.id === resourceRef.id)
         ? { createdAt: now }

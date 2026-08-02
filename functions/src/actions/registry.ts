@@ -1,5 +1,6 @@
 import type { ZodType } from "zod";
 import type { WorkflowActionSource } from "./contracts.js";
+import type { ResourceAudience } from "../access.js";
 import { internalActionDescriptors } from "./internal-actions.js";
 import { codingActionDescriptors } from "../coding/action.js";
 
@@ -46,6 +47,7 @@ export type ApprovedActionExecutionContext = {
   approvedBy: string;
   attemptId: string;
   source: WorkflowActionSource;
+  access?: ResourceAudience;
 };
 
 export type ActionDescriptor<

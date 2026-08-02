@@ -23,6 +23,39 @@ card and retains its own credentials, resources, health, and sync cursor.
 Firestore remains authoritative. Qdrant contains derived search chunks and can
 be rebuilt.
 
+## C4 permission-aware resources and context
+
+Every selected resource now has an application audience: all active company
+members or an explicit non-empty set of active member IDs. Existing Calendar,
+Drive, GitHub, and Odorik resources remain company-visible unless an
+administrator changes them. Sources displays and edits the audience, requires
+a second confirmation before access is broadened, and reports that the
+normalized projection will be re-indexed.
+
+The audience is copied to normalized context and raw calls. For call-derived
+tasks, approvals, cases, workflow runs, coding runs, and evidence events, the
+same access envelope is retained. Exact lookup, list, aggregate, hybrid vector
+and lexical search, citations, coding views, workflow history, contact call
+evidence, and case evidence all authorize the requesting member. Qdrant applies
+tenant and member filters, and every vector result is checked again against
+authoritative Firestore before it can become a tool result or citation. This
+closes the asynchronous re-indexing window after access is narrowed.
+
+Audience edits bump a revision and rewrite source projections so the existing
+Firestore-to-Qdrant delivery path re-indexes them. Disabling or deleting a
+resource marks raw, normalized, and linked retrieval records ineligible before
+the vector deletion settles. The one-time migration is dry-run by default:
+
+```bash
+npm --prefix functions run migrate:resource-audiences -- --company=COMPANY_ID
+npm --prefix functions run migrate:resource-audiences -- --company=COMPANY_ID --apply
+```
+
+Agent chat threads are separate from resource audiences but follow the same
+privacy invariant: thread document identities are namespaced by member, thread
+lists query only the authenticated owner, and each member can create and switch
+among their own chats.
+
 ## Firestore records
 
 ```text
@@ -111,9 +144,8 @@ revive a disabled, disconnected, or deleted source. Run and attempt history is
 retained for 90 days. A request arriving during an active run is coalesced into
 one safe successor when it includes a newly selected resource.
 
-Calendar events are visible to all members of their company. Do not connect a
-calendar that should be visible to only some team members until
-restricted member ACL filtering is implemented.
+Calendar resources remain company-visible by default for compatibility, and an
+administrator can restrict each selected calendar to specific active members.
 
 ## Google Drive adapter
 
@@ -132,9 +164,9 @@ text extraction failures are actionable; unsupported binaries remain honest
 metadata-only records. `source.resourceId` uses the same hashed internal folder
 identity as the resource document.
 
-Recursive selection, overlapping-root deduplication, PDF extraction, and
-restricted member audiences are not yet implemented. Their order and
-acceptance criteria are defined in `CONNECTOR_EPIC.md`.
+Recursive selection, overlapping-root deduplication, and PDF extraction are not
+yet implemented. Administrators can restrict each selected folder to specific
+active members through its deployed resource audience.
 
 ## GitHub adapter
 

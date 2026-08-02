@@ -337,9 +337,16 @@ export class CompanyFactTools implements AgentToolExecutor {
         return 0;
       });
 
+      // Qdrant is an eventually consistent projection. Re-check every hit against
+      // the authoritative Firestore record so an audience reduction or resource
+      // disable takes effect before the vector update has been delivered.
+      const authorizedHits = (await Promise.all(sortedHits.map(async (hit) => (
+        await this.repository.getRecord(hit.kind, hit.recordId) ? hit : null
+      )))).filter((hit): hit is (typeof sortedHits)[number] => hit !== null);
+
       const seenKeys = new Set<string>();
       const deduplicatedHits = [];
-      for (const hit of sortedHits) {
+      for (const hit of authorizedHits) {
         const externalId = typeof hit.metadata?.externalId === "string" ? hit.metadata.externalId : null;
         const key = externalId ? `${hit.kind}:${externalId}` : `${hit.kind}:${hit.title}`;
         if (seenKeys.has(key)) continue;

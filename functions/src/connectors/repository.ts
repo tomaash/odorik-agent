@@ -1,4 +1,5 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { TRPCError } from "@trpc/server";
 import { db, jsonSafe } from "../firestore.js";
 import { capabilityDescriptor, connectorCatalog } from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
@@ -21,6 +22,16 @@ import type {
   ConnectionResourcePublicView,
   SourceCapabilityId,
 } from "./types.js";
+import {
+  audienceEquals,
+  companyAudience,
+  isAudienceBroadened,
+  normalizeResourceAudience,
+  validatedResourceAudience,
+  type ResourceAudience,
+} from "../access.js";
+import { callContactId } from "../calls.js";
+import { normalizePhone } from "../phone.js";
 
 const ingestBaseUrl = process.env.ODORIK_INGEST_BASE_URL?.trim()
   || "https://odorik-ingest-apf5skngva-ey.a.run.app";
@@ -54,6 +65,8 @@ export function sourceResourcePublicView(
     externalId: String(safe.externalId || id),
     displayName: String(safe.displayName || safe.externalId || id),
     status: safe.status === "disabled" ? "disabled" : "enabled",
+    audience: normalizeResourceAudience(safe.audience),
+    audienceRevision: Math.max(1, Number(safe.audienceRevision || 1)),
     itemCount: Number(safe.itemCount || 0),
     lastObservedAt: typeof safe.lastObservedAt === "string" ? safe.lastObservedAt : null,
     ...(safe.sync && typeof safe.sync === "object" ? {
@@ -307,6 +320,8 @@ export async function createOdorikConnection(input: {
       externalId: identity.externalId,
       displayName: identity.displayName,
       status: "enabled",
+      audience: companyAudience,
+      audienceRevision: 1,
       itemCount: 0,
       createdAt: now,
       updatedAt: now,
@@ -414,6 +429,128 @@ async function commitInChunks(
   }
 }
 
+async function recordsLinkedToCalls(
+  database: FirebaseFirestore.Firestore,
+  companyId: string,
+  callIds: string[],
+): Promise<FirebaseFirestore.QueryDocumentSnapshot[]> {
+  if (callIds.length === 0) return [];
+  const specs = [
+    { collection: "workItems", field: "callId" },
+    { collection: "cases", field: "callId" },
+    { collection: "actionApprovals", field: "source.callId" },
+    { collection: "workflowRuns", field: "contextId" },
+    { collection: "auditEvents", field: "callId" },
+  ];
+  const snapshots: FirebaseFirestore.QuerySnapshot[] = [];
+  for (let offset = 0; offset < callIds.length; offset += 30) {
+    const ids = callIds.slice(offset, offset + 30);
+    snapshots.push(...await Promise.all(specs.map((spec) => database
+      .collection(`companies/${companyId}/${spec.collection}`)
+      .where(spec.field, "in", ids)
+      .get())));
+  }
+  return [...new Map(snapshots.flatMap((snapshot) => snapshot.docs)
+    .map((document) => [document.ref.path, document] as const)).values()];
+}
+
+async function recordsLinkedToContextItems(
+  database: FirebaseFirestore.Firestore,
+  companyId: string,
+  contextItemIds: string[],
+): Promise<FirebaseFirestore.QueryDocumentSnapshot[]> {
+  if (contextItemIds.length === 0) return [];
+  const specs = [
+    { collection: "actionApprovals", field: "source.issueContextItemId" },
+    { collection: "codingRuns", field: "github.issueContextItemId" },
+    { collection: "auditEvents", field: "issueContextItemId" },
+  ];
+  const snapshots: FirebaseFirestore.QuerySnapshot[] = [];
+  for (let offset = 0; offset < contextItemIds.length; offset += 30) {
+    const ids = contextItemIds.slice(offset, offset + 30);
+    snapshots.push(...await Promise.all(specs.map((spec) => database
+      .collection(`companies/${companyId}/${spec.collection}`)
+      .where(spec.field, "in", ids)
+      .get())));
+  }
+  return [...new Map(snapshots.flatMap((snapshot) => snapshot.docs)
+    .map((document) => [document.ref.path, document] as const)).values()];
+}
+
+function uniqueDocuments(
+  documents: FirebaseFirestore.QueryDocumentSnapshot[],
+): FirebaseFirestore.QueryDocumentSnapshot[] {
+  return [...new Map(documents.map((document) => [document.ref.path, document] as const)).values()];
+}
+
+async function contactAccessProjections(input: {
+  database: FirebaseFirestore.Firestore;
+  companyId: string;
+  affectedCalls: FirebaseFirestore.QueryDocumentSnapshot[];
+  audience?: ResourceAudience;
+  enabled?: boolean;
+}): Promise<Array<{
+  ref: FirebaseFirestore.DocumentReference;
+  access: ResourceAudience;
+  indexingEnabled: boolean;
+}>> {
+  const affectedIds = new Set(input.affectedCalls.map((call) => call.id));
+  const contactIdForCall = (call: FirebaseFirestore.QueryDocumentSnapshot): string | null => {
+    const contactId = call.data().contactId;
+    if (typeof contactId === "string" && contactId) return contactId;
+    if (call.data().status !== "completed") return null;
+    const phone = normalizePhone(typeof call.data().from === "string" ? call.data().from : null);
+    return phone ? callContactId(phone) : null;
+  };
+  const contactIds = [...new Set(input.affectedCalls
+    .map(contactIdForCall)
+    .filter((contactId): contactId is string => Boolean(contactId)))];
+  return (await Promise.all(contactIds.map(async (contactId) => {
+    const contactRef = input.database.doc(`companies/${input.companyId}/contacts/${contactId}`);
+    const [contact, calls] = await Promise.all([
+      contactRef.get(),
+      input.database.collection(`companies/${input.companyId}/calls`)
+        .where("contactId", "==", contactId)
+        .get(),
+    ]);
+    if (contact.exists && (
+      contact.data()?.origin !== "call"
+      && typeof contact.data()?.createdFromCallId !== "string"
+    )) return null;
+    const projectedCalls = uniqueDocuments([
+      ...calls.docs,
+      ...input.affectedCalls.filter((call) => contactIdForCall(call) === contactId),
+    ]);
+    const memberIds = new Set<string>();
+    let companyVisible = false;
+    let enabledCalls = 0;
+    for (const call of projectedCalls) {
+      const affected = affectedIds.has(call.id);
+      const enabled = affected && input.enabled !== undefined
+        ? input.enabled
+        : call.data().indexingEnabled !== false && call.data().contextEnabled !== false;
+      if (!enabled) continue;
+      enabledCalls += 1;
+      const audience = affected && input.audience
+        ? input.audience
+        : normalizeResourceAudience(call.data().access);
+      if (audience.visibility === "company") {
+        companyVisible = true;
+        break;
+      }
+      audience.memberIds.forEach((memberId) => memberIds.add(memberId));
+    }
+    const access: ResourceAudience = companyVisible
+      ? companyAudience
+      : { visibility: "restricted", memberIds: [...memberIds].sort() };
+    return {
+      ref: contactRef,
+      access,
+      indexingEnabled: enabledCalls > 0 && (companyVisible || memberIds.size > 0),
+    };
+  }))).filter((projection): projection is NonNullable<typeof projection> => projection !== null);
+}
+
 export async function deleteSourceConnection(
   input: {
     companyId: string;
@@ -447,11 +584,44 @@ export async function deleteSourceConnection(
   ]);
   if (!connection.exists) throw new Error("Connection not found");
 
-  await commitInChunks((calls?.docs || []).map((call) => (batch) => batch.set(call.ref, {
-    contextEnabled: false,
-    sourceConnectionDeletedAt: FieldValue.serverTimestamp(),
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true })), database);
+  const linkedRecords = uniqueDocuments((await Promise.all([
+    recordsLinkedToCalls(
+      database,
+      input.companyId,
+      (calls?.docs || []).map((call) => call.id),
+    ),
+    recordsLinkedToContextItems(
+      database,
+      input.companyId,
+      contextItems.docs.map((contextItem) => contextItem.id),
+    ),
+  ])).flat());
+  const contactProjections = await contactAccessProjections({
+    database,
+    companyId: input.companyId,
+    affectedCalls: calls?.docs || [],
+    enabled: false,
+  });
+  await commitInChunks([
+    ...(calls?.docs || []).map((call) => (batch: FirebaseFirestore.WriteBatch) => batch.set(call.ref, {
+      contextEnabled: false,
+      indexingEnabled: false,
+      sourceConnectionDeletedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+    ...linkedRecords.map((record) => (batch: FirebaseFirestore.WriteBatch) => batch.set(record.ref, {
+      indexingEnabled: false,
+      sourceConnectionDeletedAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+    ...contactProjections.map((contact) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.set(contact.ref, {
+      access: contact.access,
+      indexingEnabled: contact.indexingEnabled,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+  ], database);
   await commitInChunks([
     ...contextItems.docs.map((item) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(item.ref)),
     ...capabilities.docs.map((capability) => (
@@ -505,32 +675,60 @@ export async function setResourceStatus(
   const resourceRef = connectionRef.collection("resources").doc(input.resourceId);
   const [connection, resource] = await Promise.all([connectionRef.get(), resourceRef.get()]);
   if (!connection.exists || !resource.exists) throw new Error("Connection resource not found");
-  const batch = database.batch();
-  batch.set(resourceRef, {
-    status: input.enabled ? "enabled" : "disabled",
-    syncLease: null,
-    syncLeaseGeneration: Number(resource.data()?.syncLeaseGeneration || 0) + 1,
-    updatedBy: input.actorUid,
-    updatedAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
-  const contextItems = await database.collection(`companies/${input.companyId}/contextItems`)
+  const [contextItems, calls] = await Promise.all([
+    database.collection(`companies/${input.companyId}/contextItems`)
     .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resourceId)
-    .get();
-  for (const context of contextItems.docs) {
-    batch.update(
+      .get(),
+    database.collection(`companies/${input.companyId}/calls`)
+      .where("connectionId", "==", input.connectionId)
+      .where("resourceId", "==", input.resourceId)
+      .get(),
+  ]);
+  const linkedRecords = uniqueDocuments((await Promise.all([
+    recordsLinkedToCalls(database, input.companyId, calls.docs.map((call) => call.id)),
+    recordsLinkedToContextItems(
+      database,
+      input.companyId,
+      contextItems.docs.map((contextItem) => contextItem.id),
+    ),
+  ])).flat());
+  const contactProjections = await contactAccessProjections({
+    database,
+    companyId: input.companyId,
+    affectedCalls: calls.docs,
+    enabled: input.enabled,
+  });
+  await commitInChunks([
+    (batch) => batch.set(resourceRef, {
+      status: input.enabled ? "enabled" : "disabled",
+      syncLease: null,
+      syncLeaseGeneration: Number(resource.data()?.syncLeaseGeneration || 0) + 1,
+      updatedBy: input.actorUid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true }),
+    ...contextItems.docs.map((context) => (batch: FirebaseFirestore.WriteBatch) => batch.set(
       context.ref,
-      "access.visibility",
-      input.enabled ? "company" : "restricted",
-      "access.memberIds",
-      input.enabled ? FieldValue.delete() : [],
-      "indexingEnabled",
-      input.enabled,
-      "updatedAt",
-      FieldValue.serverTimestamp(),
-    );
-  }
-  await batch.commit();
+      { indexingEnabled: input.enabled, updatedAt: FieldValue.serverTimestamp() },
+      { merge: true },
+    )),
+    ...calls.docs.map((call) => (batch: FirebaseFirestore.WriteBatch) => batch.set(call.ref, {
+      contextEnabled: input.enabled,
+      indexingEnabled: input.enabled,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+    ...linkedRecords.map((record) => (batch: FirebaseFirestore.WriteBatch) => batch.set(record.ref, {
+      indexingEnabled: input.enabled,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+    ...contactProjections.map((contact) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.set(contact.ref, {
+      access: contact.access,
+      indexingEnabled: contact.indexingEnabled,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+  ], database);
   const capabilityId = resource.data()?.capabilityId as SourceCapabilityId | undefined;
   if (capabilityId) {
     const descriptor = capabilityDescriptor(capabilityId);
@@ -541,6 +739,175 @@ export async function setResourceStatus(
       serviceId: descriptor.serviceId,
     }, { database });
   }
+}
+
+export async function setResourceAudience(
+  input: {
+    companyId: string;
+    connectionId: string;
+    resourceId: string;
+    audience: ResourceAudience;
+    expectedRevision: number;
+    confirmBroadening: boolean;
+    actorUid: string;
+  },
+  database: FirebaseFirestore.Firestore = db,
+): Promise<{ changed: boolean; revision: number; projectedItems: number; projectedCalls: number }> {
+  const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
+  const resourceRef = connectionRef.collection("resources").doc(input.resourceId);
+  const [connection, audience] = await Promise.all([
+    connectionRef.get(),
+    validatedResourceAudience({
+      companyId: input.companyId,
+      audience: input.audience,
+      database,
+    }),
+  ]);
+  if (!connection.exists) throw new Error("Connection resource not found");
+  const reservation = await database.runTransaction(async (transaction) => {
+    const resource = await transaction.get(resourceRef);
+    if (!resource.exists) throw new Error("Connection resource not found");
+    const currentAudience = normalizeResourceAudience(resource.data()?.audience);
+    const currentRevision = Math.max(1, Number(resource.data()?.audienceRevision || 1));
+    if (currentRevision !== input.expectedRevision) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "The resource audience changed. Reload and try again.",
+      });
+    }
+    const sameAudience = audienceEquals(currentAudience, audience);
+    const projectionUpdating = resource.data()?.audienceProjection?.status === "updating";
+    if (sameAudience && !projectionUpdating) {
+      return {
+        changed: false as const,
+        revision: currentRevision,
+        currentAudience,
+      };
+    }
+    if (!sameAudience && projectionUpdating) {
+      throw new TRPCError({
+        code: "CONFLICT",
+        message: "The resource audience is still being projected. Reload and try again.",
+      });
+    }
+    if (!sameAudience && isAudienceBroadened(currentAudience, audience) && !input.confirmBroadening) {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "AUDIENCE_BROADENING_REQUIRES_CONFIRMATION",
+      });
+    }
+    const revision = sameAudience ? currentRevision : currentRevision + 1;
+    transaction.set(resourceRef, {
+      audience,
+      audienceRevision: revision,
+      audienceProjection: { status: "updating", revision },
+      updatedBy: input.actorUid,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true });
+    return {
+      changed: true as const,
+      revision,
+      currentAudience,
+      resumed: sameAudience,
+    };
+  });
+  if (!reservation.changed) {
+    return { changed: false, revision: reservation.revision, projectedItems: 0, projectedCalls: 0 };
+  }
+  const { revision } = reservation;
+  const [contextItems, calls] = await Promise.all([
+    database.collection(`companies/${input.companyId}/contextItems`)
+      .where("source.connectionId", "==", input.connectionId)
+      .where("source.resourceId", "==", input.resourceId)
+      .get(),
+    database.collection(`companies/${input.companyId}/calls`)
+      .where("connectionId", "==", input.connectionId)
+      .where("resourceId", "==", input.resourceId)
+      .get(),
+  ]);
+  const linkedRecords = uniqueDocuments((await Promise.all([
+    recordsLinkedToCalls(database, input.companyId, calls.docs.map((call) => call.id)),
+    recordsLinkedToContextItems(
+      database,
+      input.companyId,
+      contextItems.docs.map((contextItem) => contextItem.id),
+    ),
+  ])).flat());
+  const contactProjections = await contactAccessProjections({
+    database,
+    companyId: input.companyId,
+    affectedCalls: calls.docs,
+    audience,
+  });
+  await commitInChunks([
+    ...contextItems.docs.map((context) => (batch: FirebaseFirestore.WriteBatch) => batch.set(
+      context.ref,
+      {
+        access: audience,
+        accessRevision: revision,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )),
+    ...calls.docs.map((call) => (batch: FirebaseFirestore.WriteBatch) => batch.set(
+      call.ref,
+      {
+        access: audience,
+        accessRevision: revision,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )),
+    ...linkedRecords.map((record) => (batch: FirebaseFirestore.WriteBatch) => batch.set(
+      record.ref,
+      {
+        access: audience,
+        accessRevision: revision,
+        updatedAt: FieldValue.serverTimestamp(),
+      },
+      { merge: true },
+    )),
+    ...contactProjections.map((contact) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.set(contact.ref, {
+      access: contact.access,
+      indexingEnabled: contact.indexingEnabled,
+      updatedAt: FieldValue.serverTimestamp(),
+    }, { merge: true })),
+  ], database);
+  await resourceRef.set({
+    audienceProjection: {
+      status: "projected",
+      revision,
+      contextItems: contextItems.size,
+      calls: calls.size,
+      linkedRecords: linkedRecords.length,
+      contacts: contactProjections.length,
+      completedAt: FieldValue.serverTimestamp(),
+    },
+    updatedAt: FieldValue.serverTimestamp(),
+  }, { merge: true });
+  if (!reservation.resumed) {
+    await database.collection(`companies/${input.companyId}/auditEvents`).add({
+      eventType: "source.resource_audience_changed",
+      actorUid: input.actorUid,
+      connectionId: input.connectionId,
+      resourceId: input.resourceId,
+      before: reservation.currentAudience,
+      after: audience,
+      access: audience,
+      indexingEnabled: true,
+      audienceRevision: revision,
+      occurredAt: FieldValue.serverTimestamp(),
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+  return {
+    changed: true,
+    revision,
+    projectedItems: contextItems.size,
+    projectedCalls: calls.size,
+  };
 }
 
 export async function setCapabilityStatus(
@@ -780,6 +1147,8 @@ export async function migrateLegacyOdorik(companyId: string, actorUid: string): 
       externalId: resource.externalId,
       displayName: resource.displayName,
       status: "enabled",
+      audience: companyAudience,
+      audienceRevision: 1,
       itemCount: matchingCalls.length,
       lastObservedAt: matchingCalls
         .map((call) => call.data().uploadedAt)
@@ -797,6 +1166,9 @@ export async function migrateLegacyOdorik(companyId: string, actorUid: string): 
       connectionId: connectionRef.id,
       resourceId: resource.resourceId,
       contextEnabled: true,
+      access: companyAudience,
+      accessRevision: 1,
+      indexingEnabled: true,
       source: {
         providerId: "odorik",
         capabilityId: "context.call.read",

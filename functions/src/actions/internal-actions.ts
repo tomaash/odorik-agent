@@ -177,6 +177,7 @@ export const taskCreateDescriptor: ActionDescriptor<
       callId: action.callId,
       source: approvedSource(context),
       context: action.context,
+      access: context.access,
       deterministicId: action.taskId,
     });
     return { taskId: action.taskId };
@@ -226,6 +227,7 @@ export const caseCreateDescriptor: ActionDescriptor<
       stageId: action.stageId,
       callId: action.callId,
       source: approvedSource(context),
+      access: context.access,
       deterministicId: action.caseId,
     });
     return { caseId: action.caseId };

@@ -6,6 +6,7 @@ import {
   type KnowledgeKind,
   type RecordFilter,
 } from "./types.js";
+import { accessForSourceRecord, canMemberAccess } from "../access.js";
 
 export const collectionByKnowledgeKind: Record<KnowledgeKind, string> = {
   call: "calls",
@@ -24,23 +25,27 @@ const safeFields: Record<KnowledgeKind, string[]> = {
   call: [
     "status", "from", "to", "duration", "odorikTime", "lineName", "language",
     "summary", "transcript", "segments", "actionItems", "uploadedAt", "processedAt",
+    "connectionId", "resourceId", "source", "access", "accessRevision", "indexingEnabled",
   ],
   contact: [
     "displayName", "phoneE164", "phoneRaw", "email", "origin", "createdFromCallId",
-    "lastCallAt", "createdAt", "updatedAt",
+    "lastCallAt", "createdAt", "updatedAt", "access", "indexingEnabled",
   ],
   task: [
     "status", "title", "instructions", "assigneeUid", "assigneeName", "dueAt",
     "contactId", "caseId", "callId", "source", "authorization", "outcomeNote",
-    "createdBy", "createdAt", "updatedAt", "closedAt",
+    "createdBy", "createdAt", "updatedAt", "closedAt", "access", "accessRevision",
+    "indexingEnabled",
   ],
   case: [
     "title", "pipelineId", "stageId", "contactId",
     "contactName", "contactPhone", "ownerUid", "ownerName", "createdAt",
-    "updatedAt", "stageChangedAt", "revision", "source", "authorization",
+    "updatedAt", "stageChangedAt", "revision", "source", "authorization", "access",
+    "accessRevision", "indexingEnabled",
   ],
   audit_event: [
     "aggregateType", "aggregateId", "type", "actor", "before", "after", "createdAt",
+    "access", "accessRevision", "indexingEnabled",
   ],
   context_item: [
     "companyId", "kind", "source", "title", "text", "occurredAt", "observedAt",
@@ -212,6 +217,10 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
 export function chunkRecord(record: CompanyRecord, companyId: string): KnowledgeDocument[] {
   const fullText = textFor(record.title, record.data);
   const extraMeta = extractRecordMetadata(record);
+  const access = accessForSourceRecord(record.kind, record.data);
+  const accessFields = access.visibility === "company"
+    ? { accessVisibility: "company" as const, accessMemberIds: [] }
+    : { accessVisibility: "restricted" as const, accessMemberIds: access.memberIds };
   const chunkSize = 1800;
   const overlap = 220;
   if (fullText.length <= chunkSize) {
@@ -224,6 +233,7 @@ export function chunkRecord(record: CompanyRecord, companyId: string): Knowledge
       title: record.title,
       text: fullText,
       occurredAt: record.occurredAt,
+      ...accessFields,
       metadata: { ...extraMeta },
     }];
   }
@@ -248,6 +258,7 @@ export function chunkRecord(record: CompanyRecord, companyId: string): Knowledge
         title: record.title,
         text,
         occurredAt: record.occurredAt,
+        ...accessFields,
         metadata: { ...extraMeta, chunk: chunkIndex },
       });
     }
@@ -280,7 +291,16 @@ function sortTime(record: CompanyRecord): number {
 }
 
 export class FirestoreCompanyData implements CompanyDataRepository {
-  constructor(private readonly firestore: Firestore, private readonly companyId: string) {}
+  constructor(
+    private readonly firestore: Firestore,
+    private readonly companyId: string,
+    private readonly memberId?: string,
+  ) {}
+
+  private readable(_kind: KnowledgeKind, data: Record<string, unknown>): boolean {
+    if (data.indexingEnabled === false || data.contextEnabled === false) return false;
+    return !this.memberId || canMemberAccess(data.access, this.memberId);
+  }
 
   private async records(kind: KnowledgeKind, max = 500): Promise<CompanyRecord[]> {
     const collection = collectionByKnowledgeKind[kind];
@@ -288,9 +308,8 @@ export class FirestoreCompanyData implements CompanyDataRepository {
       `companies/${this.companyId}/${collection}`,
     );
     const snapshot = await source.limit(max).get();
-    return snapshot.docs.filter((document) => (
-      kind !== "context_item" || document.data().indexingEnabled !== false
-    )).map((document) => {
+    return snapshot.docs.filter((document) => this.readable(kind, plainObject(document.data())))
+      .map((document) => {
       const data = selectSafeFields(kind, plainObject(document.data()));
       return {
         kind,
@@ -313,7 +332,7 @@ export class FirestoreCompanyData implements CompanyDataRepository {
     const path = `companies/${this.companyId}/${collection}/${recordId}`;
     const snapshot = await this.firestore.doc(path).get();
     if (!snapshot.exists) return null;
-    if (kind === "context_item" && snapshot.data()?.indexingEnabled === false) return null;
+    if (!this.readable(kind, plainObject(snapshot.data()))) return null;
     const data = selectSafeFields(kind, plainObject(snapshot.data()));
     return {
       kind,

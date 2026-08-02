@@ -7,6 +7,24 @@ export const legacyCompanyId = "explorers";
 export const legacyConnectionId =
   process.env.ODORIK_CONNECTION_ID?.trim() || "odorik-primary";
 
+type ResourceAudience =
+  | { visibility: "company" }
+  | { visibility: "restricted"; memberIds: string[] };
+
+function resourceAudience(value: unknown): ResourceAudience {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const candidate = value as Record<string, unknown>;
+    if (candidate.visibility === "restricted" && Array.isArray(candidate.memberIds)) {
+      return {
+        visibility: "restricted",
+        memberIds: [...new Set(candidate.memberIds.map(String).map((item) => item.trim()).filter(Boolean))]
+          .sort(),
+      };
+    }
+  }
+  return { visibility: "company" };
+}
+
 function hash(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
@@ -94,7 +112,12 @@ export async function observeOdorikResource(input: {
   companyId: string;
   connectionId: string;
   fields: Record<string, string>;
-}): Promise<{ resourceId: string; contextEnabled: boolean }> {
+}): Promise<{
+  resourceId: string;
+  contextEnabled: boolean;
+  audience: ResourceAudience;
+  audienceRevision: number;
+}> {
   const identity = odorikResourceIdentity(input.fields);
   const connectionRef = db().doc(
     `companies/${input.companyId}/connections/${input.connectionId}`,
@@ -105,6 +128,8 @@ export async function observeOdorikResource(input: {
     resourceRef.get(),
   ]);
   const contextEnabled = !resource.exists || resource.data()?.status !== "disabled";
+  const audience = resourceAudience(resource.data()?.audience);
+  const audienceRevision = Math.max(1, Number(resource.data()?.audienceRevision || 1));
   const now = Timestamp.now();
   const batch = db().batch();
   batch.set(db().doc(`companies/${input.companyId}`), {
@@ -138,10 +163,12 @@ export async function observeOdorikResource(input: {
     externalId: identity.externalId,
     displayName: identity.displayName,
     status: resource.exists ? resource.data()?.status || "enabled" : "enabled",
+    audience,
+    audienceRevision,
     lastObservedAt: now,
     createdAt: resource.exists ? resource.data()?.createdAt || now : now,
     updatedAt: now,
   }, { merge: true });
   await batch.commit();
-  return { resourceId: identity.resourceId, contextEnabled };
+  return { resourceId: identity.resourceId, contextEnabled, audience, audienceRevision };
 }

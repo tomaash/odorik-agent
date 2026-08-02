@@ -4,6 +4,7 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { defineSecret } from "firebase-functions/params";
 import { db, jsonSafe } from "./firestore.js";
+import { canMemberAccessSourceData } from "./access.js";
 import { adminProcedure, enabledProcedure, router, signedInProcedure } from "./trpc.js";
 import { GeminiRestAgentModel } from "./agent/gemini.js";
 import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
@@ -16,6 +17,7 @@ import {
   qdrantFromEnvironment,
 } from "./agent/search.js";
 import { CompanyFactTools } from "./agent/tools.js";
+import { memberThreadDocumentId } from "./agent/threads.js";
 import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
 import {
   enqueueKnowledgeIndexBackfill,
@@ -51,6 +53,7 @@ import {
   prepareConnectionDeletion,
   setCapabilityStatus,
   setConnectionStatus,
+  setResourceAudience,
   setResourceStatus,
 } from "./connectors/repository.js";
 import { odorikDestinationUrl } from "./connectors/odorik.js";
@@ -141,6 +144,7 @@ export const geminiApiKey = defineSecret("GEMINI_API_KEY");
 export const qdrantApiKey = defineSecret("QDRANT_API_KEY");
 export const qdrantUrl = defineSecret("QDRANT_URL");
 export const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
+
 export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
@@ -242,15 +246,21 @@ export const appRouter = router({
   coding: router({
     listIssues: enabledProcedure.query(({ ctx }) => listCodingIssues({
       companyId: ctx.companyId,
+      memberUid: ctx.uid,
     })),
     listRuns: enabledProcedure.query(({ ctx }) => listCodingRuns({
       companyId: ctx.companyId,
+      memberUid: ctx.uid,
     })),
     getRun: enabledProcedure
       .input(z.object({ runId: z.string().regex(/^coding_[a-f0-9]{32}$/) }))
       .query(async ({ ctx, input }) => {
         try {
-          return await getCodingRun({ companyId: ctx.companyId, runId: input.runId });
+          return await getCodingRun({
+            companyId: ctx.companyId,
+            runId: input.runId,
+            memberUid: ctx.uid,
+          });
         } catch (error) {
           if (error instanceof CodingRunError) {
             throw new TRPCError({
@@ -410,6 +420,7 @@ export const appRouter = router({
           return await codingPatchPreview({
             companyId: ctx.companyId,
             runId: input.runId,
+            memberUid: ctx.uid,
             artifactStore: codingArtifacts,
           });
         } catch (error) {
@@ -433,6 +444,7 @@ export const appRouter = router({
           return await codingArtifactDownloadUrl({
             companyId: ctx.companyId,
             runId: input.runId,
+            memberUid: ctx.uid,
             artifactStore: codingArtifacts,
           });
         } catch (error) {
@@ -876,6 +888,36 @@ export const appRouter = router({
           });
         }
       }),
+    setResourceAudience: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        resourceId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        audience: z.discriminatedUnion("visibility", [
+          z.object({ visibility: z.literal("company") }),
+          z.object({
+            visibility: z.literal("restricted"),
+            memberIds: z.array(z.string().min(1).max(128)).min(1).max(200),
+          }),
+        ]),
+        expectedRevision: z.number().int().positive(),
+        confirmBroadening: z.boolean().default(false),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await setResourceAudience({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            ...input,
+          });
+        } catch (error) {
+          if (error instanceof TRPCError) throw error;
+          const message = error instanceof Error ? error.message : String(error);
+          throw new TRPCError({
+            code: message === "Connection resource not found" ? "NOT_FOUND" : "BAD_REQUEST",
+            message,
+          });
+        }
+      }),
     migrateLegacyOdorik: adminProcedure.mutation(({ ctx }) => migrateLegacyOdorik(
       ctx.companyId,
       ctx.uid,
@@ -895,11 +937,46 @@ export const appRouter = router({
       synchronization: "firestore_on_write",
       readOnly: true,
     })),
+    threads: enabledProcedure.query(async ({ ctx }) => {
+      const snapshot = await db.collection(companyCollectionPath(ctx.companyId, "agentThreads"))
+        .where("ownerUid", "==", ctx.uid)
+        .limit(100)
+        .get();
+      return jsonSafe(snapshot.docs.map((document) => ({
+        id: String(document.data().clientThreadId || document.id),
+        title: String(document.data().title || "New chat"),
+        lastMessageAt: document.data().lastMessageAt || null,
+        createdAt: document.data().createdAt || null,
+      })).sort((left, right) => (
+        Number((right.lastMessageAt as { toMillis?: () => number } | null)?.toMillis?.() || 0)
+        - Number((left.lastMessageAt as { toMillis?: () => number } | null)?.toMillis?.() || 0)
+      )));
+    }),
+    createThread: enabledProcedure.mutation(async ({ ctx }) => {
+      const threadId = `chat_${randomBytes(12).toString("hex")}`;
+      const threadRef = db.doc(companyDocumentPath(
+        ctx.companyId,
+        "agentThreads",
+        memberThreadDocumentId(ctx.uid, threadId),
+      ));
+      const now = Timestamp.now();
+      await threadRef.create({
+        ownerUid: ctx.uid,
+        clientThreadId: threadId,
+        title: "New chat",
+        createdAt: now,
+        updatedAt: now,
+        lastMessageAt: null,
+      });
+      return { id: threadId, title: "New chat", createdAt: now.toDate().toISOString() };
+    }),
     history: enabledProcedure
       .input(z.object({ threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general") }).optional())
       .query(async ({ ctx, input }) => {
+        const threadId = input?.threadId || "general";
+        const threadDocumentId = memberThreadDocumentId(ctx.uid, threadId);
         const snapshot = await db.collection(
-          `${companyDocumentPath(ctx.companyId, "agentThreads", input?.threadId || "general")}/messages`,
+          `${companyDocumentPath(ctx.companyId, "agentThreads", threadDocumentId)}/messages`,
         )
           .orderBy("createdAt", "desc")
           .limit(40)
@@ -913,10 +990,17 @@ export const appRouter = router({
       }))
       .mutation(async ({ ctx, input }) => {
         const threadRef = db.doc(
-          companyDocumentPath(ctx.companyId, "agentThreads", input.threadId),
+          companyDocumentPath(
+            ctx.companyId,
+            "agentThreads",
+            memberThreadDocumentId(ctx.uid, input.threadId),
+          ),
         );
         const messagesRef = threadRef.collection("messages");
-        const historySnapshot = await messagesRef.orderBy("createdAt", "desc").limit(8).get();
+        const [threadSnapshot, historySnapshot] = await Promise.all([
+          threadRef.get(),
+          messagesRef.orderBy("createdAt", "desc").limit(8).get(),
+        ]);
         const priorMessages = historySnapshot.docs.reverse().flatMap((document) => {
           const data = document.data();
           const role = data.role === "assistant" ? "model" as const : data.role === "user" ? "user" as const : null;
@@ -926,10 +1010,11 @@ export const appRouter = router({
           return role && text ? [{ role, text }] : [];
         });
         const apiKey = geminiApiKey.value();
-        const repository = new FirestoreCompanyData(db, ctx.companyId);
+        const repository = new FirestoreCompanyData(db, ctx.companyId, ctx.uid);
         const { search } = qdrantFromEnvironment({
           geminiApiKey: apiKey,
           companyId: ctx.companyId,
+          memberId: ctx.uid,
         });
         const tools = new CompanyFactTools(repository, search);
         const startedAt = Date.now();
@@ -948,7 +1033,14 @@ export const appRouter = router({
         ).doc();
         const batch = db.batch();
         batch.set(threadRef, {
-          title: "Company facts",
+          ownerUid: ctx.uid,
+          clientThreadId: input.threadId,
+          ...(!threadSnapshot.exists || !threadSnapshot.data()?.lastMessageAt ? {
+            title: input.question.slice(0, 80),
+          } : {}),
+          ...(threadSnapshot.exists ? {} : {
+            createdAt: userAt,
+          }),
           updatedAt: answerAt,
           lastMessageAt: answerAt,
         }, { merge: true });
@@ -966,6 +1058,7 @@ export const appRouter = router({
           confidence: answer.confidence,
           limitations: answer.limitations,
           runId: runRef.id,
+          actorUid: ctx.uid,
           createdAt: answerAt,
         });
         batch.set(runRef, {
@@ -1026,6 +1119,7 @@ export const appRouter = router({
       }).optional())
       .query(({ ctx, input }) => listTasks({
         companyId: ctx.companyId,
+        memberUid: ctx.uid,
         ...(input || {}),
       })),
     create: enabledProcedure
@@ -1091,6 +1185,7 @@ export const appRouter = router({
       }).optional())
       .query(({ ctx, input }) => listActionApprovals({
         companyId: ctx.companyId,
+        memberUid: ctx.uid,
         ...(input || {}),
       })),
     approve: enabledProcedure
@@ -1144,6 +1239,7 @@ export const appRouter = router({
       }).optional())
       .query(({ ctx, input }) => listCases({
         companyId: ctx.companyId,
+        memberUid: ctx.uid,
         ...(input || {}),
       })),
     get: enabledProcedure
@@ -1151,6 +1247,7 @@ export const appRouter = router({
       .query(({ ctx, input }) => getCaseDetails({
         companyId: ctx.companyId,
         caseId: input.caseId,
+        memberUid: ctx.uid,
       })),
     create: enabledProcedure
       .input(z.object({
@@ -1230,13 +1327,14 @@ export const appRouter = router({
       }))
       .mutation(({ ctx, input }) => dryRunHistory({
         companyId: ctx.companyId,
+        memberUid: ctx.uid,
         workflowId: input.workflowId,
         spec: input.spec as WorkflowSpec | undefined,
         limit: input.limit,
       })),
     health: enabledProcedure.query(async ({ ctx }) => ({
       flags: workflowRuntimeFlags(),
-      ...await workflowHealth(ctx.companyId),
+      ...await workflowHealth(ctx.companyId, ctx.uid),
     })),
   }),
 
@@ -1250,7 +1348,9 @@ export const appRouter = router({
           .orderBy("updatedAt", "desc")
           .limit(input?.limit || 30)
           .get();
-        return jsonSafe(snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() })));
+        return jsonSafe(snapshot.docs
+          .filter((document) => canMemberAccessSourceData(document.data(), ctx.uid))
+          .map((document) => ({ id: document.id, ...document.data() })));
       }),
     get: enabledProcedure
       .input(z.object({ contactId: z.string().min(1) }))
@@ -1261,19 +1361,25 @@ export const appRouter = router({
             .where("contactId", "==", input.contactId).limit(50).get(),
           listCases({
             companyId: ctx.companyId,
+            memberUid: ctx.uid,
             contactId: input.contactId,
             limit: 50,
           }),
           listTasks({
             companyId: ctx.companyId,
+            memberUid: ctx.uid,
             contactId: input.contactId,
             limit: 100,
           }),
         ]);
-        if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+        if (
+          !snapshot.exists
+          || !canMemberAccessSourceData(snapshot.data() || {}, ctx.uid)
+        ) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
         return jsonSafe({
           contact: { id: snapshot.id, ...snapshot.data()! },
           calls: calls.docs
+            .filter((document) => canMemberAccessSourceData(document.data(), ctx.uid))
             .sort((a, b) => String(b.data().odorikTime || b.data().uploadedAt || "")
               .localeCompare(String(a.data().odorikTime || a.data().uploadedAt || "")))
             .map((document) => ({ id: document.id, ...document.data() })),

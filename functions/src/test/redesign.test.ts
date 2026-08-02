@@ -6,6 +6,7 @@ import {
   parseWorkflowAction,
 } from "../actions/contracts.js";
 import { workflowRuntimeFlags } from "../workflow/runtime.js";
+import { projectedCallContactAccess } from "../calls.js";
 
 test("internal workflow engine defaults on and retains its kill switch", () => {
   // The legacy call-to-CRM path is gone, so the engine is the only consumer of
@@ -15,6 +16,55 @@ test("internal workflow engine defaults on and retains its kill switch", () => {
     workflowRuntimeFlags({ WORKFLOW_ENGINE_ENABLED: "false" }),
     { enabled: false },
   );
+});
+
+test("call-created contacts inherit and union only enabled source audiences", () => {
+  assert.deepEqual(projectedCallContactAccess({
+    existing: undefined,
+    call: {
+      access: { visibility: "restricted", memberIds: ["member-b", "member-a"] },
+      indexingEnabled: true,
+    },
+  }), {
+    access: { visibility: "restricted", memberIds: ["member-a", "member-b"] },
+    indexingEnabled: true,
+  });
+  assert.deepEqual(projectedCallContactAccess({
+    existing: {
+      access: { visibility: "restricted", memberIds: ["member-a"] },
+      indexingEnabled: true,
+    },
+    call: {
+      access: { visibility: "company" },
+      indexingEnabled: true,
+    },
+  }), {
+    access: { visibility: "company" },
+    indexingEnabled: true,
+  });
+  assert.deepEqual(projectedCallContactAccess({
+    existing: {
+      access: { visibility: "company" },
+      indexingEnabled: false,
+    },
+    call: {
+      access: { visibility: "restricted", memberIds: ["member-b"] },
+      indexingEnabled: true,
+    },
+  }), {
+    access: { visibility: "restricted", memberIds: ["member-b"] },
+    indexingEnabled: true,
+  });
+  assert.deepEqual(projectedCallContactAccess({
+    existing: undefined,
+    call: {
+      access: { visibility: "company" },
+      indexingEnabled: false,
+    },
+  }), {
+    access: { visibility: "restricted", memberIds: [] },
+    indexingEnabled: false,
+  });
 });
 
 test("typed workflow actions reject unsupported effects and use a stable digest", () => {
