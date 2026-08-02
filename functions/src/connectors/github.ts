@@ -2,6 +2,19 @@ import { createSign } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
+import {
+  commitConnectorSyncWrites,
+  connectorSyncRunResultFromData,
+  createConnectorSyncRun,
+  executeConnectorSyncRun,
+  listDueConnectorSyncRuns,
+  replayableConnectorSyncResources,
+  type ConnectorSyncDependencies,
+  type ConnectorSyncExecutionResource,
+  type ConnectorSyncResourceCompletion,
+  type ConnectorSyncRunResult,
+  type ConnectorSyncTrigger,
+} from "./sync-runtime.js";
 
 export const githubIssueCapabilityId = "context.github.issue.read" as const;
 export const githubObserverPermissions = {
@@ -170,7 +183,7 @@ async function githubRequest<T>(
     headers: { ...githubHeaders(token), ...(init.headers || {}) },
     signal: AbortSignal.timeout(30_000),
   });
-  const body = await response.json() as T & { message?: string };
+  const body = await response.json().catch(() => ({})) as T & { message?: string };
   if (!response.ok) {
     throw new Error(`GitHub request failed (${response.status}): ${body.message || "unknown error"}`);
   }
@@ -430,6 +443,8 @@ export async function connectGitHubInstallation(input: {
     displayName: "GitHub",
     accountLabel: snapshot.account.login,
     status: "active",
+    syncGeneration: Number(existingConnection.data()?.syncGeneration || 0)
+      + (existingConnection.exists && existingConnection.data()?.status !== "active" ? 1 : 0),
     installationId: snapshot.installationId,
     repositorySelection: snapshot.repositorySelection,
     auth: {
@@ -661,13 +676,45 @@ async function fetchRepositoryIssues(input: {
   return results;
 }
 
-export async function syncGitHubConnection(input: {
+type GitHubSyncInput = {
   companyId: string;
   connectionId: string;
   configuration: GitHubAppConfiguration;
   fetcher?: FetchLike;
   database?: FirebaseFirestore.Firestore;
-}): Promise<{ repositories: number; issues: number }> {
+  trigger?: ConnectorSyncTrigger;
+  requestedBy?: string | null;
+  resourceIds?: string[];
+  replayOfRunId?: string | null;
+  now?: () => Timestamp;
+};
+
+type GitHubSyncPreparation = {
+  connection: FirebaseFirestore.DocumentSnapshot;
+  installation: GitHubInstallationSnapshot;
+  repositoryById: Map<string, GitHubRepository>;
+};
+
+export type GitHubSyncResult = ConnectorSyncRunResult & {
+  repositories: number;
+  issues: number;
+};
+
+function githubNestedRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function githubTimestampMillis(value: unknown): number | null {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+async function prepareGitHubSync(input: GitHubSyncInput): Promise<GitHubSyncPreparation> {
   const database = input.database || db;
   const connectionRef = connectionDocument(input.companyId, input.connectionId, database);
   const connection = await connectionRef.get();
@@ -675,6 +722,7 @@ export async function syncGitHubConnection(input: {
   if (
     !connection.exists
     || connection.data()?.connectorId !== "github"
+    || !["active", "attention"].includes(String(connection.data()?.status))
     || !Number.isSafeInteger(installationId)
   ) {
     throw new Error("GitHub connection not found");
@@ -687,104 +735,202 @@ export async function syncGitHubConnection(input: {
   const repositoryById = new Map(
     installation.repositories.map((repository) => [String(repository.id), repository]),
   );
-  const resources = await connectionRef.collection("resources")
+  return { connection, installation, repositoryById };
+}
+
+async function syncGitHubRepositoryResource(input: {
+  companyId: string;
+  connectionId: string;
+  preparation: GitHubSyncPreparation;
+  resource: ConnectorSyncExecutionResource;
+  lease: import("./sync-runtime.js").ConnectorSyncLease;
+  dependencies: ConnectorSyncDependencies;
+  fetcher?: FetchLike;
+}): Promise<ConnectorSyncResourceCompletion> {
+  const repository = input.preparation.repositoryById.get(String(input.resource.data.externalId));
+  if (!repository) throw new Error("An enabled GitHub repository is no longer accessible");
+  const issues = await fetchRepositoryIssues({
+    token: input.preparation.installation.token,
+    repository,
+    fetcher: input.fetcher,
+  });
+  const existingItems = await input.dependencies.database
+    .collection(`companies/${input.companyId}/contextItems`)
+    .where("source.connectionId", "==", input.connectionId)
+    .where("source.resourceId", "==", input.resource.id)
+    .get();
+  const existingById = new Map(existingItems.docs.map((item) => [item.id, item]));
+  const observedAt = input.dependencies.now?.() || Timestamp.now();
+  const observedContextIds = new Set<string>();
+  const lastChangeMillis = githubTimestampMillis(
+    githubNestedRecord(input.resource.data.sync).lastChangeObservedAt,
+  );
+  let changes = 0;
+  const writes: Array<{
+    ref: FirebaseFirestore.DocumentReference;
+    value: Record<string, unknown>;
+  }> = [];
+  for (const entry of issues) {
+    const contextId = githubIssueContextItemId(
+      input.connectionId,
+      repository.id,
+      entry.issue.id,
+    );
+    observedContextIds.add(contextId);
+    const value = githubIssueContextItem({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      resourceId: input.resource.id,
+      repository,
+      issue: entry.issue,
+      comments: entry.comments,
+      observedAt,
+    });
+    const existing = existingById.get(contextId)?.data();
+    const sameChecksum = githubNestedRecord(existing?.provenance).checksum
+      === githubNestedRecord(value.provenance).checksum;
+    if (!sameChecksum) {
+      writes.push({
+        ref: input.dependencies.database.doc(
+          `companies/${input.companyId}/contextItems/${contextId}`,
+        ),
+        value,
+      });
+      changes += 1;
+    } else {
+      const modifiedMillis = githubTimestampMillis(entry.issue.updated_at);
+      if (
+        modifiedMillis !== null
+        && (lastChangeMillis === null || modifiedMillis > lastChangeMillis)
+      ) changes += 1;
+    }
+  }
+  for (let offset = 0; offset < writes.length; offset += 350) {
+    const pageWrites = writes.slice(offset, offset + 350);
+    await commitConnectorSyncWrites({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      resourceId: input.resource.id,
+      lease: input.lease,
+      apply: (transaction) => {
+        for (const write of pageWrites) {
+          transaction.set(write.ref, write.value, { merge: false });
+        }
+      },
+    }, input.dependencies);
+  }
+  const staleItems = existingItems.docs.filter((item) => !observedContextIds.has(item.id));
+  for (let offset = 0; offset < staleItems.length; offset += 400) {
+    const pageDeletes = staleItems.slice(offset, offset + 400);
+    await commitConnectorSyncWrites({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      resourceId: input.resource.id,
+      lease: input.lease,
+      apply: (transaction) => {
+        for (const item of pageDeletes) transaction.delete(item.ref);
+      },
+    }, input.dependencies);
+  }
+  changes += staleItems.length;
+  return {
+    changes,
+    itemCount: observedContextIds.size,
+    cursorAfter: null,
+    cursorMode: "full",
+  };
+}
+
+async function githubSyncResult(
+  base: ConnectorSyncRunResult,
+  input: { companyId: string; connectionId: string; database: FirebaseFirestore.Firestore },
+): Promise<GitHubSyncResult> {
+  const resources = await connectionDocument(
+    input.companyId,
+    input.connectionId,
+    input.database,
+  ).collection("resources")
     .where("capabilityId", "==", githubIssueCapabilityId)
     .where("status", "==", "enabled")
     .get();
-  let issueCount = 0;
-  const observedAt = Timestamp.now();
-  try {
-    for (const resource of resources.docs) {
-      const repository = repositoryById.get(String(resource.data().externalId));
-      if (!repository) throw new Error("An enabled GitHub repository is no longer accessible");
-      const issues = await fetchRepositoryIssues({
-        token: installation.token,
-        repository,
-        fetcher: input.fetcher,
-      });
-      const observedContextIds = new Set(issues.map((entry) => githubIssueContextItemId(
-        input.connectionId,
-        repository.id,
-        entry.issue.id,
-      )));
-      for (let offset = 0; offset < issues.length; offset += 350) {
-        const batch = database.batch();
-        for (const entry of issues.slice(offset, offset + 350)) {
-          batch.set(
-            database.doc(
-              `companies/${input.companyId}/contextItems/${githubIssueContextItemId(
-                input.connectionId,
-                repository.id,
-                entry.issue.id,
-              )}`,
-            ),
-            githubIssueContextItem({
-              companyId: input.companyId,
-              connectionId: input.connectionId,
-              resourceId: resource.id,
-              repository,
-              issue: entry.issue,
-              comments: entry.comments,
-              observedAt,
-            }),
-            { merge: false },
-          );
-        }
-        await batch.commit();
-      }
-      const existingItems = await database.collection(`companies/${input.companyId}/contextItems`)
-        .where("source.connectionId", "==", input.connectionId)
-        .where("source.resourceId", "==", resource.id)
+  return {
+    ...base,
+    repositories: resources.size,
+    issues: resources.docs.reduce((sum, resource) => sum + Number(resource.data().itemCount || 0), 0),
+  };
+}
+
+async function executeGitHubSyncRun(
+  input: GitHubSyncInput & { runId: string },
+): Promise<GitHubSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const completed = await executeConnectorSyncRun({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    runId: input.runId,
+    capabilityId: githubIssueCapabilityId,
+    serviceId: "issues",
+    prepare: () => prepareGitHubSync({ ...input, database }),
+    listResources: async ({ connection }) => {
+      const snapshot = await connection.ref.collection("resources")
+        .where("capabilityId", "==", githubIssueCapabilityId)
+        .where("status", "==", "enabled")
         .get();
-      const staleItems = existingItems.docs.filter((item) => !observedContextIds.has(item.id));
-      for (let offset = 0; offset < staleItems.length; offset += 400) {
-        const batch = database.batch();
-        for (const item of staleItems.slice(offset, offset + 400)) batch.delete(item.ref);
-        await batch.commit();
-      }
-      issueCount += issues.length;
-      await resource.ref.set({
-        itemCount: issues.length,
-        lastObservedAt: observedAt,
-        updatedAt: observedAt,
-      }, { merge: true });
-    }
-    await connectionRef.set({
-      status: "active",
-      stats: {
-        itemCount: issueCount,
-        lastSyncAt: observedAt,
-        lastObservedAt: observedAt,
-        lastError: null,
-      },
-      updatedAt: observedAt,
-    }, { merge: true });
-    await connectionRef.collection("capabilities").doc("issues").set({
-      status: "active",
-      stats: {
-        itemCount: issueCount,
-        lastSyncAt: observedAt,
-        lastObservedAt: observedAt,
-        lastError: null,
-      },
-      updatedAt: observedAt,
-    }, { merge: true });
-    return { repositories: resources.size, issues: issueCount };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await connectionRef.set({
-      status: "attention",
-      stats: { lastError: message.slice(0, 1000) },
-      updatedAt: FieldValue.serverTimestamp(),
-    }, { merge: true });
-    throw error;
+      return snapshot.docs.map((resource) => ({ id: resource.id, data: resource.data() }));
+    },
+    cursorMode: () => "full",
+    synchronizeResource: ({ preparation, resource, lease, dependencies: runDependencies }) => (
+      syncGitHubRepositoryResource({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        preparation,
+        resource,
+        lease,
+        dependencies: runDependencies,
+        fetcher: input.fetcher,
+      })
+    ),
+  }, dependencies);
+  return githubSyncResult(completed, { ...input, database });
+}
+
+export async function syncGitHubConnection(input: GitHubSyncInput): Promise<GitHubSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const connection = connectionDocument(input.companyId, input.connectionId, database);
+  const resources = await connection.collection("resources")
+    .where("capabilityId", "==", githubIssueCapabilityId)
+    .where("status", "==", "enabled")
+    .get();
+  const selectedResourceIds = input.resourceIds?.filter(
+    (resourceId) => resources.docs.some((resource) => resource.id === resourceId),
+  ) || resources.docs.map((resource) => resource.id);
+  const created = await createConnectorSyncRun({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    capabilityId: githubIssueCapabilityId,
+    serviceId: "issues",
+    trigger: input.trigger || "manual",
+    requestedBy: input.requestedBy,
+    resourceIds: selectedResourceIds,
+    replayOfRunId: input.replayOfRunId,
+  }, dependencies);
+  if (!created.created || created.deferred) {
+    const current = await connection.collection("syncRuns").doc(created.runId).get();
+    return githubSyncResult(
+      connectorSyncRunResultFromData(created.runId, current.data() || {}),
+      { ...input, database },
+    );
   }
+  return executeGitHubSyncRun({ ...input, runId: created.runId, database });
 }
 
 export async function syncAllGitHubConnections(input: {
   configuration: GitHubAppConfiguration;
   fetcher?: FetchLike;
   database?: FirebaseFirestore.Firestore;
+  now?: () => Timestamp;
 }): Promise<Array<{ companyId: string; connectionId: string; ok: boolean; error?: string }>> {
   const database = input.database || db;
   const companies = await database.collection("companies").get();
@@ -801,15 +947,25 @@ export async function syncAllGitHubConnections(input: {
       .where("status", "in", ["active", "attention"])
       .get();
     for (const connection of connections.docs) {
+      const capability = await connection.ref.collection("capabilities").doc("issues").get();
+      if (!capability.exists || capability.data()?.status !== "active") continue;
       try {
-        await syncGitHubConnection({
+        const run = await syncGitHubConnection({
           companyId: company.id,
           connectionId: connection.id,
           configuration: input.configuration,
           fetcher: input.fetcher,
           database,
+          trigger: "scheduled",
+          requestedBy: "scheduler:github",
+          now: input.now,
         });
-        results.push({ companyId: company.id, connectionId: connection.id, ok: true });
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: run.status !== "attention",
+          ...(run.status === "attention" ? { error: "GitHub synchronization needs attention" } : {}),
+        });
       } catch (error) {
         results.push({
           companyId: company.id,
@@ -819,6 +975,54 @@ export async function syncAllGitHubConnections(input: {
         });
       }
     }
+  }
+  return results;
+}
+
+export async function replayGitHubSyncRun(input: GitHubSyncInput & {
+  runId: string;
+  actorUid: string;
+}): Promise<GitHubSyncResult> {
+  const database = input.database || db;
+  const failedResourceIds = await replayableConnectorSyncResources({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    runId: input.runId,
+    capabilityId: githubIssueCapabilityId,
+    serviceId: "issues",
+  }, { database, now: input.now });
+  return syncGitHubConnection({
+    ...input,
+    trigger: "operator_replay",
+    requestedBy: input.actorUid,
+    replayOfRunId: input.runId,
+    resourceIds: failedResourceIds,
+  });
+}
+
+export async function retryDueGitHubSyncRuns(input: {
+  configuration: GitHubAppConfiguration;
+  fetcher?: FetchLike;
+  database?: FirebaseFirestore.Firestore;
+  limit?: number;
+  now?: () => Timestamp;
+}): Promise<Array<GitHubSyncResult & { companyId: string; connectionId: string }>> {
+  const database = input.database || db;
+  const dependencies = { database, now: input.now };
+  const due = await listDueConnectorSyncRuns({ serviceId: "issues", limit: input.limit }, dependencies);
+  const results: Array<GitHubSyncResult & { companyId: string; connectionId: string }> = [];
+  for (const run of due) {
+    const result = await executeGitHubSyncRun({
+      companyId: run.companyId,
+      connectionId: run.connectionId,
+      runId: run.runId,
+      configuration: input.configuration,
+      fetcher: input.fetcher,
+      database,
+      trigger: "retry",
+      now: input.now,
+    });
+    results.push({ companyId: run.companyId, connectionId: run.connectionId, ...result });
   }
   return results;
 }

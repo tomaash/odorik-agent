@@ -141,6 +141,128 @@ test("connector sync records one run, fenced resource attempt, and truthful aggr
   assert.equal(attempts[0]?.status, "succeeded");
 });
 
+test("a newly selected resource becomes one deferred successor while a run is active", async () => {
+  const context = fixture();
+  const secondResourceId = "calendar-b";
+  context.memory.seed(`${connectionPath}/resources/${secondResourceId}`, {
+    connectionId,
+    capabilityId,
+    resourceType: "calendar",
+    externalId: "secondary@example.com",
+    displayName: "Secondary",
+    status: "enabled",
+    itemCount: 0,
+  });
+  const active = await createAndClaim(context);
+  const deferred = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "selection",
+    resourceIds: [secondResourceId],
+  }, context.dependencies);
+  assert.equal(deferred.created, true);
+  assert.equal(deferred.deferred, true);
+  assert.notEqual(deferred.runId, active.runId);
+  const duplicateDeferred = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "manual",
+    resourceIds: [secondResourceId],
+  }, context.dependencies);
+  assert.equal(duplicateDeferred.runId, deferred.runId);
+  assert.equal(duplicateDeferred.created, false);
+  assert.equal(duplicateDeferred.deferred, true);
+  const blocked = await claimConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: deferred.runId,
+  }, context.dependencies);
+  assert.equal(blocked.claimed, false);
+
+  await completeConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: active.runId,
+    attempt: active.attempt,
+    results: [{ resourceId, status: "succeeded", changes: 0, itemCount: 0 }],
+  }, context.dependencies);
+  const claimedDeferred = await claimConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: deferred.runId,
+  }, context.dependencies);
+  assert.equal(claimedDeferred.claimed, true);
+  assert.deepEqual(claimedDeferred.data.resourceIds, [secondResourceId]);
+  const stats = context.memory.read(capabilityPath)?.stats as Record<string, unknown>;
+  assert.equal(stats.activeRunId, deferred.runId);
+  assert.equal(stats.pendingRunId, null);
+});
+
+test("a newly selected resource joins the failed set of a scheduled retry", async () => {
+  const context = fixture();
+  const secondResourceId = "calendar-b";
+  context.memory.seed(`${connectionPath}/resources/${secondResourceId}`, {
+    connectionId,
+    capabilityId,
+    resourceType: "calendar",
+    externalId: "secondary@example.com",
+    displayName: "Secondary",
+    status: "enabled",
+    itemCount: 0,
+  });
+  const active = await createAndClaim(context);
+  const acquired = await acquireConnectorSyncLease({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    resourceId,
+    runId: active.runId,
+    attempt: active.attempt,
+  }, context.dependencies);
+  const retryAt = connectorSyncRetryAt(active.attempt, context.now());
+  await failConnectorSyncResource({
+    companyId,
+    connectionId,
+    resourceId,
+    lease: acquired.lease!,
+    attemptRef: acquired.attemptRef,
+    error: new Error("Calendar API failed (503)"),
+    failureKind: "transient",
+    retryAt,
+  }, context.dependencies);
+  await completeConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: active.runId,
+    attempt: active.attempt,
+    results: [{
+      resourceId,
+      status: "retry_scheduled",
+      changes: 0,
+      failureKind: "transient",
+      error: "Calendar API failed (503)",
+    }],
+  }, context.dependencies);
+  const merged = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "selection",
+    resourceIds: [secondResourceId],
+  }, context.dependencies);
+  assert.deepEqual(merged, { runId: active.runId, created: false });
+  assert.deepEqual(
+    context.memory.read(`${connectionPath}/syncRuns/${active.runId}`)?.failedResourceIds,
+    [resourceId, secondResourceId],
+  );
+});
+
 test("transient synchronization failure schedules the same run and retry succeeds", async () => {
   const context = fixture();
   const { runId, attempt } = await createAndClaim(context);
@@ -268,7 +390,12 @@ test("disconnect wins against an in-flight synchronization commit", async () => 
     runId,
     attempt,
   }, context.dependencies);
-  await context.dependencies.database.doc(connectionPath).set({ status: "disconnected" }, { merge: true });
+  await context.dependencies.database.doc(connectionPath).set({
+    status: "disconnected",
+    syncGeneration: 1,
+  }, { merge: true });
+  // Even a quick reconnect cannot make the pre-disconnect lease current again.
+  await context.dependencies.database.doc(connectionPath).set({ status: "active" }, { merge: true });
   await assert.rejects(
     commitConnectorSyncWrites({
       companyId,
@@ -279,6 +406,29 @@ test("disconnect wins against an in-flight synchronization commit", async () => 
     }, context.dependencies),
     /connection is no longer active/,
   );
+});
+
+test("a queued run from before disconnect is skipped after reconnect", async () => {
+  const context = fixture();
+  const created = await createConnectorSyncRun({
+    companyId,
+    connectionId,
+    capabilityId,
+    serviceId: "calendar",
+    trigger: "manual",
+    resourceIds: [resourceId],
+  }, context.dependencies);
+  await context.dependencies.database.doc(connectionPath).set({
+    status: "active",
+    syncGeneration: 1,
+  }, { merge: true });
+  const claim = await claimConnectorSyncRun({
+    companyId,
+    connectionId,
+    runId: created.runId,
+  }, context.dependencies);
+  assert.equal(claim.claimed, false);
+  assert.equal(context.memory.read(`${connectionPath}/syncRuns/${created.runId}`)?.status, "skipped");
 });
 
 test("a permanent failure becomes attention immediately", async () => {

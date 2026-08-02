@@ -3,7 +3,10 @@ import { db, jsonSafe } from "../firestore.js";
 import { capabilityDescriptor, connectorCatalog } from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
 import { githubInstallationRoutingPath } from "./github.js";
-import { connectorSyncPublicState } from "./sync-runtime.js";
+import {
+  connectorSyncPublicState,
+  refreshConnectorSyncAggregates,
+} from "./sync-runtime.js";
 import {
   legacyOdorikConnectionId,
   odorikContextItem,
@@ -40,12 +43,13 @@ export function sourceResourcePublicView(
   fallbackCapabilityId: SourceCapabilityId = "context.call.read",
 ): ConnectionResourcePublicView {
   const safe = jsonSafe(data) as Record<string, unknown>;
+  const capabilityId = (
+    typeof safe.capabilityId === "string" ? safe.capabilityId : fallbackCapabilityId
+  ) as SourceCapabilityId;
   return {
     id,
     connectionId,
-    capabilityId: (
-      typeof safe.capabilityId === "string" ? safe.capabilityId : fallbackCapabilityId
-    ) as SourceCapabilityId,
+    capabilityId,
     resourceType: (safe.resourceType || "phone_line") as ConnectionResourcePublicView["resourceType"],
     externalId: String(safe.externalId || id),
     displayName: String(safe.displayName || safe.externalId || id),
@@ -55,6 +59,11 @@ export function sourceResourcePublicView(
     ...(safe.sync && typeof safe.sync === "object" ? {
       sync: connectorSyncPublicState(safe.sync, {
         fallbackObservedAt: safe.lastObservedAt,
+        ...([
+          "context.calendar.read",
+          "context.document.read",
+          "context.github.issue.read",
+        ].includes(capabilityId) ? { staleAfterMs: 75 * 60 * 1_000 } : {}),
       }) as ConnectionResourcePublicView["sync"],
     } : {}),
     createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
@@ -145,7 +154,11 @@ export async function listSources(
             ? capabilityStats.lastError
             : null,
           sync: connectorSyncPublicState(capabilityStats, {
-            ...(["context.calendar.read", "context.github.issue.read"].includes(capabilityId)
+            ...([
+              "context.calendar.read",
+              "context.document.read",
+              "context.github.issue.read",
+            ].includes(capabilityId)
               ? { staleAfterMs: 75 * 60 * 1_000 }
               : {}),
           }) as CapabilityConfigurationPublicView["sync"],
@@ -184,7 +197,11 @@ export async function listSources(
           ? stats.lastSyncAt
           : null,
       lastError: typeof stats.lastError === "string" ? stats.lastError : null,
-      sync: connectorSyncPublicState(stats) as ConnectionPublicView["sync"],
+      sync: connectorSyncPublicState(stats, {
+        ...(["google_workspace", "github"].includes(connectorId)
+          ? { staleAfterMs: 75 * 60 * 1_000 }
+          : {}),
+      }) as ConnectionPublicView["sync"],
       webhook: connectorId === "github" ? {
         status: ["active", "attention"].includes(String(webhook.status))
           ? webhook.status as "active" | "attention"
@@ -352,6 +369,7 @@ export async function setConnectionStatus(
   }
   await ref.set({
     status,
+    syncGeneration: Number(snapshot.data()?.syncGeneration || 0) + 1,
     updatedBy: actorUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -374,6 +392,7 @@ export async function prepareConnectionDeletion(
   }
   await ref.set({
     status: "disconnected",
+    syncGeneration: Number(data.syncGeneration || 0) + 1,
     deletionStartedBy: actorUid,
     deletionStartedAt: FieldValue.serverTimestamp(),
     updatedAt: FieldValue.serverTimestamp(),
@@ -489,6 +508,8 @@ export async function setResourceStatus(
   const batch = database.batch();
   batch.set(resourceRef, {
     status: input.enabled ? "enabled" : "disabled",
+    syncLease: null,
+    syncLeaseGeneration: Number(resource.data()?.syncLeaseGeneration || 0) + 1,
     updatedBy: input.actorUid,
     updatedAt: FieldValue.serverTimestamp(),
   }, { merge: true });
@@ -510,6 +531,16 @@ export async function setResourceStatus(
     );
   }
   await batch.commit();
+  const capabilityId = resource.data()?.capabilityId as SourceCapabilityId | undefined;
+  if (capabilityId) {
+    const descriptor = capabilityDescriptor(capabilityId);
+    await refreshConnectorSyncAggregates({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      capabilityId,
+      serviceId: descriptor.serviceId,
+    }, { database });
+  }
 }
 
 export async function setCapabilityStatus(
@@ -569,6 +600,8 @@ export async function setCapabilityStatus(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.set(resource.ref, {
       status: "disabled",
+      syncLease: null,
+      syncLeaseGeneration: Number(resource.data().syncLeaseGeneration || 0) + 1,
       // Disabling a whole subsystem deletes its materialized context. Any
       // incremental cursor is therefore no longer sufficient to rebuild it:
       // the next successful sync must start from a full provider snapshot.
@@ -581,6 +614,12 @@ export async function setCapabilityStatus(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.delete(context.ref)) : []),
   ], database);
+  await refreshConnectorSyncAggregates({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    capabilityId: input.capabilityId,
+    serviceId: descriptor.serviceId,
+  }, { database });
 }
 
 export type GoogleConnectorResetResult = {

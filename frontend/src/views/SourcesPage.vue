@@ -19,7 +19,7 @@ import {
   getGoogleDriveFolders,
   getOdorikSetup,
   listSources,
-  replayGoogleCalendarSync,
+  replaySourceSync,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
   setSourceCapabilityStatus,
@@ -245,6 +245,14 @@ function capabilityLatestRunId(
   descriptor: SourceCapabilityDescriptor,
 ) {
   return capabilityConfiguration(connection, descriptor)?.sync?.latestRunId || ''
+}
+
+function capabilitySyncOperationId(
+  connection: SourceConnection,
+  descriptor: SourceCapabilityDescriptor,
+) {
+  const operation = descriptor.serviceId === 'issues' ? 'github' : descriptor.serviceId
+  return `${connection.id}:${operation}`
 }
 
 function capabilityName(capabilityId: string) {
@@ -681,11 +689,15 @@ async function synchronizeCalendar(connection: SourceConnection) {
   }
 }
 
-async function replayCalendar(connection: SourceConnection, runId: string) {
-  synchronizingId.value = `${connection.id}:calendar`
+async function replaySync(
+  connection: SourceConnection,
+  descriptor: SourceCapabilityDescriptor,
+  runId: string,
+) {
+  synchronizingId.value = capabilitySyncOperationId(connection, descriptor)
   error.value = ''
   try {
-    await replayGoogleCalendarSync(connection.id, runId)
+    await replaySourceSync(connection.id, runId)
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -1675,16 +1687,6 @@ onUnmounted(() => {
                         @click="synchronizeCalendar(connection)"
                       />
                       <Button
-                        v-if="descriptor.id === 'context.calendar.read' && capabilityConfiguration(connection, descriptor)?.sync?.health === 'attention' && capabilityConfiguration(connection, descriptor)?.sync?.latestRunId"
-                        :label="t('sources.sync.replay')"
-                        icon="pi pi-replay"
-                        severity="warn"
-                        text
-                        size="small"
-                        :loading="synchronizingId === `${connection.id}:calendar`"
-                        @click="replayCalendar(connection, capabilityLatestRunId(connection, descriptor))"
-                      />
-                      <Button
                         v-if="descriptor.id === 'context.document.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
                         :label="t('sources.chooseFolders')"
                         icon="pi pi-list-check"
@@ -1712,6 +1714,16 @@ onUnmounted(() => {
                         size="small"
                         :loading="synchronizingId === `${connection.id}:github`"
                         @click="synchronizeGitHub(connection)"
+                      />
+                      <Button
+                        v-if="capabilityConfiguration(connection, descriptor)?.status === 'attention' && capabilityConfiguration(connection, descriptor)?.sync?.health === 'attention' && capabilityConfiguration(connection, descriptor)?.sync?.latestRunId"
+                        :label="t('sources.sync.replay')"
+                        icon="pi pi-replay"
+                        severity="warn"
+                        text
+                        size="small"
+                        :loading="synchronizingId === capabilitySyncOperationId(connection, descriptor)"
+                        @click="replaySync(connection, descriptor, capabilityLatestRunId(connection, descriptor))"
                       />
                       <Button
                         v-if="connection.connectorId === 'google_workspace' && capabilityConfiguration(connection, descriptor)?.status === 'reauthorization_required'"

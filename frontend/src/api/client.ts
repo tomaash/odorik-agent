@@ -1000,8 +1000,8 @@ export async function syncGoogleCalendars(connectionId: string) {
   return trpc.sources.googleCalendar.sync.mutate({ connectionId })
 }
 
-export async function replayGoogleCalendarSync(connectionId: string, runId: string) {
-  return trpc.sources.googleCalendar.replay.mutate({ connectionId, runId })
+export async function replaySourceSync(connectionId: string, runId: string) {
+  return trpc.sources.replaySync.mutate({ connectionId, runId })
 }
 
 export async function getGoogleDriveFolders(connectionId: string): Promise<SelectableFolder[]> {
