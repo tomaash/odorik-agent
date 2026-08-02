@@ -1133,11 +1133,20 @@ export async function reconcileCodingRun(runId: string): Promise<CodingRun> {
   return trpc.coding.reconcileRun.mutate({ runId }) as Promise<CodingRun>
 }
 
+export type CodingRetryResult = ActionApprovalItem & {
+  started?: boolean
+  codingRunId?: string | null
+  executionResult?: { codingRunId?: string; status?: string } | null
+}
+
 export async function requestCodingRetry(
   runId: string,
-  instructions: string,
-): Promise<ActionApprovalItem> {
-  return trpc.coding.retryRun.mutate({ runId, instructions }) as Promise<ActionApprovalItem>
+  instructions = '',
+): Promise<CodingRetryResult> {
+  return trpc.coding.retryRun.mutate({
+    runId,
+    ...(instructions.trim() ? { instructions: instructions.trim() } : {}),
+  }) as Promise<CodingRetryResult>
 }
 
 export async function requestCodingPullRequestChanges(

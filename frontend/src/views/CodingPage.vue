@@ -178,18 +178,29 @@ function openFollowUp(mode: 'retry' | 'pull_request_changes') {
 }
 
 async function requestFollowUp() {
-  if (!selectedRun.value || !followUpMode.value || !followUpInstructions.value.trim()) return
+  if (!selectedRun.value || !followUpMode.value) return
+  if (followUpMode.value !== 'retry' && !followUpInstructions.value.trim()) return
   workingId.value = selectedRun.value.id
   error.value = ''
   try {
     if (followUpMode.value === 'retry') {
-      await requestCodingRetry(selectedRun.value.id, followUpInstructions.value.trim())
-    } else {
-      await requestCodingPullRequestChanges(
+      const result = await requestCodingRetry(
         selectedRun.value.id,
         followUpInstructions.value.trim(),
       )
+      followUpMode.value = null
+      await load(true)
+      if (result.started && result.codingRunId) {
+        await selectRun(result.codingRunId)
+        return
+      }
+      await router.push({ path: '/tasks', query: { view: 'approvals' } })
+      return
     }
+    await requestCodingPullRequestChanges(
+      selectedRun.value.id,
+      followUpInstructions.value.trim(),
+    )
     followUpMode.value = null
     await router.push({ path: '/tasks', query: { view: 'approvals' } })
   } catch (cause) {
@@ -501,9 +512,9 @@ onUnmounted(() => {
       <div class="flex justify-end gap-2 mt-5">
         <Button :label="t('common.cancel')" severity="secondary" text @click="followUpMode = null" />
         <Button
-          :label="t('coding.requestApproval')"
+          :label="followUpMode === 'retry' ? t('coding.retryNow') : t('coding.requestApproval')"
           icon="pi pi-shield"
-          :disabled="!followUpInstructions.trim()"
+          :disabled="followUpMode !== 'retry' && !followUpInstructions.trim()"
           :loading="workingId === selectedRun?.id"
           @click="requestFollowUp"
         />

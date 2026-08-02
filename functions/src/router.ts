@@ -353,11 +353,11 @@ export const appRouter = router({
     retryRun: adminProcedure
       .input(z.object({
         runId: z.string().regex(/^coding_[a-f0-9]{32}$/),
-        instructions: z.string().trim().min(1).max(20_000),
+        instructions: z.string().trim().max(20_000).optional(),
       }))
       .mutation(async ({ ctx, input }) => {
         try {
-          return await requestCodingRetryApproval({
+          const approval = await requestCodingRetryApproval({
             companyId: ctx.companyId,
             actorUid: ctx.uid,
             preferredApproverUid: ctx.uid,
@@ -365,6 +365,39 @@ export const appRouter = router({
             instructions: input.instructions,
             configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
           });
+          // When the admin who requests the retry is the named approver, start
+          // immediately so operators are not bounced through Tasks for a second
+          // click on a re-run they already authorized.
+          if (
+            !approval.duplicate
+            && approval.decisionStatus === "pending"
+            && approval.approverUid === ctx.uid
+          ) {
+            const executed = await approveAction({
+              companyId: ctx.companyId,
+              actorUid: ctx.uid,
+              approvalId: String(approval.id),
+            }) as Record<string, unknown>;
+            const executionResult = (
+              executed.executionResult
+              && typeof executed.executionResult === "object"
+              ? executed.executionResult as { codingRunId?: string; status?: string }
+              : undefined
+            );
+            return {
+              ...approval,
+              decisionStatus: "approved",
+              status: "approved",
+              started: true,
+              codingRunId: executionResult?.codingRunId || null,
+              executionResult: executionResult || null,
+            };
+          }
+          return {
+            ...approval,
+            started: false,
+            codingRunId: null,
+          };
         } catch (error) {
           if (error instanceof CodingRunError) {
             throw new TRPCError({
