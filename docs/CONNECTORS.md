@@ -97,6 +97,15 @@ For each selection:
 6. Deselecting a calendar deletes its normalized context.
 7. A private scheduled function reconciles every 30 minutes.
 
+Calendar reconciliation creates a durable capability run with immutable
+per-resource attempts. A fenced lease prevents two workers from committing the
+same calendar concurrently. Transient failures retry after 1, 5, and 30
+minutes; exhausted or permanent failures become visible attention state and an
+administrator can replay the failed run from Sources. Run commits re-check the
+connection and resource lifecycle so an in-flight worker cannot revive a
+disabled, disconnected, or deleted source. Run and attempt history is retained
+for 90 days.
+
 Calendar events are visible to all members of their company. Do not connect a
 calendar that should be visible to only some team members until
 restricted member ACL filtering is implemented.
@@ -134,7 +143,10 @@ identity migration.
   API responses.
 - Firestore write triggers keep Qdrant synchronized after every normalized
   context write or deletion.
-- Adapter errors move a connection to `attention` and retain the last error.
+- Calendar exposes distinct syncing, retrying, stale, fresh, and attention
+  state with separate attempt, success, change-observed, and reconciliation
+  timestamps. Other adapters retain their legacy health behavior until their
+  C3 cutover.
 
 Google Auth Platform is currently in testing mode. Only listed test users may
 authorize Calendar, and refresh tokens expire after seven days. Complete OAuth

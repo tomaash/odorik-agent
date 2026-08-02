@@ -50,6 +50,7 @@ import {
 import { odorikDestinationUrl } from "./connectors/odorik.js";
 import {
   listGoogleCalendars,
+  replayGoogleCalendarSyncRun,
   selectGoogleCalendars,
   syncGoogleCalendarConnection,
 } from "./connectors/google-calendar.js";
@@ -489,6 +490,21 @@ export const appRouter = router({
         }))
         .mutation(({ ctx, input }) => syncGoogleCalendarConnection({
           companyId: ctx.companyId,
+          ...input,
+          trigger: "manual",
+          requestedBy: ctx.uid,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      replay: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          runId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ ctx, input }) => replayGoogleCalendarSyncRun({
+          companyId: ctx.companyId,
+          actorUid: ctx.uid,
           ...input,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),

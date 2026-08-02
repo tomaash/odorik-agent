@@ -15,6 +15,24 @@ export type CapabilityStatus =
   | "reauthorization_required"
   | "disabled";
 
+export type SyncOperationalPublicView = {
+  health:
+    | "never_synced"
+    | "syncing"
+    | "retrying"
+    | "fresh"
+    | "stale"
+    | "attention"
+    | "unmeasured";
+  latestRunId?: string | null;
+  lastAttemptAt?: string | null;
+  lastSuccessAt?: string | null;
+  lastChangeObservedAt?: string | null;
+  lastReconciledAt?: string | null;
+  nextRetryAt?: string | null;
+  lastError?: string | null;
+};
+
 export const sourceCapabilityIds = [
   "context.call.read",
   "context.calendar.read",
@@ -47,6 +65,7 @@ export type CapabilityConfigurationPublicView = {
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;
   lastError?: string | null;
+  sync?: SyncOperationalPublicView;
   createdAt?: string | null;
   updatedAt?: string | null;
 };
@@ -73,6 +92,7 @@ export type ConnectionPublicView = {
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;
   lastError?: string | null;
+  sync?: SyncOperationalPublicView;
   webhook?: {
     status: "pending" | "active" | "attention";
     lastDeliveryAt?: string | null;
@@ -117,6 +137,7 @@ export type ConnectionResourcePublicView = {
   status: ResourceStatus;
   itemCount: number;
   lastObservedAt?: string | null;
+  sync?: SyncOperationalPublicView;
   createdAt?: string | null;
   updatedAt?: string | null;
 };

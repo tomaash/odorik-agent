@@ -490,6 +490,17 @@ export type SourceConnector = {
   capabilities: SourceCapabilityDescriptor[]
 }
 
+export type SourceSyncState = {
+  health: 'never_synced' | 'syncing' | 'retrying' | 'fresh' | 'stale' | 'attention' | 'unmeasured'
+  latestRunId?: string | null
+  lastAttemptAt?: string | null
+  lastSuccessAt?: string | null
+  lastChangeObservedAt?: string | null
+  lastReconciledAt?: string | null
+  nextRetryAt?: string | null
+  lastError?: string | null
+}
+
 export type SourceCapability = {
   id: 'calls' | 'calendar' | 'drive' | 'issues'
   capabilityId: SourceCapabilityId
@@ -501,6 +512,7 @@ export type SourceCapability = {
   lastSyncAt?: string | null
   lastObservedAt?: string | null
   lastError?: string | null
+  sync?: SourceSyncState
 }
 
 export type SourceResource = {
@@ -513,6 +525,7 @@ export type SourceResource = {
   status: 'enabled' | 'disabled'
   itemCount: number
   lastObservedAt?: string | null
+  sync?: SourceSyncState
 }
 
 export type SourceConnection = {
@@ -532,6 +545,7 @@ export type SourceConnection = {
   lastSyncAt?: string | null
   lastObservedAt?: string | null
   lastError?: string | null
+  sync?: SourceSyncState
   reauthorizationRequired?: boolean
   itemCount: number
   resourceCount: number
@@ -984,6 +998,10 @@ export async function selectGoogleCalendars(connectionId: string, calendarIds: s
 
 export async function syncGoogleCalendars(connectionId: string) {
   return trpc.sources.googleCalendar.sync.mutate({ connectionId })
+}
+
+export async function replayGoogleCalendarSync(connectionId: string, runId: string) {
+  return trpc.sources.googleCalendar.replay.mutate({ connectionId, runId })
 }
 
 export async function getGoogleDriveFolders(connectionId: string): Promise<SelectableFolder[]> {

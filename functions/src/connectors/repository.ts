@@ -3,6 +3,7 @@ import { db, jsonSafe } from "../firestore.js";
 import { capabilityDescriptor, connectorCatalog } from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
 import { githubInstallationRoutingPath } from "./github.js";
+import { connectorSyncPublicState } from "./sync-runtime.js";
 import {
   legacyOdorikConnectionId,
   odorikContextItem,
@@ -51,6 +52,11 @@ export function sourceResourcePublicView(
     status: safe.status === "disabled" ? "disabled" : "enabled",
     itemCount: Number(safe.itemCount || 0),
     lastObservedAt: typeof safe.lastObservedAt === "string" ? safe.lastObservedAt : null,
+    ...(safe.sync && typeof safe.sync === "object" ? {
+      sync: connectorSyncPublicState(safe.sync, {
+        fallbackObservedAt: safe.lastObservedAt,
+      }) as ConnectionResourcePublicView["sync"],
+    } : {}),
     createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
     updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
   };
@@ -104,6 +110,7 @@ export async function listSources(
         lastSyncAt: typeof stats.lastSyncAt === "string" ? stats.lastSyncAt : null,
         lastObservedAt: typeof stats.lastObservedAt === "string" ? stats.lastObservedAt : null,
         lastError: typeof stats.lastError === "string" ? stats.lastError : null,
+        sync: connectorSyncPublicState(stats) as CapabilityConfigurationPublicView["sync"],
         createdAt: typeof data.createdAt === "string" ? data.createdAt : null,
         updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : null,
       }]
@@ -137,6 +144,11 @@ export async function listSources(
           lastError: typeof capabilityStats.lastError === "string"
             ? capabilityStats.lastError
             : null,
+          sync: connectorSyncPublicState(capabilityStats, {
+            ...(["context.calendar.read", "context.github.issue.read"].includes(capabilityId)
+              ? { staleAfterMs: 75 * 60 * 1_000 }
+              : {}),
+          }) as CapabilityConfigurationPublicView["sync"],
           createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
           updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
         };
@@ -172,6 +184,7 @@ export async function listSources(
           ? stats.lastSyncAt
           : null,
       lastError: typeof stats.lastError === "string" ? stats.lastError : null,
+      sync: connectorSyncPublicState(stats) as ConnectionPublicView["sync"],
       webhook: connectorId === "github" ? {
         status: ["active", "attention"].includes(String(webhook.status))
           ? webhook.status as "active" | "attention"

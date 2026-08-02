@@ -13,7 +13,10 @@ import {
   qdrantUrl,
 } from "./router.js";
 import { projectOdorikCallContext } from "./connectors/odorik.js";
-import { syncAllGoogleCalendarConnections } from "./connectors/google-calendar.js";
+import {
+  retryDueGoogleCalendarSyncRuns,
+  syncAllGoogleCalendarConnections,
+} from "./connectors/google-calendar.js";
 import {
   githubConfigurationFromEnvironment,
   syncAllGitHubConnections,
@@ -139,7 +142,35 @@ export const syncCalendarSources = onSchedule(
     const failures = results.filter((result) => !result.ok);
     if (failures.length) {
       console.error("One or more Google Calendar connections failed to synchronize", failures);
-      throw new Error(`${failures.length} Google Calendar connection(s) failed`);
+    }
+  },
+);
+
+export const recoverCalendarSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await retryDueGoogleCalendarSyncRuns({
+      clientId: googleConnectorClientId.value(),
+      clientSecret: googleConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more Calendar synchronization runs exhausted recovery", attention);
     }
   },
 );

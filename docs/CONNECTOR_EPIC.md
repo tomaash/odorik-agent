@@ -609,6 +609,16 @@ Exit criteria:
 **Usable outcome:** an administrator can distinguish fresh, stale, failed, and
 recovering sources and can safely replay a failed resource.
 
+**Implementation status (2026-08-02):** C3A is implemented in the repository
+and awaits test-production acceptance. Calendar manual, selection, scheduled,
+and recovery paths now share durable capability runs, distinct resource
+attempts, fenced resource leases, four bounded attempts (one initial attempt
+plus 1/5/30-minute backoff), stale-run recovery, truthful timestamps, and an
+operator replay action in Sources. The schema is additive and retains legacy
+sync fields as read fallbacks. C3 remains in progress: Drive and GitHub still
+need to adopt the runtime, and Firestore-to-Qdrant delivery/freshness remains a
+separate unfinished reliability plane.
+
 Build:
 
 - durable per-capability and per-resource sync runs with trigger, cursor,

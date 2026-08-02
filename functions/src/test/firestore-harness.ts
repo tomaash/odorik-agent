@@ -142,6 +142,15 @@ class MemoryQuery {
     );
   }
 
+  count(): { get(): Promise<{ data(): { count: number } }> } {
+    return {
+      get: async () => {
+        const snapshot = await this.get();
+        return { data: () => ({ count: snapshot.size }) };
+      },
+    };
+  }
+
   async get(): Promise<MemoryQuerySnapshot> {
     const values = this.database.entries()
       .filter(([path]) => isDirectDocument(this.collectionPath, path))

@@ -17,6 +17,33 @@
       ]
     },
     {
+      "collectionGroup": "syncRuns",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "serviceId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "queuedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "syncRuns",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "serviceId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "syncRuns",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "serviceId", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "executionLeaseExpiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "workItems",
       "queryScope": "COLLECTION",
       "fields": [
@@ -176,6 +203,18 @@
     },
     {
       "collectionGroup": "codingRunRoutes",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "syncRuns",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "resourceAttempts",
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": []

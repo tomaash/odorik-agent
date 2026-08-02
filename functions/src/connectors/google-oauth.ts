@@ -59,20 +59,28 @@ function isInvalidGrant(body: GoogleTokens): boolean {
   return body.error === "invalid_grant";
 }
 
-export function connectionRef(companyId: string, connectionId: string) {
-  return db.doc(companyDocumentPath(companyId, "connections", connectionId));
+export function connectionRef(
+  companyId: string,
+  connectionId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  return database.doc(companyDocumentPath(companyId, "connections", connectionId));
 }
 
-export function connectionCollection(companyId: string) {
-  return db.collection(companyCollectionPath(companyId, "connections"));
+export function connectionCollection(
+  companyId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  return database.collection(companyCollectionPath(companyId, "connections"));
 }
 
 export function capabilityConfigRef(
   companyId: string,
   connectionId: string,
   serviceId: CapabilityServiceId,
+  database: FirebaseFirestore.Firestore = db,
 ) {
-  return connectionRef(companyId, connectionId).collection("capabilities").doc(serviceId);
+  return connectionRef(companyId, connectionId, database).collection("capabilities").doc(serviceId);
 }
 
 export function googleWorkspaceConnectionId(providerAccountId: string): string {
@@ -414,6 +422,7 @@ export async function authorizedGoogleCapability(
     clientId: string;
     clientSecret: string;
     credentialKey: string;
+    database?: FirebaseFirestore.Firestore;
   },
 ): Promise<{
   accessToken: string;
@@ -422,8 +431,13 @@ export async function authorizedGoogleCapability(
 }> {
   const descriptor = capabilityDescriptor(capabilityId);
   const [connection, capability] = await Promise.all([
-    connectionRef(input.companyId, input.connectionId).get(),
-    capabilityConfigRef(input.companyId, input.connectionId, descriptor.serviceId).get(),
+    connectionRef(input.companyId, input.connectionId, input.database || db).get(),
+    capabilityConfigRef(
+      input.companyId,
+      input.connectionId,
+      descriptor.serviceId,
+      input.database || db,
+    ).get(),
   ]);
   const data = connection.data();
   const capabilityData = capability.data();
@@ -433,7 +447,7 @@ export async function authorizedGoogleCapability(
     || !["active", "attention"].includes(String(data?.status))
     || !capability.exists
     || capabilityData?.capabilityId !== capabilityId
-    || capabilityData?.status !== "active"
+    || !["active", "attention"].includes(String(capabilityData?.status))
     || typeof data.credentialCiphertext !== "string"
   ) {
     throw new Error(`Active ${descriptor.serviceId} capability not found`);

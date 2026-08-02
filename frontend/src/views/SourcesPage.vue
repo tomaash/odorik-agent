@@ -19,6 +19,7 @@ import {
   getGoogleDriveFolders,
   getOdorikSetup,
   listSources,
+  replayGoogleCalendarSync,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
   setSourceCapabilityStatus,
@@ -239,6 +240,13 @@ function capabilityResources(
   return connection.resources.filter((resource) => resource.capabilityId === capabilityId)
 }
 
+function capabilityLatestRunId(
+  connection: SourceConnection,
+  descriptor: SourceCapabilityDescriptor,
+) {
+  return capabilityConfiguration(connection, descriptor)?.sync?.latestRunId || ''
+}
+
 function capabilityName(capabilityId: string) {
   return t(`sources.capabilities.${capabilityId}.name`)
 }
@@ -257,6 +265,17 @@ function capabilityStatusLabel(status?: string) {
 function capabilityStatusSeverity(status?: string) {
   if (status === 'active') return 'success'
   if (status === 'attention' || status === 'reauthorization_required') return 'warn'
+  return 'secondary'
+}
+
+function syncHealthLabel(health?: string) {
+  return t(`sources.sync.health.${health || 'unmeasured'}`)
+}
+
+function syncHealthSeverity(health?: string) {
+  if (health === 'fresh') return 'success'
+  if (health === 'syncing' || health === 'retrying') return 'info'
+  if (health === 'stale' || health === 'attention') return 'warn'
   return 'secondary'
 }
 
@@ -654,6 +673,19 @@ async function synchronizeCalendar(connection: SourceConnection) {
   error.value = ''
   try {
     await syncGoogleCalendars(connection.id)
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    synchronizingId.value = ''
+  }
+}
+
+async function replayCalendar(connection: SourceConnection, runId: string) {
+  synchronizingId.value = `${connection.id}:calendar`
+  error.value = ''
+  try {
+    await replayGoogleCalendarSync(connection.id, runId)
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -1558,6 +1590,34 @@ onUnmounted(() => {
                         {{ formatDate(capabilityConfiguration(connection, descriptor)?.lastObservedAt) }}
                       </span>
                     </div>
+                    <div
+                      v-if="capabilityConfiguration(connection, descriptor)?.sync"
+                      class="mt-2 rounded-xl border border-surface-200 bg-surface-50 p-3 text-xs"
+                    >
+                      <div class="flex items-center justify-between gap-3">
+                        <span class="font-semibold text-surface-700">{{ t('sources.sync.title') }}</span>
+                        <Tag
+                          :value="syncHealthLabel(capabilityConfiguration(connection, descriptor)?.sync?.health)"
+                          :severity="syncHealthSeverity(capabilityConfiguration(connection, descriptor)?.sync?.health)"
+                          rounded
+                        />
+                      </div>
+                      <div class="mt-2 grid gap-1 text-surface-500 sm:grid-cols-2">
+                        <span>{{ t('sources.sync.lastAttempt') }}: <strong class="text-surface-700">{{ formatDate(capabilityConfiguration(connection, descriptor)?.sync?.lastAttemptAt) }}</strong></span>
+                        <span>{{ t('sources.sync.lastSuccess') }}: <strong class="text-surface-700">{{ formatDate(capabilityConfiguration(connection, descriptor)?.sync?.lastSuccessAt) }}</strong></span>
+                        <span v-if="capabilityConfiguration(connection, descriptor)?.sync?.nextRetryAt">
+                          {{ t('sources.sync.nextRetry') }}: <strong class="text-surface-700">{{ formatDate(capabilityConfiguration(connection, descriptor)?.sync?.nextRetryAt) }}</strong>
+                        </span>
+                      </div>
+                      <Message
+                        v-if="capabilityConfiguration(connection, descriptor)?.sync?.lastError"
+                        severity="warn"
+                        :closable="false"
+                        class="mt-2"
+                      >
+                        {{ capabilityConfiguration(connection, descriptor)?.sync?.lastError }}
+                      </Message>
+                    </div>
                     <details class="mt-2 rounded-xl bg-surface-50 px-3 py-2 text-xs text-surface-500">
                       <summary class="cursor-pointer font-semibold text-surface-700">{{ permissionDetailsLabel(connection) }}</summary>
                       <ul class="mb-0 mt-2 grid gap-1 pl-4">
@@ -1615,6 +1675,16 @@ onUnmounted(() => {
                         @click="synchronizeCalendar(connection)"
                       />
                       <Button
+                        v-if="descriptor.id === 'context.calendar.read' && capabilityConfiguration(connection, descriptor)?.sync?.health === 'attention' && capabilityConfiguration(connection, descriptor)?.sync?.latestRunId"
+                        :label="t('sources.sync.replay')"
+                        icon="pi pi-replay"
+                        severity="warn"
+                        text
+                        size="small"
+                        :loading="synchronizingId === `${connection.id}:calendar`"
+                        @click="replayCalendar(connection, capabilityLatestRunId(connection, descriptor))"
+                      />
+                      <Button
                         v-if="descriptor.id === 'context.document.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
                         :label="t('sources.chooseFolders')"
                         icon="pi pi-list-check"
@@ -1644,7 +1714,7 @@ onUnmounted(() => {
                         @click="synchronizeGitHub(connection)"
                       />
                       <Button
-                        v-if="connection.connectorId === 'google_workspace' && ['attention', 'reauthorization_required'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
+                        v-if="connection.connectorId === 'google_workspace' && capabilityConfiguration(connection, descriptor)?.status === 'reauthorization_required'"
                         :label="t('sources.workspace.grantPermission')"
                         icon="pi pi-refresh"
                         severity="warn"
