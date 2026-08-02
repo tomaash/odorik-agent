@@ -18,7 +18,7 @@ export const resendApiKey = defineSecret("RESEND_API_KEY");
 
 const invitationLifetimeMs = 7 * 24 * 60 * 60 * 1000;
 const maximumPendingInvitations = 20;
-const productionAppOrigin = "https://odorik-tx-260720-c58d.web.app";
+const productionAppOrigin = "https://app.agenterik.cz";
 
 function timestampMillis(value: unknown): number {
   if (value instanceof Timestamp) return value.toMillis();
@@ -72,16 +72,30 @@ async function sendInvitationEmail(input: {
       idempotencyKey: `team-invite/${input.companyId}/${input.invitationId}/${input.tokenVersion}`,
     });
     if (error) throw new Error(error.message);
+    console.info("[team-invite] Resend accepted message", {
+      companyId: input.companyId,
+      invitationId: input.invitationId,
+      email: input.email,
+      resendEmailId: data?.id || null,
+      invitationUrl,
+    });
     return {
       deliveryStatus: "sent",
       resendEmailId: data?.id || null,
       error: null,
     };
   } catch (error) {
+    const message = (error instanceof Error ? error.message : String(error)).slice(0, 500);
+    console.error("[team-invite] Resend delivery failed", {
+      companyId: input.companyId,
+      invitationId: input.invitationId,
+      email: input.email,
+      error: message,
+    });
     return {
       deliveryStatus: "failed",
       resendEmailId: null,
-      error: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+      error: message,
     };
   }
 }
