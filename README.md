@@ -69,7 +69,9 @@ The existing vertical slice remains useful as a proving ground:
 - Qdrant combines 1,536-dimensional `gemini-embedding-2` vectors with BM25.
   Dense vectors are stored once as `float16`, halving their raw storage
   relative to `float32` without maintaining a second quantized copy. A
-  Firestore write trigger keeps record chunks synchronized.
+  Firestore write trigger creates durable per-record deliveries with fenced
+  generations, bounded retry, stale-lease recovery, targeted replay, and
+  measured context-to-search freshness.
 - The mobile-first **Sources** screen separates provider adapters, configured
   account connections, and independently selectable resources.
 - Odorik is no longer a singleton integration: its legacy account is migrated
@@ -227,6 +229,12 @@ Connector deployments additionally use:
 - the exact hosted callback
   `https://odorik-tx-260720-c58d.web.app/oauth/google/callback`; and
 - a private `syncCalendarSources` scheduled function invoked every 30 minutes.
+
+Search-index recovery additionally deploys the private
+`recoverKnowledgeIndexDeliveries` schedule every five minutes. Deploy the
+`knowledgeIndexDeliveries` composite indexes and TTL configuration before
+relying on retry or stale-lease queries, then use the Sources backfill action
+once to queue records created before durable index delivery existed.
 
 The GitHub observe connector binds `GITHUB_APP_PRIVATE_KEY` to the authenticated
 API, webhook worker, and reconciliation worker. Upload or rotate the ignored

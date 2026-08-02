@@ -149,16 +149,24 @@ shared collection uses a tenant keyword index on that payload.
 Normal index freshness is event-driven. A retry-enabled Firestore
 `onDocumentWritten` trigger observes every direct company-data write in the
 named `odorik` database and selects the allowlisted record collections. It
-re-reads the current Firestore record, deletes every Qdrant chunk for that
-record identity, and upserts the newly generated chunks. Deleting a Firestore
-record removes its chunks. Re-reading the source makes retries idempotent and
-reduces damage from duplicate or out-of-order event delivery.
+first creates or advances one deterministic `knowledgeIndexDeliveries` record,
+then re-reads the current Firestore record, deletes every Qdrant chunk for that
+record identity, and upserts the newly generated chunks. Deleting or disabling
+a Firestore record removes its chunks. Re-reading the source makes retries
+idempotent and prevents duplicate or out-of-order events from restoring an old
+projection.
 
 The trigger is eventually consistent, not part of the originating Firestore
 transaction. A write can therefore be visible in Firestore briefly before its
-new embedding is searchable. Failed deliveries retry, but dead-letter state,
-freshness metrics, and an operator replay queue are still future durability
-work.
+new embedding is searchable. Delivery state has a generation-fenced 12-minute
+lease, four bounded attempts with 1/5/30-minute backoff, stale-lease recovery,
+terminal attention, and targeted administrator replay. Sources reports pending
+and attention counts plus measured p95 context-to-search delay. A one-time
+administrator backfill queues records that existed before durable delivery was
+deployed. Those historical deliveries are excluded from freshness samples
+because their original searchable time is unknowable; the next normal source
+write restores measurement for that record. Provider-to-Firestore health
+remains separate from this search delivery state.
 
 The Gen-2 Firestore trigger is delivered by Eventarc to a private Cloud Run
 service. Because this project uses the custom `odorik-crm` service account as

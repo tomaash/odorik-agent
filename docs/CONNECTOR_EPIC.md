@@ -609,8 +609,8 @@ Exit criteria:
 **Usable outcome:** an administrator can distinguish fresh, stale, failed, and
 recovering sources and can safely replay a failed resource.
 
-**Implementation status (2026-08-02):** C3A and C3B are implemented in the
-repository and await test-production acceptance. Calendar, Drive, and GitHub
+**Implementation status (2026-08-02):** C3A, C3B, and C3C are implemented in
+the repository and await test-production acceptance. Calendar, Drive, and GitHub
 manual, selection/enable, scheduled, and recovery paths now share durable
 capability runs, distinct resource attempts, fenced resource leases, four
 bounded attempts (one initial attempt plus 1/5/30-minute backoff), stale-run
@@ -618,9 +618,13 @@ recovery, truthful timestamps, and one provider-neutral operator replay action
 in Sources. Drive reconciles its current direct-child contract, and GitHub
 polling health remains separate from webhook delivery health. Concurrent sync
 requests coalesce without losing a newly selected resource. The schema is
-additive and retains legacy sync fields as read fallbacks. C3 remains in
-progress only for the separate Firestore-to-Qdrant delivery/freshness plane
-(C3C).
+additive and retains legacy sync fields as read fallbacks. The
+Firestore-to-Qdrant plane now records deterministic per-record deliveries,
+generation-fenced leases, bounded retry, stale-lease recovery, terminal
+attention, targeted replay, one-time existing-record backfill, and measured
+context-to-search p95. Provider reconciliation and search-index health remain
+separate. C3 remains in progress until its real-account and search-freshness
+acceptance evidence is recorded.
 
 Build:
 
@@ -1183,3 +1187,34 @@ YYYY-MM-DD — Slice
 - **Decision:** do not call C3 complete until C3B passes real Drive/GitHub
   acceptance and C3C makes Firestore-to-Qdrant delivery measurable and
   recoverable.
+
+### 2026-08-02 — C3C implementation checkpoint
+
+- **Implementation:** every allowlisted direct company-record write now
+  creates or advances one deterministic `knowledgeIndexDeliveries` document.
+  The existing `syncKnowledgeIndex` trigger keeps its deployed identity but
+  durably queues before attempting Gemini embedding and Qdrant delivery.
+  Workers always re-read Firestore, and a generation arriving during an active
+  attempt becomes a fenced successor rather than being silently absorbed.
+- **Recovery:** transient failures retry after 1, 5, and 30 minutes; permanent
+  or fourth-attempt failures enter attention. A private five-minute worker
+  reclaims due retries, queued work left by an interrupted trigger, and expired
+  leases. Administrators can replay only a tenant-owned attention delivery.
+  Successful deletion deliveries retain short-lived audit state and then use
+  Firestore TTL.
+- **Observability:** Sources has a separate search-index card with current
+  tracked/expected records, pending and attention counts, last success, p95
+  context-to-search delay, the oldest outstanding delivery, one-time backfill
+  for pre-C3C records, and targeted replay. Connector freshness never marks
+  Qdrant searchable and Qdrant outcomes never rewrite connector health.
+- **Verification:** eight delivery-runtime scenarios cover duplicate and old
+  events, existing-record backfill, transient recovery, bounded exhaustion,
+  permanent attention and replay, active-generation successors, stale-lease
+  fencing, deletion, recursive-trigger exclusion, and tenant-safe public
+  status. The full local suite passes 129 tests: 11 shared workflow, 110
+  Functions, and 8 frontend tests; production builds and index validation
+  pass.
+- **Decision:** deploy indexes and TTL configuration before Functions, queue
+  the existing-record backfill once, then complete real create/update/disable/
+  delete, retry/replay, scheduled recovery, and two-minute freshness
+  acceptance before marking C3 complete or starting C4.

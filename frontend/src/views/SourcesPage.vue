@@ -11,14 +11,17 @@ import Tag from 'primevue/tag'
 import { useAuthStore } from '../stores/auth'
 import {
   addOdorikConnection,
+  backfillKnowledgeIndexDeliveries,
   connectConfiguredGitHubInstallation,
   deleteSourceConnection,
   disconnectGrokSubscription,
+  getKnowledgeIndexStatus,
   getGrokSubscriptionAuthorization,
   getGoogleCalendars,
   getGoogleDriveFolders,
   getOdorikSetup,
   listSources,
+  replayKnowledgeIndexDelivery,
   replaySourceSync,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
@@ -38,11 +41,16 @@ import {
   type SelectableFolder,
   type SourcesResponse,
   type GrokAuthorization,
+  type KnowledgeIndexStatus,
 } from '../api/client'
 
 const { t, locale } = useI18n()
 const auth = useAuthStore()
 const data = ref<SourcesResponse | null>(null)
+const searchIndex = ref<KnowledgeIndexStatus | null>(null)
+const searchIndexError = ref('')
+const replayingIndexDeliveryId = ref('')
+const backfillingIndex = ref(false)
 const loading = ref(true)
 const saving = ref(false)
 const error = ref('')
@@ -142,6 +150,27 @@ function formatDate(value?: string | null) {
   if (!value) return t('sources.never')
   return new Intl.DateTimeFormat(locale.value, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
 }
+
+function formatIndexDuration(milliseconds?: number | null) {
+  if (milliseconds === null || milliseconds === undefined) return t('sources.searchIndex.unmeasured')
+  if (milliseconds < 60_000) {
+    return t('sources.searchIndex.seconds', { value: Math.max(1, Math.round(milliseconds / 1_000)) })
+  }
+  return t('sources.searchIndex.minutes', { value: Math.round(milliseconds / 60_000) })
+}
+
+function searchIndexHealthSeverity(health?: KnowledgeIndexStatus['health']) {
+  if (health === 'fresh') return 'success'
+  if (health === 'indexing' || health === 'retrying') return 'info'
+  if (health === 'attention') return 'warn'
+  return 'secondary'
+}
+
+const searchIndexPendingCount = computed(() => (
+  (searchIndex.value?.counts.queued || 0)
+  + (searchIndex.value?.counts.running || 0)
+  + (searchIndex.value?.counts.retrying || 0)
+))
 
 function connectorIcon(connector: SourceConnector) {
   return {
@@ -348,12 +377,48 @@ function webhookStatusSeverity(connection: SourceConnection) {
 async function load() {
   loading.value = true
   error.value = ''
+  searchIndexError.value = ''
   try {
-    data.value = await listSources()
+    const indexStatus = isAdmin.value
+      ? getKnowledgeIndexStatus().catch((cause) => {
+          searchIndexError.value = cause instanceof Error ? cause.message : String(cause)
+          return null
+        })
+      : Promise.resolve(null)
+    const [sources, index] = await Promise.all([listSources(), indexStatus])
+    data.value = sources
+    searchIndex.value = index
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
     loading.value = false
+  }
+}
+
+async function replayIndexDelivery(deliveryId: string) {
+  replayingIndexDeliveryId.value = deliveryId
+  searchIndexError.value = ''
+  try {
+    await replayKnowledgeIndexDelivery(deliveryId)
+    searchIndex.value = await getKnowledgeIndexStatus()
+  } catch (cause) {
+    searchIndexError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    replayingIndexDeliveryId.value = ''
+  }
+}
+
+async function backfillIndexDeliveries() {
+  backfillingIndex.value = true
+  searchIndexError.value = ''
+  try {
+    const result = await backfillKnowledgeIndexDeliveries()
+    notice.value = t('sources.searchIndex.backfillQueued', { count: result.queued })
+    searchIndex.value = await getKnowledgeIndexStatus()
+  } catch (cause) {
+    searchIndexError.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    backfillingIndex.value = false
   }
 }
 
@@ -1329,12 +1394,124 @@ onUnmounted(() => {
 
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
-    <div v-else class="grid gap-5 lg:grid-cols-2">
+    <template v-else>
       <Card
-        v-for="connector in data?.connectors"
-        :key="connector.id"
-        class="min-w-0 rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
+        v-if="isAdmin"
+        class="mb-5 min-w-0 rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
       >
+        <template #title>
+          <div class="min-w-0 flex items-start justify-between gap-3">
+            <div class="min-w-0 flex items-center gap-3">
+              <span class="w-10 h-10 rounded-md bg-indigo-50 text-indigo-700 flex items-center justify-center shrink-0">
+                <i class="pi pi-database text-lg" />
+              </span>
+              <div class="min-w-0">
+                <div>{{ t('sources.searchIndex.title') }}</div>
+                <div class="text-xs font-normal text-surface-400 mt-0.5">{{ t('sources.searchIndex.boundary') }}</div>
+              </div>
+            </div>
+            <Tag
+              v-if="searchIndex"
+              :value="t(`sources.searchIndex.health.${searchIndex.health}`)"
+              :severity="searchIndexHealthSeverity(searchIndex.health)"
+              rounded
+            />
+          </div>
+        </template>
+        <template #subtitle><span class="leading-relaxed">{{ t('sources.searchIndex.description') }}</span></template>
+        <template #content>
+          <Message v-if="searchIndexError" severity="warn" :closable="false">{{ searchIndexError }}</Message>
+          <div v-if="searchIndex" class="grid gap-3">
+            <div
+              v-if="searchIndex.untrackedRecords > 0"
+              class="flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <p class="m-0 text-sm leading-relaxed text-amber-950">
+                {{ t('sources.searchIndex.untracked', { count: searchIndex.untrackedRecords }) }}
+              </p>
+              <Button
+                :label="t('sources.searchIndex.backfill')"
+                icon="pi pi-database"
+                severity="warn"
+                size="small"
+                class="shrink-0"
+                :loading="backfillingIndex"
+                @click="backfillIndexDeliveries"
+              />
+            </div>
+            <div class="grid gap-2 sm:grid-cols-2 lg:grid-cols-5">
+              <div class="rounded-xl bg-surface-50 border border-surface-200 p-3">
+                <div class="text-xs text-surface-500">{{ t('sources.searchIndex.tracked') }}</div>
+                <div class="mt-1 text-xl font-semibold text-surface-900">{{ searchIndex.trackedRecords }} / {{ searchIndex.expectedRecords }}</div>
+              </div>
+              <div class="rounded-xl bg-surface-50 border border-surface-200 p-3">
+                <div class="text-xs text-surface-500">{{ t('sources.searchIndex.pending') }}</div>
+                <div class="mt-1 text-xl font-semibold text-surface-900">{{ searchIndexPendingCount }}</div>
+              </div>
+              <div class="rounded-xl bg-surface-50 border border-surface-200 p-3">
+                <div class="text-xs text-surface-500">{{ t('sources.searchIndex.attention') }}</div>
+                <div class="mt-1 text-xl font-semibold text-surface-900">{{ searchIndex.counts.attention }}</div>
+              </div>
+              <div class="rounded-xl bg-surface-50 border border-surface-200 p-3">
+                <div class="text-xs text-surface-500">{{ t('sources.searchIndex.lastSuccess') }}</div>
+                <div class="mt-1 text-sm font-semibold text-surface-900">{{ formatDate(searchIndex.lastSuccessAt) }}</div>
+              </div>
+              <div class="rounded-xl bg-surface-50 border border-surface-200 p-3">
+                <div class="text-xs text-surface-500">{{ t('sources.searchIndex.p95') }}</div>
+                <div class="mt-1 text-sm font-semibold text-surface-900">{{ formatIndexDuration(searchIndex.p95ContextToSearchMs) }}</div>
+              </div>
+            </div>
+
+            <Message
+              v-if="searchIndex.p95ContextToSearchMs !== null && searchIndex.p95ContextToSearchMs > searchIndex.targetMs"
+              severity="warn"
+              :closable="false"
+            >
+              {{ t('sources.searchIndex.targetMissed', { target: formatIndexDuration(searchIndex.targetMs) }) }}
+            </Message>
+            <p v-else class="m-0 text-xs leading-relaxed text-surface-500">
+              {{ t('sources.searchIndex.target', { target: formatIndexDuration(searchIndex.targetMs), count: searchIndex.freshnessSampleSize }) }}
+            </p>
+            <p v-if="searchIndex.oldestOutstandingAt" class="m-0 text-xs text-surface-500">
+              {{ t('sources.searchIndex.oldestOutstanding') }}:
+              <strong class="text-surface-700">{{ formatDate(searchIndex.oldestOutstandingAt) }}</strong>
+            </p>
+
+            <div v-if="searchIndex.attentionDeliveries.length" class="grid gap-2">
+              <div class="text-sm font-semibold text-surface-800">{{ t('sources.searchIndex.failedTitle') }}</div>
+              <div
+                v-for="delivery in searchIndex.attentionDeliveries"
+                :key="delivery.id"
+                class="min-w-0 flex flex-col gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-3 sm:flex-row sm:items-center sm:justify-between"
+              >
+                <div class="min-w-0">
+                  <div class="text-sm font-medium text-surface-900 break-all">{{ delivery.sourcePath }}</div>
+                  <div class="mt-1 text-xs text-amber-900 break-words">{{ delivery.lastError || t('sources.searchIndex.unknownError') }}</div>
+                  <div class="mt-1 text-xs text-surface-400">
+                    {{ t('sources.searchIndex.attempts', { count: delivery.attempt }) }} · {{ formatDate(delivery.lastAttemptAt) }}
+                  </div>
+                </div>
+                <Button
+                  :label="t('sources.searchIndex.replay')"
+                  icon="pi pi-replay"
+                  severity="warn"
+                  size="small"
+                  class="shrink-0"
+                  :loading="replayingIndexDeliveryId === delivery.id"
+                  @click="replayIndexDelivery(delivery.id)"
+                />
+              </div>
+            </div>
+          </div>
+        </template>
+      </Card>
+
+      <div class="grid gap-5 lg:grid-cols-2">
+        <Card
+          v-for="connector in data?.connectors"
+          :key="connector.id"
+          class="min-w-0 rounded-lg border border-surface-200 overflow-hidden [&_.p-card-body]:p-4 sm:[&_.p-card-body]:p-6"
+        >
         <template #title>
           <div class="min-w-0 flex items-start justify-between gap-3">
             <div class="min-w-0 flex items-center gap-3">
@@ -1789,7 +1966,8 @@ onUnmounted(() => {
             </article>
           </div>
         </template>
-      </Card>
-    </div>
+        </Card>
+      </div>
+    </template>
   </section>
 </template>

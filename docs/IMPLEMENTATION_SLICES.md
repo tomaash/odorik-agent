@@ -54,7 +54,9 @@ question
 - `gemini-embedding-2` dense retrieval at 1,536 dimensions.
 - A single Qdrant `float16` dense representation without a second quantized
   copy or rescoring path.
-- Retry-enabled per-record Qdrant synchronization after Firestore writes.
+- Durable per-record Qdrant delivery after Firestore writes, with generation
+  fencing, bounded retry, stale-lease recovery, terminal attention, targeted
+  replay, and measured context-to-search freshness.
 - Qdrant indexing endpoint restricted to application administrators.
 - Deterministic retrieval/unit evaluations plus optional live Gemini cases.
 - Existing Intake, Requests, and Contacts remain available.
@@ -62,8 +64,9 @@ question
 ### Known limits
 
 - The free Qdrant deployment is a single node without backup support.
-- Firestore-to-Qdrant synchronization is eventually consistent and does not
-  yet expose a dead-letter queue or freshness service-level metric.
+- Firestore-to-Qdrant synchronization is eventually consistent. Its delivery
+  queue and freshness metric are durable, but the two-minute target still
+  requires test-production acceptance under real embedding and Qdrant load.
 - Full reconciliation still deletes and rebuilds the target collection rather
   than building a shadow collection and switching an alias.
 - Firestore projections and Qdrant operations are company scoped. Per-member

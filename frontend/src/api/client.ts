@@ -577,6 +577,36 @@ export type SourcesResponse = {
   connections: SourceConnection[]
 }
 
+export type KnowledgeIndexStatus = {
+  health: 'unmeasured' | 'indexing' | 'retrying' | 'attention' | 'fresh'
+  expectedRecords: number
+  trackedRecords: number
+  untrackedRecords: number
+  counts: {
+    queued: number
+    running: number
+    retrying: number
+    attention: number
+    succeeded: number
+  }
+  oldestOutstandingAt: string | null
+  lastSuccessAt: string | null
+  p95ContextToSearchMs: number | null
+  freshnessSampleSize: number
+  freshnessSampleTruncated: boolean
+  targetMs: number
+  attentionDeliveries: Array<{
+    id: string
+    kind: string
+    recordId: string
+    sourcePath: string
+    attempt: number
+    lastError: string | null
+    lastAttemptAt: string | null
+    sourceCommittedAt: string | null
+  }>
+}
+
 export type GrokAuthorization = {
   sessionId: string
   action: 'connect' | 'disconnect'
@@ -927,6 +957,18 @@ export async function getWorkflowHealth() {
 
 export async function listSources(): Promise<SourcesResponse> {
   return trpc.sources.list.query() as Promise<SourcesResponse>
+}
+
+export async function getKnowledgeIndexStatus(): Promise<KnowledgeIndexStatus> {
+  return trpc.sources.indexStatus.query() as Promise<KnowledgeIndexStatus>
+}
+
+export async function backfillKnowledgeIndexDeliveries() {
+  return trpc.sources.backfillIndexDeliveries.mutate()
+}
+
+export async function replayKnowledgeIndexDelivery(deliveryId: string) {
+  return trpc.sources.replayIndexDelivery.mutate({ deliveryId })
 }
 
 export async function addOdorikConnection() {

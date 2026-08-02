@@ -16,6 +16,12 @@ import {
   qdrantFromEnvironment,
 } from "./agent/search.js";
 import { CompanyFactTools } from "./agent/tools.js";
+import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
+import {
+  enqueueKnowledgeIndexBackfill,
+  getKnowledgeIndexStatus,
+  replayKnowledgeIndexDelivery,
+} from "./knowledge-index-runtime.js";
 import type { WorkflowSpec } from "@agent-erik/workflow";
 import {
   createWorkflowDraft,
@@ -140,6 +146,13 @@ export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
 const executeGrokAuthJob = createCloudRunGrokAuthJobExecutor();
 const codingArtifacts = new GoogleCodingArtifactStore();
+
+function knowledgeIndexDependencies() {
+  return createKnowledgeIndexDependencies({
+    database: db,
+    geminiApiKey: geminiApiKey.value(),
+  });
+}
 
 async function getAccess(uid: string) {
   return registrationStatus(uid);
@@ -440,6 +453,32 @@ export const appRouter = router({
 
   sources: router({
     list: enabledProcedure.query(({ ctx }) => listSources(ctx.companyId)),
+    indexStatus: adminProcedure.query(({ ctx }) => getKnowledgeIndexStatus(ctx.companyId, db)),
+    backfillIndexDeliveries: adminProcedure.mutation(({ ctx }) => (
+      enqueueKnowledgeIndexBackfill({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+      }, knowledgeIndexDependencies())
+    )),
+    replayIndexDelivery: adminProcedure
+      .input(z.object({
+        deliveryId: z.string().regex(/^idx_[a-f0-9]{64}$/),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        try {
+          return await replayKnowledgeIndexDelivery({
+            companyId: ctx.companyId,
+            deliveryId: input.deliveryId,
+            actorUid: ctx.uid,
+          }, knowledgeIndexDependencies());
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new TRPCError({
+            code: message === "Knowledge-index delivery not found" ? "NOT_FOUND" : "BAD_REQUEST",
+            message,
+          });
+        }
+      }),
     googleWorkspace: router({
       authorizationUrl: adminProcedure
         .input(z.object({
