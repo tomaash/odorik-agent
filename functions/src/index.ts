@@ -1,8 +1,14 @@
 import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { api } from "./api.js";
+import { db } from "./firestore.js";
 import { projectCallContact, shouldProcessCallUpdate } from "./calls.js";
-import { synchronizeKnowledgeRecord } from "./sync-qdrant.js";
+import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
+import {
+  enqueueKnowledgeIndexDelivery,
+  executeKnowledgeIndexDelivery,
+  recoverDueKnowledgeIndexDeliveries,
+} from "./knowledge-index-runtime.js";
 import {
   connectorCredentialKey,
   geminiApiKey,
@@ -46,6 +52,13 @@ export { codingAuthCallback } from "./coding-auth-callback.js";
 export { api };
 
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
+
+function knowledgeIndexDependencies() {
+  return createKnowledgeIndexDependencies({
+    database: db,
+    geminiApiKey: geminiApiKey.value(),
+  });
+}
 
 export const processCallWorkflows = onDocumentUpdated(
   {
@@ -93,12 +106,44 @@ export const syncKnowledgeIndex = onDocumentWritten(
     secrets: [geminiApiKey, qdrantApiKey, qdrantUrl],
   },
   async (event) => {
-    await synchronizeKnowledgeRecord({
+    const after = event.data?.after;
+    const before = event.data?.before;
+    const queued = await enqueueKnowledgeIndexDelivery({
       collection: event.params.collectionId,
       recordId: event.params.documentId,
       companyId: event.params.companyId,
-      geminiApiKey: geminiApiKey.value(),
-    });
+      eventId: event.id,
+      sourceCommittedAt: event.time,
+      sourceExists: Boolean(after?.exists),
+      sourceData: after?.data() || before?.data(),
+    }, knowledgeIndexDependencies());
+    if (queued.deliveryId) {
+      await executeKnowledgeIndexDelivery({
+        companyId: event.params.companyId,
+        deliveryId: queued.deliveryId,
+      }, knowledgeIndexDependencies());
+    }
+  },
+);
+
+export const recoverKnowledgeIndexDeliveries = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [geminiApiKey, qdrantApiKey, qdrantUrl],
+  },
+  async () => {
+    const results = await recoverDueKnowledgeIndexDeliveries(knowledgeIndexDependencies());
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more knowledge-index deliveries need attention", attention);
+    }
   },
 );
 

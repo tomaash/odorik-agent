@@ -44,6 +44,55 @@
       ]
     },
     {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "nextAttemptAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "executionLeaseExpiresAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "lastAttemptAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "lastSuccessAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "freshnessEligible", "order": "ASCENDING" },
+        { "fieldPath": "lastSuccessAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "queuedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "workItems",
       "queryScope": "COLLECTION",
       "fields": [
@@ -215,6 +264,12 @@
     },
     {
       "collectionGroup": "resourceAttempts",
+      "fieldPath": "expiresAt",
+      "ttl": true,
+      "indexes": []
+    },
+    {
+      "collectionGroup": "knowledgeIndexDeliveries",
       "fieldPath": "expiresAt",
       "ttl": true,
       "indexes": []

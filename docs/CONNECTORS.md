@@ -33,6 +33,7 @@ companies/{companyId}
     syncRuns/{runId}
       resourceAttempts/{attemptId}
   contextItems/{contextItemId}
+  knowledgeIndexDeliveries/{deliveryId}
 
 oauthStates/{stateHash}
 ```
@@ -165,12 +166,20 @@ event.
   provider.
 - Refresh tokens and Basic-auth passwords never enter model prompts or browser
   API responses.
-- Firestore write triggers attempt Qdrant synchronization after every
-  normalized context write or deletion. Firestore remains authoritative;
-  durable delivery state and measured context-to-search freshness remain C3C.
+- Firestore write triggers create one deterministic durable Qdrant delivery
+  state per indexed record. The worker re-reads authoritative Firestore,
+  applies an idempotent record upsert or deletion, and records the generation,
+  attempt, outcome, point count, and context-to-search delay. Transient
+  failures retry after 1, 5, and 30 minutes; permanent or exhausted failures
+  become administrator-visible attention state with targeted replay. A
+  five-minute recovery worker reclaims stale leases. Existing records can be
+  queued once from Sources when durable tracking is first deployed.
 - Calendar, Drive, and GitHub expose distinct syncing, retrying, stale, fresh,
   and attention state with separate attempt, success, change-observed, and
   reconciliation timestamps.
+- Connector health confirms provider-to-Firestore reconciliation. The separate
+  search-index card confirms Firestore-to-Qdrant delivery; neither one is
+  allowed to overwrite or stand in for the other.
 
 Google Auth Platform is currently in testing mode. Only listed test users may
 authorize Calendar, and refresh tokens expire after seven days. Complete OAuth
