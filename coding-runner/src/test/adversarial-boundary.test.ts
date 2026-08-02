@@ -59,13 +59,19 @@ test("Grok receives no supervisor credential, signed URL, callback, or cloud ide
   }
 });
 
-test("adversarial issue text cannot weaken strict sandbox or request permissions", () => {
+test("adversarial issue text cannot disable workspace sandbox or hard deny rules", () => {
   const args = grokArguments(spec, "/workspace/runs/run/repo", "/workspace/runs/run/input/task.md");
   const rendered = args.join(" ");
-  assert.match(rendered, /--sandbox strict/);
-  assert.match(rendered, /--permission-mode dontAsk/);
+  assert.match(rendered, /--sandbox workspace/);
+  assert.match(rendered, /--always-approve/);
   assert.match(rendered, /--disable-web-search/);
+  assert.match(rendered, /Bash\(git push\*/);
+  assert.match(rendered, /Bash\(gh \*/);
   assert.match(rendered, /cloud metadata/);
   assert.doesNotMatch(rendered, /X-Goog-Signature|upload-secret|source-secret|patch-secret/);
-  assert.doesNotMatch(rendered, /Bash\(curl|Bash\(wget|Bash\(cat \/|Bash\(env/);
+  assert.doesNotMatch(rendered, /--permission-mode dontAsk|--sandbox strict/);
+});
+
+test("Grok environment pins the workspace sandbox profile", () => {
+  assert.equal(grokEnvironment().GROK_SANDBOX, "workspace");
 });

@@ -5,11 +5,14 @@ auto_update = false
 disable_api_key_auth = true
 
 [sandbox]
-profile = "strict"
+# Workspace: write confined to CWD / temp / Grok home; public internet allowed
+# for child processes (package installs, language toolchains).
+profile = "workspace"
 
 [ui]
-# Grok 0.2.117 implements the documented legacy lock without a config warning.
-yolo = false
+# Allow always-approve / --yolo so the headless agent is not blocked by a
+# narrow Bash allowlist. Deny rules below still apply.
+yolo = true
 
 [permission]
 rules = [
