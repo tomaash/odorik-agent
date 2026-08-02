@@ -73,17 +73,7 @@ async function sendInvitationEmail(input: {
       from: "Agent Erik <hello@agenterik.cz>",
       to: input.email,
       subject: `${input.inviterName} invited you to ${input.teamName}`,
-      // Keep HTML a thin wrapper around the same plain copy so clients that
-      // prefer HTML still look like a short personal note, not a template.
       text: plainText,
-      html: plainText
-        .split("\n")
-        .map((line) => (
-          line === invitationUrl
-            ? `<a href="${escapeHtml(invitationUrl)}">${escapeHtml(invitationUrl)}</a>`
-            : escapeHtml(line)
-        ))
-        .join("<br>\n"),
     }, {
       idempotencyKey: `team-invite/${input.companyId}/${input.invitationId}/${input.tokenVersion}`,
     });
@@ -116,14 +106,6 @@ async function sendInvitationEmail(input: {
   }
 }
 
-function escapeHtml(value: string): string {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
 
 async function issueInvitation(input: {
   companyId: string;
