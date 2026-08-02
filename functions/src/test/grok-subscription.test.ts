@@ -163,7 +163,7 @@ test("Grok disconnect disables runtime use through the worker state machine", as
       type: "completed",
       action: "disconnect",
       sessionId: started.sessionId,
-      disabledVersions: 1,
+      destroyedVersions: 1,
     },
     database: memory.asFirestore(),
     now: afterCompletion,

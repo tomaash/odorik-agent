@@ -336,7 +336,11 @@ export async function refreshGrokAuthDocument(input: {
   };
 }
 
-export async function disableOtherGrokSecretVersions(input: {
+// Superseded sessions are destroyed, not disabled. A disabled version is
+// already unreadable, so keeping it buys no rollback, but Secret Manager bills
+// every version that is not DESTROYED. Disabled versions are swept up here too,
+// which heals rotations performed before this became a destroy.
+export async function destroyOtherGrokSecretVersions(input: {
   projectId: string;
   secretName: string;
   keepVersion?: string;
@@ -352,7 +356,7 @@ export async function disableOtherGrokSecretVersions(input: {
   if (input.keepVersion && !keepVersionId) {
     throw new Error("Unsafe Grok secret version to keep");
   }
-  let disabled = 0;
+  let destroyed = 0;
   let pageToken: string | null = null;
   do {
     const query = new URLSearchParams({ pageSize: "100" });
@@ -367,23 +371,24 @@ export async function disableOtherGrokSecretVersions(input: {
     for (const value of versions) {
       const version = objectValue(value);
       const name = boundedString(version?.name, 1_000);
-      if (version?.state !== "ENABLED" || !name) continue;
+      if (!name) continue;
+      if (version?.state !== "ENABLED" && version?.state !== "DISABLED") continue;
       const versionId = secretVersionId(name, input.secretName);
       if (!versionId) {
         throw new Error("Secret Manager returned an unexpected version");
       }
       if (versionId === keepVersionId) continue;
       await secretManagerRequest(
-        `${parent}/versions/${versionId}:disable`,
+        `${parent}/versions/${versionId}:destroy`,
         input.accessToken,
         { method: "POST", body: "{}" },
         fetcher,
       );
-      disabled += 1;
+      destroyed += 1;
     }
     pageToken = boundedString(result.nextPageToken, 2_000);
   } while (pageToken);
-  return disabled;
+  return destroyed;
 }
 
 export async function postAuthCallback(input: {

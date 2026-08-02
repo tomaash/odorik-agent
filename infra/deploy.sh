@@ -11,13 +11,43 @@ source infra/project.env
 
 IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REPOSITORY/app:$(date -u +%Y%m%d%H%M%S)"
 
+# Every active secret version is billed monthly, so only add a version when the
+# value actually changed, and destroy the superseded ones. Disabling is not
+# enough: disabled versions stay billable until they are destroyed.
 upsert_secret() {
   local name="$1"
   local value="$2"
   if ! gcloud secrets describe "$name" --project="$PROJECT_ID" >/dev/null 2>&1; then
     gcloud secrets create "$name" --replication-policy=automatic --project="$PROJECT_ID"
+  else
+    local current
+    current="$(gcloud secrets versions access latest --secret="$name" --project="$PROJECT_ID" 2>/dev/null || true)"
+    if [[ "$current" == "$value" ]]; then
+      echo "$name unchanged; keeping the current version."
+      return 0
+    fi
   fi
-  printf '%s' "$value" | gcloud secrets versions add "$name" --data-file=- --project="$PROJECT_ID" >/dev/null
+  local new_version
+  new_version="$(printf '%s' "$value" | gcloud secrets versions add "$name" \
+    --data-file=- --format='value(name)' --project="$PROJECT_ID")"
+  destroy_superseded_versions "$name" "$new_version"
+}
+
+destroy_superseded_versions() {
+  local name="$1"
+  local keep="$2"
+  local version
+  while IFS= read -r version; do
+    [[ -n "$version" && "$version" != "$keep" ]] || continue
+    gcloud secrets versions destroy "$version" \
+      --secret="$name" \
+      --quiet \
+      --project="$PROJECT_ID" >/dev/null
+    echo "Destroyed superseded $name version $version."
+  done < <(gcloud secrets versions list "$name" \
+    --filter='state!=DESTROYED' \
+    --format='value(name)' \
+    --project="$PROJECT_ID")
 }
 
 upsert_secret dashboard-token "$DASHBOARD_TOKEN"

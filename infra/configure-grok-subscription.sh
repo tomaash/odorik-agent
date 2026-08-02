@@ -45,16 +45,20 @@ NEW_VERSION="$(gcloud secrets versions add grok-subscription-auth \
   --format='value(name)' \
   --project="$PROJECT_ID")"
 
+# Superseded sessions are destroyed rather than disabled. A disabled version is
+# already unreadable, so it buys no rollback, but it stays billable as an active
+# secret version until it is destroyed.
 while IFS= read -r version; do
   if [[ -n "$version" && "$version" != "$NEW_VERSION" ]]; then
-    gcloud secrets versions disable "$version" \
+    gcloud secrets versions destroy "$version" \
       --secret=grok-subscription-auth \
+      --quiet \
       --project="$PROJECT_ID" >/dev/null
   fi
 done < <(gcloud secrets versions list grok-subscription-auth \
-  --filter='state=ENABLED' \
+  --filter='state!=DESTROYED' \
   --format='value(name)' \
   --project="$PROJECT_ID")
 
 echo "Grok subscription session stored as a new Secret Manager version."
-echo "The previous enabled versions were disabled. Use Sources for future reconnects."
+echo "The previous versions were destroyed. Use Sources for future reconnects."
