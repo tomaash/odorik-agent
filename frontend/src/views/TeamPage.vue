@@ -73,9 +73,15 @@ async function invite() {
 async function resend(invitationId: string) {
   busy.value = `resend:${invitationId}`
   error.value = ''
+  notice.value = ''
   try {
-    await resendTeamMemberInvitation(invitationId)
-    notice.value = t('team.invitationSent')
+    const invitation = await resendTeamMemberInvitation(invitationId)
+    notice.value = invitation.deliveryStatus === 'sent'
+      ? t('team.invitationSent')
+      : t('team.invitationCreatedButFailed')
+    if (invitation.deliveryStatus !== 'sent' && invitation.deliveryError) {
+      error.value = String(invitation.deliveryError)
+    }
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -218,6 +224,10 @@ onMounted(load)
                 </div>
                 <div v-if="invitation.deliveryStatus === 'failed'" class="text-sm text-red-600 mt-1">
                   {{ $t('team.deliveryFailed') }}
+                  <span v-if="invitation.deliveryError"> — {{ invitation.deliveryError }}</span>
+                </div>
+                <div v-else-if="invitation.deliveryStatus === 'sent'" class="text-sm text-surface-500 mt-1">
+                  {{ $t('team.deliveryAccepted') }}
                 </div>
               </div>
               <div class="flex gap-2">
