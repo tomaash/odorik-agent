@@ -3,6 +3,11 @@ import { TRPCError } from "@trpc/server";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
+import {
+  accessForSourceRecord,
+  canMemberAccessSourceData,
+  type ResourceAudience,
+} from "../access.js";
 
 export type PipelineStage = {
   id: string;
@@ -265,9 +270,12 @@ export async function pipelineStage(
   return selected;
 }
 
-async function caseContact(companyId: string, contactId: string) {
+async function caseContact(companyId: string, contactId: string, memberUid?: string) {
   const snapshot = await db.doc(companyDocumentPath(companyId, "contacts", contactId)).get();
-  if (!snapshot.exists) throw new TRPCError({ code: "BAD_REQUEST", message: "Contact not found." });
+  if (
+    !snapshot.exists
+    || (memberUid && !canMemberAccessSourceData(snapshot.data(), memberUid))
+  ) throw new TRPCError({ code: "BAD_REQUEST", message: "Contact not found." });
   return {
     id: snapshot.id,
     displayName: clean(
@@ -275,11 +283,13 @@ async function caseContact(companyId: string, contactId: string) {
       200,
     ),
     phone: clean(String(snapshot.data()?.phoneE164 || snapshot.data()?.phoneRaw || ""), 100),
+    access: accessForSourceRecord("contact", snapshot.data() || {}),
   };
 }
 
 export async function listCases(input: {
   companyId: string;
+  memberUid?: string;
   contactId?: string;
   limit?: number;
   includeArchived?: boolean;
@@ -291,6 +301,7 @@ export async function listCases(input: {
   return jsonSafe(snapshot.docs
     .filter((document) => (
       (input.includeArchived || document.data().archived !== true)
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
       && (!input.contactId || document.data().contactId === input.contactId)
     ))
     .map((document) => ({ id: document.id, ...document.data() })));
@@ -299,6 +310,7 @@ export async function listCases(input: {
 export async function getCaseDetails(input: {
   companyId: string;
   caseId: string;
+  memberUid?: string;
 }) {
   const caseRef = db.doc(companyDocumentPath(input.companyId, "cases", input.caseId));
   const caseSnapshot = await caseRef.get();
@@ -306,6 +318,9 @@ export async function getCaseDetails(input: {
     throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
   }
   const caseData = caseSnapshot.data() || {};
+  if (input.memberUid && !canMemberAccessSourceData(caseData, input.memberUid)) {
+    throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+  }
   const contactId = String(caseData.contactId || "");
   if (!contactId) {
     throw new TRPCError({
@@ -353,7 +368,10 @@ export async function getCaseDetails(input: {
   ]);
 
   const tasks = taskSnapshot.docs
-    .filter((document) => document.data().objectType === "task")
+    .filter((document) => (
+      document.data().objectType === "task"
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
+    ))
     .map((document) => ({ id: document.id, ...document.data() }) as RawRecord)
     .sort((left, right) => (
       (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
@@ -373,7 +391,10 @@ export async function getCaseDetails(input: {
     ].map((document) => [document.id, document] as const),
   );
   const approvals = [...approvalById.values()]
-    .filter((document) => document.data().objectType === "action_approval")
+    .filter((document) => (
+      document.data().objectType === "action_approval"
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
+    ))
     .map((document) => ({ id: document.id, ...document.data() }) as RawRecord)
     .sort((left, right) => (
       (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
@@ -399,7 +420,10 @@ export async function getCaseDetails(input: {
       )))
     : [];
   const calls = callSnapshots
-    .filter((snapshot) => snapshot.exists)
+    .filter((snapshot) => (
+      snapshot.exists
+      && (!input.memberUid || canMemberAccessSourceData(snapshot.data(), input.memberUid))
+    ))
     .map((snapshot) => ({ id: snapshot.id, ...snapshot.data()! }) as RawRecord)
     .sort((left, right) => {
       const leftAt = left.odorikTime
@@ -426,9 +450,11 @@ export async function getCaseDetails(input: {
         { id: document.id, ...document.data() } as RawRecord,
       ] as const),
   );
-  const activity = [...activityById.values()].sort((left, right) => (
-    (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
-  ));
+  const activity = [...activityById.values()]
+    .filter((record) => !input.memberUid || canMemberAccessSourceData(record, input.memberUid))
+    .sort((left, right) => (
+      (right.createdAt?.toMillis?.() || 0) - (left.createdAt?.toMillis?.() || 0)
+    ));
 
   return jsonSafe({
     case: { id: caseSnapshot.id, ...caseData },
@@ -458,6 +484,7 @@ export async function createCase(input: {
   source?: CaseSource;
   callId?: string | null;
   deterministicId?: string;
+  access?: ResourceAudience;
 }) {
   const title = clean(input.title, 300);
   if (!title) throw new TRPCError({ code: "BAD_REQUEST", message: "Case title is required." });
@@ -465,17 +492,21 @@ export async function createCase(input: {
   const selectedStageId = input.stageId || pipeline.initialStageId;
   const [selectedStage, selectedContact, owner] = await Promise.all([
     pipelineStage(input.companyId, selectedStageId),
-    caseContact(input.companyId, input.contactId),
+    caseContact(input.companyId, input.contactId, input.actorUid),
     activeMember(input.companyId, input.ownerUid),
   ]);
   const caseRef = input.deterministicId
     ? db.doc(companyDocumentPath(input.companyId, "cases", input.deterministicId))
     : db.collection(companyCollectionPath(input.companyId, "cases")).doc();
   const activityRef = db.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
+  const access = input.access || selectedContact.access;
 
   return db.runTransaction(async (transaction) => {
     const existing = await transaction.get(caseRef);
     if (existing.exists) {
+      if (!canMemberAccessSourceData(existing.data(), input.actorUid)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+      }
       return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
     }
     const now = Timestamp.now();
@@ -508,6 +539,7 @@ export async function createCase(input: {
       revision: 0,
       source,
       authorization,
+      access,
       callId: input.callId || null,
       createdBy: input.actorUid,
       createdAt: now,
@@ -521,6 +553,7 @@ export async function createCase(input: {
       aggregateId: caseRef.id,
       caseId: caseRef.id,
       type: "case_created",
+      access,
       actor: { kind: "user", id: input.actorUid },
       after: {
         title,
@@ -564,6 +597,9 @@ export async function moveCase(input: {
       throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
     }
     const data = snapshot.data() || {};
+    if (!canMemberAccessSourceData(data, input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+    }
     if (movementSnapshot?.exists) {
       return jsonSafe({
         id: snapshot.id,
@@ -631,6 +667,7 @@ export async function moveCase(input: {
       aggregateId: input.caseId,
       caseId: input.caseId,
       type: "case_stage_changed",
+      access: data.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { stageId: currentStageId, revision },
       after: {
@@ -686,6 +723,9 @@ export async function archiveCase(input: {
     if (!snapshot.exists) {
       throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
     }
+    if (!canMemberAccessSourceData(snapshot.data(), input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Case not found." });
+    }
     if (snapshot.data()?.archived === true) {
       return { id: input.caseId, archived: true as const, duplicate: true };
     }
@@ -731,6 +771,7 @@ export async function archiveCase(input: {
       aggregateId: input.caseId,
       caseId: input.caseId,
       type: "case_archived",
+      access: snapshot.data()?.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { archived: false },
       after: { archived: true },

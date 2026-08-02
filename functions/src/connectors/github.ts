@@ -2,6 +2,7 @@ import { createSign } from "node:crypto";
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
+import { companyAudience, normalizeResourceAudience } from "../access.js";
 import {
   commitConnectorSyncWrites,
   connectorSyncRunResultFromData,
@@ -300,6 +301,8 @@ export function githubIssueContextItem(input: {
   issue: GitHubIssue;
   comments: GitHubComment[];
   observedAt?: Timestamp;
+  audience?: unknown;
+  audienceRevision?: number;
 }): Record<string, unknown> {
   const labels = labelNames(input.issue.labels);
   const participants = new Set<string>();
@@ -341,7 +344,8 @@ export function githubIssueContextItem(input: {
     observedAt: input.observedAt || Timestamp.now(),
     artifactRefs: [input.issue.html_url],
     participantRefs: [...participants],
-    access: { visibility: "company" },
+    access: normalizeResourceAudience(input.audience),
+    accessRevision: Math.max(1, Number(input.audienceRevision || 1)),
     metadata: {
       sourceUrl: input.issue.html_url,
       repository: input.repository.full_name,
@@ -510,6 +514,7 @@ export async function connectGitHubInstallation(input: {
       // New repositories are never imported until an Erik admin enables them.
       status: existing?.data().status === "enabled" ? "enabled" : "disabled",
       itemCount: Number(existing?.data().itemCount || 0),
+      ...(existing ? {} : { audience: companyAudience, audienceRevision: 1 }),
       createdAt: existing?.data().createdAt || now,
       updatedAt: now,
     }, { merge: true });
@@ -785,6 +790,8 @@ async function syncGitHubRepositoryResource(input: {
       issue: entry.issue,
       comments: entry.comments,
       observedAt,
+      audience: input.resource.data.audience,
+      audienceRevision: Number(input.resource.data.audienceRevision || 1),
     });
     const existing = existingById.get(contextId)?.data();
     const sameChecksum = githubNestedRecord(existing?.provenance).checksum

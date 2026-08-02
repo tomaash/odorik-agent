@@ -59,7 +59,7 @@ companies/{companyId}
   connections/{connectionId}
     resources/{resourceId}
   contextItems/{contextItemId}
-  threads/{threadId}
+  agentThreads/{memberThreadDocumentId}
     messages/{messageId}
   workflows/{workflowId}
     versions/{versionId}
@@ -139,10 +139,14 @@ transcript—references its parent item rather than replacing it.
 
 ### Thread and Message
 
-A thread is the durable conversational workspace for one objective. Messages
-distinguish `human`, `agent`, and `system` authors and can reference context
-items, workflow runs, proposals, and decisions. A message can request agent
-work but cannot masquerade as an approval.
+A thread is a private durable conversational workspace owned by one company
+member. Its physical ID is derived from authenticated member ID plus logical
+thread ID; thread lists also filter by `ownerUid`. This prevents two members
+using the same logical name such as `general` from sharing history. Members can
+create and switch among their own chats. Messages distinguish `human`, `agent`,
+and `system` authors and can reference context items, workflow runs, proposals,
+and decisions. A message can request agent work but cannot masquerade as an
+approval.
 
 ### Workflow and WorkflowVersion
 

@@ -1,6 +1,7 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
+import { normalizeResourceAudience } from "../access.js";
 
 export const legacyOdorikConnectionId = "odorik-primary";
 
@@ -103,7 +104,8 @@ export function odorikContextItem(
     observedAt: call.processedAt || call.uploadedAt || Timestamp.now(),
     artifactRefs: call.objectName ? [String(call.objectName)] : [],
     participantRefs: [from, to].filter(Boolean),
-    access: { visibility: "company" },
+    access: normalizeResourceAudience(call.access),
+    accessRevision: Math.max(1, Number(call.accessRevision || 1)),
     metadata: {
       from: from || null,
       to: to || null,

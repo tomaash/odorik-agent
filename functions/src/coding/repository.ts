@@ -7,6 +7,7 @@ import { codingObjectRoot } from "./artifacts.js";
 import { actionEffectDigest } from "../actions/contracts.js";
 import type { ApprovedActionExecutionContext } from "../actions/registry.js";
 import type { CodingIssueImplementAction } from "./action.js";
+import { canMemberAccessSourceData } from "../access.js";
 
 const retentionMs = 7 * 24 * 60 * 60 * 1000;
 const runPattern = /^coding_[a-f0-9]{32}$/;
@@ -29,6 +30,7 @@ function publicRun(id: string, data: Record<string, unknown>): Record<string, un
 
 export async function listCodingIssues(input: {
   companyId: string;
+  memberUid?: string;
   database?: FirebaseFirestore.Firestore;
 }): Promise<Record<string, unknown>[]> {
   const database = input.database || db;
@@ -55,7 +57,10 @@ export async function listCodingIssues(input: {
     ) pendingByIssue.set(data.action.github.issueContextItemId, approval.id);
   }
   return items.docs
-    .filter((document) => document.data().metadata?.state === "open")
+    .filter((document) => (
+      document.data().metadata?.state === "open"
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
+    ))
     .map((document) => {
       const data = jsonSafe(document.data()) as Record<string, unknown>;
       const metadata = data.metadata as Record<string, unknown> || {};
@@ -80,18 +85,24 @@ export async function listCodingIssues(input: {
 
 export async function listCodingRuns(input: {
   companyId: string;
+  memberUid?: string;
   database?: FirebaseFirestore.Firestore;
 }): Promise<Record<string, unknown>[]> {
   const snapshot = await (input.database || db)
     .collection(`companies/${input.companyId}/codingRuns`)
     .orderBy("createdAt", "desc")
     .get();
-  return snapshot.docs.slice(0, 100).map((document) => publicRun(document.id, document.data()));
+  return snapshot.docs
+    .filter((document) => !input.memberUid
+      || canMemberAccessSourceData(document.data(), input.memberUid))
+    .slice(0, 100)
+    .map((document) => publicRun(document.id, document.data()));
 }
 
 export async function getCodingRun(input: {
   companyId: string;
   runId: string;
+  memberUid?: string;
   database?: FirebaseFirestore.Firestore;
 }): Promise<Record<string, unknown>> {
   const database = input.database || db;
@@ -101,6 +112,9 @@ export async function getCodingRun(input: {
     ref.collection("events").orderBy("createdAt", "asc").get(),
   ]);
   if (!snapshot.exists) throw new CodingRunError("Coding run not found", 404);
+  if (input.memberUid && !canMemberAccessSourceData(snapshot.data(), input.memberUid)) {
+    throw new CodingRunError("Coding run not found", 404);
+  }
   return {
     ...publicRun(snapshot.id, snapshot.data() || {}),
     events: events.docs.map((event) => ({ id: event.id, ...jsonSafe(event.data()) as object })),
@@ -250,6 +264,7 @@ export async function createCodingRunFromApprovedAction(input: {
         approvedBy: input.context.approvedBy,
         effectDigest,
       },
+      access: input.context.access || { visibility: "company" },
       github: {
         connectionId: action.github.connectionId,
         repoResourceId: action.github.repoResourceId,

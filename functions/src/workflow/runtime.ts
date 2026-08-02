@@ -15,6 +15,11 @@ import { requestWorkflowActionApproval } from "../approvals/repository.js";
 import { getPipeline } from "../pipeline/repository.js";
 import type { WorkflowAction } from "../actions/contracts.js";
 import { enabledWorkflows, workflowVersion } from "./repository.js";
+import {
+  canMemberAccessSourceData,
+  normalizeResourceAudience,
+  type ResourceAudience,
+} from "../access.js";
 
 type CallRecord = {
   status?: string;
@@ -27,6 +32,8 @@ type CallRecord = {
   segments?: Array<{ speaker?: string; text?: string; startSeconds?: number }>;
   uploadedAt?: unknown;
   processedAt?: unknown;
+  access?: ResourceAudience;
+  indexingEnabled?: boolean;
 };
 
 type ResolvedCall = {
@@ -49,6 +56,7 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
   const callSnapshot = await db.doc(companyDocumentPath(companyId, "calls", callId)).get();
   if (!callSnapshot.exists) throw new Error(`Call ${callId} not found.`);
   const call = callSnapshot.data() as CallRecord;
+  if (call.indexingEnabled === false) throw new Error(`Call ${callId} is disabled.`);
   if (call.status !== "completed") throw new Error(`Call ${callId} is not completed.`);
   let contactSnapshot: FirebaseFirestore.DocumentSnapshot | null = null;
   if (call.contactId) {
@@ -189,6 +197,7 @@ export async function runWorkflowOnCall(input: {
   now?: Date;
 }) {
   const resolved = await resolveCall(input.companyId, input.callId);
+  const access = normalizeResourceAudience(resolved.call.access);
   const now = input.now || new Date();
   const preview = previewWorkflow(input.workflow.spec, resolved.context, now);
   const key = `${input.companyId}:${input.workflow.id}:${input.workflow.version}:${input.callId}`;
@@ -230,6 +239,7 @@ export async function runWorkflowOnCall(input: {
           runId,
           blockId: actionPreview.blockId,
         },
+        access,
       }) as Record<string, unknown>;
       approvalResults.push({
         approvalId,
@@ -278,6 +288,7 @@ export async function runWorkflowOnCall(input: {
     schemaVersion: 4,
     trigger: "event.call.transcribed",
     contextId: input.callId,
+    access,
     status,
     approvalId: approvalResults[0]?.approvalId || null,
     approvalIds: approvalResults.map((approval) => approval.approvalId),
@@ -321,6 +332,7 @@ export async function runEnabledWorkflowsForCall(input: {
 
 export async function dryRunHistory(input: {
   companyId: string;
+  memberUid?: string;
   workflowId: string;
   spec?: WorkflowSpec;
   limit: number;
@@ -334,6 +346,7 @@ export async function dryRunHistory(input: {
     .get();
   const results = [];
   for (const call of calls.docs) {
+    if (input.memberUid && !canMemberAccessSourceData(call.data(), input.memberUid)) continue;
     try {
       const resolved = await resolveCall(input.companyId, call.id);
       const preview = previewWorkflow(workflow.spec, resolved.context);
@@ -374,7 +387,7 @@ export function workflowRuntimeFlags(environment = process.env) {
   };
 }
 
-export async function workflowHealth(companyId: string) {
+export async function workflowHealth(companyId: string, memberUid?: string) {
   const [calls, runs, workflows] = await Promise.all([
     db.collection(companyCollectionPath(companyId, "calls"))
       .orderBy("uploadedAt", "desc")
@@ -388,12 +401,14 @@ export async function workflowHealth(companyId: string) {
   ]);
   const now = Date.now();
   const recentCalls = calls.docs.filter((document) => {
+    if (memberUid && !canMemberAccessSourceData(document.data(), memberUid)) return false;
     const at = document.data().processedAt?.toMillis?.()
       || document.data().uploadedAt?.toMillis?.()
       || Date.parse(String(document.data().odorikTime || ""));
     return Number.isFinite(at) && at > now - 24 * 60 * 60 * 1000;
   }).length;
   const recentRuns = runs.docs.filter((document) => {
+    if (memberUid && !canMemberAccessSourceData(document.data(), memberUid)) return false;
     const at = document.data().createdAt?.toMillis?.() || 0;
     return at > now - 24 * 60 * 60 * 1000;
   });

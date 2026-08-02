@@ -19,6 +19,7 @@ import {
   getGrokSubscriptionAuthorization,
   getGoogleCalendars,
   getGoogleDriveFolders,
+  getTeamOverview,
   getOdorikSetup,
   listSources,
   replayKnowledgeIndexDelivery,
@@ -28,6 +29,7 @@ import {
   setSourceCapabilityStatus,
   setSourceConnectionStatus,
   setSourceResourceEnabled,
+  setSourceResourceAudience,
   startGoogleWorkspaceAuthorization,
   startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
@@ -37,11 +39,13 @@ import {
   type SourceCapabilityId,
   type SourceConnector,
   type SourceConnection,
+  type SourceResource,
   type SelectableCalendar,
   type SelectableFolder,
   type SourcesResponse,
   type GrokAuthorization,
   type KnowledgeIndexStatus,
+  type TeamMember,
 } from '../api/client'
 
 const { t, locale } = useI18n()
@@ -85,6 +89,35 @@ const grokDialogVisible = ref(false)
 const grokPendingAction = ref<'connect' | 'disconnect' | null>(null)
 let grokPollTimer: number | null = null
 const isAdmin = computed(() => auth.access?.admin === true)
+const teamMembers = ref<TeamMember[]>([])
+const audienceConnection = ref<SourceConnection | null>(null)
+const audienceResource = ref<SourceResource | null>(null)
+const audienceVisibility = ref<'company' | 'restricted'>('company')
+const audienceMemberIds = ref<string[]>([])
+const audienceSaving = ref(false)
+const audienceBroadeningConfirmed = ref(false)
+const audienceDialogVisible = computed({
+  get: () => audienceResource.value !== null,
+  set: (visible: boolean) => {
+    if (!visible && !audienceSaving.value) {
+      audienceConnection.value = null
+      audienceResource.value = null
+    }
+  },
+})
+const proposedAudience = computed<SourceResource['audience']>(() => (
+  audienceVisibility.value === 'company'
+    ? { visibility: 'company' }
+    : { visibility: 'restricted', memberIds: [...audienceMemberIds.value].sort() }
+))
+const audienceIsBroader = computed(() => {
+  const current = audienceResource.value?.audience
+  const next = proposedAudience.value
+  if (!current || current.visibility === 'company') return false
+  if (next.visibility === 'company') return true
+  const currentIds = new Set(current.memberIds)
+  return next.memberIds.some((memberId) => !currentIds.has(memberId))
+})
 // Every choice that belongs to a source card opens as a modal over that card.
 // Nothing configuration-related renders alongside or above the card grid.
 const drivePickerVisible = computed({
@@ -253,6 +286,64 @@ function resourceName(resource: { externalId: string; displayName: string }) {
     : resource.displayName
 }
 
+function audienceLabel(resource: SourceResource) {
+  return resource.audience.visibility === 'company'
+    ? t('sources.audience.company')
+    : t('sources.audience.selectedCount', { count: resource.audience.memberIds.length })
+}
+
+function openAudienceEditor(connection: SourceConnection, resource: SourceResource) {
+  audienceConnection.value = connection
+  audienceResource.value = resource
+  audienceVisibility.value = resource.audience.visibility
+  audienceMemberIds.value = resource.audience.visibility === 'restricted'
+    ? [...resource.audience.memberIds]
+    : []
+  audienceBroadeningConfirmed.value = false
+}
+
+function toggleAudienceMember(uid: string) {
+  audienceMemberIds.value = audienceMemberIds.value.includes(uid)
+    ? audienceMemberIds.value.filter((memberId) => memberId !== uid)
+    : [...audienceMemberIds.value, uid]
+  audienceBroadeningConfirmed.value = false
+}
+
+function chooseAudienceVisibility(visibility: 'company' | 'restricted') {
+  audienceVisibility.value = visibility
+  audienceBroadeningConfirmed.value = false
+}
+
+async function saveAudience() {
+  const connection = audienceConnection.value
+  const resource = audienceResource.value
+  if (!connection || !resource) return
+  if (proposedAudience.value.visibility === 'restricted' && proposedAudience.value.memberIds.length === 0) return
+  if (audienceIsBroader.value && !audienceBroadeningConfirmed.value) {
+    audienceBroadeningConfirmed.value = true
+    return
+  }
+  audienceSaving.value = true
+  error.value = ''
+  try {
+    await setSourceResourceAudience({
+      connectionId: connection.id,
+      resourceId: resource.id,
+      audience: proposedAudience.value,
+      expectedRevision: resource.audienceRevision,
+      confirmBroadening: audienceBroadeningConfirmed.value,
+    })
+    audienceConnection.value = null
+    audienceResource.value = null
+    notice.value = t('sources.audience.saved')
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    audienceSaving.value = false
+  }
+}
+
 function capabilityConfiguration(
   connection: SourceConnection,
   descriptor: SourceCapabilityDescriptor,
@@ -385,9 +476,11 @@ async function load() {
           return null
         })
       : Promise.resolve(null)
-    const [sources, index] = await Promise.all([listSources(), indexStatus])
+    const team = isAdmin.value ? getTeamOverview() : Promise.resolve(null)
+    const [sources, index, overview] = await Promise.all([listSources(), indexStatus, team])
     data.value = sources
     searchIndex.value = index
+    teamMembers.value = overview?.members || []
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -950,6 +1043,94 @@ onUnmounted(() => {
     <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
     <Message v-if="notice" severity="success" :closable="true" class="mb-4" @close="notice = ''">{{ notice }}</Message>
     <Message v-if="!isAdmin" severity="info" :closable="false" class="mb-4">{{ t('sources.adminOnly') }}</Message>
+
+    <Dialog
+      v-model:visible="audienceDialogVisible"
+      modal
+      blockScroll
+      :draggable="false"
+      :header="t('sources.audience.title')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(36rem,calc(100vw-4rem))] my-auto"
+      contentClass="!p-0"
+    >
+      <form v-if="audienceResource" @submit.prevent="saveAudience">
+        <div class="grid gap-4 px-4 py-5 sm:px-6">
+          <div>
+            <div class="font-semibold text-surface-900">{{ resourceName(audienceResource) }}</div>
+            <p class="m-0 mt-1 text-sm leading-relaxed text-surface-500">{{ t('sources.audience.description') }}</p>
+          </div>
+          <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-surface-200 p-3">
+            <input
+              type="radio"
+              name="resource-audience"
+              class="mt-1 h-4 w-4 accent-emerald-700"
+              :checked="audienceVisibility === 'company'"
+              @change="chooseAudienceVisibility('company')"
+            />
+            <span>
+              <span class="block font-semibold">{{ t('sources.audience.company') }}</span>
+              <span class="block text-sm text-surface-500">{{ t('sources.audience.companyDescription') }}</span>
+            </span>
+          </label>
+          <label class="flex cursor-pointer items-start gap-3 rounded-xl border border-surface-200 p-3">
+            <input
+              type="radio"
+              name="resource-audience"
+              class="mt-1 h-4 w-4 accent-emerald-700"
+              :checked="audienceVisibility === 'restricted'"
+              @change="chooseAudienceVisibility('restricted')"
+            />
+            <span>
+              <span class="block font-semibold">{{ t('sources.audience.selected') }}</span>
+              <span class="block text-sm text-surface-500">{{ t('sources.audience.selectedDescription') }}</span>
+            </span>
+          </label>
+          <div v-if="audienceVisibility === 'restricted'" class="grid max-h-64 gap-2 overflow-y-auto rounded-xl bg-surface-50 p-3">
+            <label
+              v-for="member in teamMembers"
+              :key="member.uid"
+              class="flex cursor-pointer items-center gap-3 rounded-lg bg-white px-3 py-2"
+            >
+              <input
+                type="checkbox"
+                class="h-4 w-4 accent-emerald-700"
+                :checked="audienceMemberIds.includes(member.uid)"
+                @change="toggleAudienceMember(member.uid)"
+              />
+              <span class="min-w-0">
+                <span class="block truncate text-sm font-semibold">{{ member.displayName }}</span>
+                <span class="block truncate text-xs text-surface-500">{{ member.email }}</span>
+              </span>
+            </label>
+            <Message v-if="audienceMemberIds.length === 0" severity="warn" :closable="false">
+              {{ t('sources.audience.chooseMember') }}
+            </Message>
+          </div>
+          <Message v-if="audienceBroadeningConfirmed" severity="warn" :closable="false">
+            {{ t('sources.audience.broadeningWarning') }}
+          </Message>
+          <Message severity="info" :closable="false">{{ t('sources.audience.reindexNotice') }}</Message>
+        </div>
+        <div class="flex flex-col-reverse gap-2 border-t border-surface-200 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+          <Button
+            :label="t('common.cancel')"
+            severity="secondary"
+            text
+            type="button"
+            :disabled="audienceSaving"
+            @click="audienceDialogVisible = false"
+          />
+          <Button
+            :label="audienceBroadeningConfirmed ? t('sources.audience.confirmBroader') : t('common.save')"
+            icon="pi pi-shield"
+            type="submit"
+            :severity="audienceBroadeningConfirmed ? 'warn' : undefined"
+            :loading="audienceSaving"
+            :disabled="audienceVisibility === 'restricted' && audienceMemberIds.length === 0"
+          />
+        </div>
+      </form>
+    </Dialog>
 
     <Dialog
       v-model:visible="grokDialogVisible"
@@ -1737,15 +1918,28 @@ onUnmounted(() => {
                         <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
                       </div>
                     </div>
-                    <Button
-                      v-if="isAdmin"
-                      :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
-                      :icon="resource.status === 'enabled' ? 'pi pi-minus-circle' : 'pi pi-check-circle'"
-                      severity="secondary"
-                      text
-                      size="small"
-                      @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
-                    />
+                    <div class="flex shrink-0 items-center gap-1">
+                      <Tag :value="audienceLabel(resource)" icon="pi pi-users" severity="secondary" rounded />
+                      <Button
+                        v-if="isAdmin"
+                        :aria-label="t('sources.audience.edit')"
+                        icon="pi pi-shield"
+                        severity="secondary"
+                        text
+                        rounded
+                        size="small"
+                        @click="openAudienceEditor(connection, resource)"
+                      />
+                      <Button
+                        v-if="isAdmin"
+                        :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
+                        :icon="resource.status === 'enabled' ? 'pi pi-minus-circle' : 'pi pi-check-circle'"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
+                      />
+                    </div>
                   </div>
                   <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">{{ emptyResourceMessage('context.call.read') }}</p>
                 </div>
@@ -1829,14 +2023,27 @@ onUnmounted(() => {
                           <div class="font-medium text-sm truncate">{{ resourceName(resource) }}</div>
                           <div class="text-xs text-surface-400">{{ resource.itemCount }} {{ t('sources.items') }}</div>
                         </div>
-                        <Button
-                          v-if="isAdmin"
-                          :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
-                          severity="secondary"
-                          text
-                          size="small"
-                          @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
-                        />
+                        <div class="flex shrink-0 items-center gap-1">
+                          <Tag :value="audienceLabel(resource)" icon="pi pi-users" severity="secondary" rounded />
+                          <Button
+                            v-if="isAdmin"
+                            :aria-label="t('sources.audience.edit')"
+                            icon="pi pi-shield"
+                            severity="secondary"
+                            text
+                            rounded
+                            size="small"
+                            @click="openAudienceEditor(connection, resource)"
+                          />
+                          <Button
+                            v-if="isAdmin"
+                            :label="resource.status === 'enabled' ? t('sources.pause') : t('sources.resume')"
+                            severity="secondary"
+                            text
+                            size="small"
+                            @click="toggleResource(connection, resource.id, resource.status !== 'enabled')"
+                          />
+                        </div>
                       </div>
                       <p v-if="capabilityResources(connection, descriptor.id).length === 0" class="m-0 text-sm text-surface-400">
                         {{ emptyResourceMessage(descriptor.id) }}

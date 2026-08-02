@@ -17,6 +17,7 @@ import {
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
+import { canMemberAccess, canMemberAccessSourceData, type ResourceAudience } from "../access.js";
 
 export type ApprovalStatus =
   | "pending"
@@ -105,12 +106,19 @@ export async function requestWorkflowActionApproval(input: {
   approverName: string;
   action: unknown;
   source: WorkflowActionSource;
+  access?: ResourceAudience;
 }, overrides?: Partial<ApprovalDependencies>) {
   const deps = dependencies(overrides);
   const approver = await deps.resolveActiveMember(
     input.companyId,
     input.approverUid,
   );
+  if (input.access && !canMemberAccess(input.access, approver.uid)) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: "The named approver cannot access the source for this action.",
+    });
+  }
   const resolved = deps.registry.resolve(input.action);
   const prepared = await resolved.descriptor.prepareForApproval({
     companyId: input.companyId,
@@ -154,6 +162,7 @@ export async function requestWorkflowActionApproval(input: {
       effectDigest: digest,
       effectDigestVersion: "canonical-v1",
       source: input.source,
+      access: input.access || { visibility: "company" },
       createdBy: input.actorUid,
       createdAt: now,
       updatedAt: now,
@@ -164,6 +173,7 @@ export async function requestWorkflowActionApproval(input: {
       aggregateId: approvalRef.id,
       ...(caseId ? { caseId } : {}),
       type: "approval_requested",
+      access: input.access || { visibility: "company" },
       actor: { kind: "system", id: input.actorUid },
       after: {
         decisionStatus: "pending",
@@ -183,12 +193,13 @@ export async function requestWorkflowActionApproval(input: {
 
 export async function listActionApprovals(input: {
   companyId: string;
+  memberUid?: string;
   status?: ApprovalStatus;
   statuses?: ApprovalStatus[];
   approverUid?: string;
   limit?: number;
-}) {
-  let query: FirebaseFirestore.Query = db.collection(
+}, database: FirebaseFirestore.Firestore = db) {
+  let query: FirebaseFirestore.Query = database.collection(
     companyCollectionPath(input.companyId, "actionApprovals"),
   );
   const statuses = [...new Set(input.statuses || (input.status ? [input.status] : []))];
@@ -200,7 +211,10 @@ export async function listActionApprovals(input: {
     .limit(Math.min(input.limit || 100, 200))
     .get();
   return jsonSafe(snapshot.docs
-    .filter((document) => document.data().objectType === "action_approval")
+    .filter((document) => (
+      document.data().objectType === "action_approval"
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
+    ))
     .map((document) => ({ id: document.id, ...document.data() })));
 }
 
@@ -221,6 +235,9 @@ async function claimApproval(input: {
       throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
     }
     const data = snapshot.data() || {};
+    if (!canMemberAccessSourceData(data, input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
+    }
     if (data.approverUid !== input.actorUid) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -271,6 +288,7 @@ async function claimApproval(input: {
       aggregateId: input.approvalId,
       ...(caseId ? { caseId } : {}),
       type: decisionStatus === "pending" ? "approval_approved" : "approval_execution_retried",
+      access: data.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { decisionStatus, executionStatus },
       after: {
@@ -319,6 +337,7 @@ async function markExecutionFailed(input: {
       aggregateId: input.approvalId,
       ...(caseId ? { caseId } : {}),
       type: "approval_execution_failed",
+      access: latest.data()?.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { executionStatus: "executing" },
       after: {
@@ -393,6 +412,7 @@ export async function approveAction(input: {
         approvedBy: claimed.data.approvedBy || input.actorUid,
         attemptId: claimed.attemptId!,
         source: claimed.data.source as WorkflowActionSource,
+        access: claimed.data.access || { visibility: "company" },
       },
     });
     const auditRef = deps.database.collection(
@@ -428,6 +448,7 @@ export async function approveAction(input: {
         aggregateId: input.approvalId,
         ...(caseId ? { caseId } : {}),
         type: "approval_executed",
+        access: claimed.data.access || { visibility: "company" },
         actor: { kind: "user", id: input.actorUid },
         before: { executionStatus: "executing" },
         after: {
@@ -487,6 +508,9 @@ export async function rejectAction(input: {
       throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
     }
     const data = snapshot.data() || {};
+    if (!canMemberAccessSourceData(data, input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
+    }
     if (data.approverUid !== input.actorUid) {
       throw new TRPCError({
         code: "FORBIDDEN",
@@ -519,6 +543,7 @@ export async function rejectAction(input: {
       aggregateId: input.approvalId,
       ...(caseId ? { caseId } : {}),
       type: "approval_rejected",
+      access: data.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { decisionStatus: "pending", executionStatus: "not_started" },
       after: {

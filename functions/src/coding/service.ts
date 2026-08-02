@@ -399,6 +399,7 @@ export async function queueCodingPublisher(input: {
 export async function codingPatchPreview(input: {
   companyId: string;
   runId: string;
+  memberUid?: string;
   artifactStore: CodingArtifactStore;
   database?: FirebaseFirestore.Firestore;
 }): Promise<{ patch: string; truncated: boolean }> {
@@ -420,6 +421,7 @@ export async function codingPatchPreview(input: {
 export async function codingArtifactDownloadUrl(input: {
   companyId: string;
   runId: string;
+  memberUid?: string;
   artifactStore: CodingArtifactStore;
   database?: FirebaseFirestore.Firestore;
 }): Promise<{ url: string; expiresAt: string }> {

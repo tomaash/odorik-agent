@@ -10,9 +10,12 @@ import Textarea from 'primevue/textarea'
 import SourceCard from '../components/SourceCard.vue'
 import {
   askAssistant,
+  createAssistantThread,
   getAssistantHistory,
   getAssistantStatus,
+  listAssistantThreads,
   type AssistantMessage,
+  type AssistantThread,
 } from '../api/client'
 
 const { t, tm } = useI18n()
@@ -23,6 +26,8 @@ const sending = ref(false)
 const error = ref('')
 const status = ref<{ search?: string; readOnly?: boolean } | null>(null)
 const bottom = ref<HTMLElement | null>(null)
+const threads = ref<AssistantThread[]>([])
+const activeThreadId = ref('')
 
 const suggestions = computed(() => tm('assistant.suggestions') as string[])
 
@@ -35,17 +40,48 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [history, agentStatus] = await Promise.all([
-      getAssistantHistory(),
+    const [threadList, agentStatus] = await Promise.all([
+      listAssistantThreads(),
       getAssistantStatus(),
     ])
-    messages.value = history
+    if (threadList.length === 0) threadList.push(await createAssistantThread())
+    threads.value = threadList
+    activeThreadId.value = threadList[0]!.id
+    messages.value = await getAssistantHistory(activeThreadId.value)
     status.value = agentStatus
     await scrollToBottom()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
     loading.value = false
+  }
+}
+
+async function selectThread(threadId: string) {
+  if (threadId === activeThreadId.value || sending.value) return
+  loading.value = true
+  error.value = ''
+  try {
+    messages.value = await getAssistantHistory(threadId)
+    activeThreadId.value = threadId
+    await scrollToBottom()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loading.value = false
+  }
+}
+
+async function newThread() {
+  if (sending.value) return
+  error.value = ''
+  try {
+    const thread = await createAssistantThread()
+    threads.value = [thread, ...threads.value]
+    activeThreadId.value = thread.id
+    messages.value = []
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
   }
 }
 
@@ -58,7 +94,7 @@ async function send(value = question.value) {
   sending.value = true
   await scrollToBottom()
   try {
-    const answer = await askAssistant(text)
+    const answer = await askAssistant(text, activeThreadId.value)
     messages.value.push({
       id: answer.messageId,
       role: 'assistant',
@@ -67,6 +103,7 @@ async function send(value = question.value) {
       confidence: answer.confidence,
       limitations: answer.limitations,
     })
+    threads.value = await listAssistantThreads()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -106,6 +143,36 @@ onMounted(load)
     </header>
 
     <Message v-if="error" severity="error" :closable="false" class="mb-5">{{ error }}</Message>
+    <nav
+      v-if="threads.length"
+      class="mb-5 flex min-w-0 items-center gap-2 overflow-x-auto rounded-lg border border-surface-200 bg-white/70 p-2"
+      :aria-label="t('assistant.chats')"
+    >
+      <Button
+        :label="t('assistant.newChat')"
+        icon="pi pi-plus"
+        size="small"
+        class="shrink-0"
+        :disabled="sending"
+        @click="newThread"
+      />
+      <button
+        v-for="thread in threads"
+        :key="thread.id"
+        type="button"
+        :aria-current="thread.id === activeThreadId ? 'page' : undefined"
+        :class="[
+          'max-w-56 shrink-0 truncate rounded-md px-3 py-2 text-sm font-medium transition',
+          thread.id === activeThreadId
+            ? 'bg-surface-950 text-white'
+            : 'bg-surface-100 text-surface-700 hover:bg-surface-200',
+        ]"
+        :disabled="sending"
+        @click="selectThread(thread.id)"
+      >
+        {{ thread.title }}
+      </button>
+    </nav>
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <template v-else>

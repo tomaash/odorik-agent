@@ -270,6 +270,13 @@ export type AssistantMessage = {
   createdAt?: string | null
 }
 
+export type AssistantThread = {
+  id: string
+  title: string
+  lastMessageAt?: string | null
+  createdAt?: string | null
+}
+
 export type WorkflowListItem = {
   id: string
   name: string
@@ -523,6 +530,8 @@ export type SourceResource = {
   externalId: string
   displayName: string
   status: 'enabled' | 'disabled'
+  audience: { visibility: 'company' } | { visibility: 'restricted'; memberIds: string[] }
+  audienceRevision: number
   itemCount: number
   lastObservedAt?: string | null
   sync?: SourceSyncState
@@ -905,6 +914,14 @@ export async function getAssistantHistory(threadId = 'general'): Promise<Assista
   return trpc.assistant.history.query({ threadId }) as Promise<AssistantMessage[]>
 }
 
+export async function listAssistantThreads(): Promise<AssistantThread[]> {
+  return trpc.assistant.threads.query() as Promise<AssistantThread[]>
+}
+
+export async function createAssistantThread(): Promise<AssistantThread> {
+  return trpc.assistant.createThread.mutate() as Promise<AssistantThread>
+}
+
 export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {
   return trpc.assistant.ask.mutate({ threadId, question }) as Promise<AssistantAnswer>
 }
@@ -1008,6 +1025,16 @@ export async function setSourceResourceEnabled(
   enabled: boolean,
 ) {
   return trpc.sources.setResourceEnabled.mutate({ connectionId, resourceId, enabled })
+}
+
+export async function setSourceResourceAudience(input: {
+  connectionId: string
+  resourceId: string
+  audience: SourceResource['audience']
+  expectedRevision: number
+  confirmBroadening: boolean
+}) {
+  return trpc.sources.setResourceAudience.mutate(input)
 }
 
 export type SelectableFolder = {

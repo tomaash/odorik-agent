@@ -233,6 +233,13 @@ class MemoryCollectionReference extends MemoryQuery {
       `${this.collectionPath}/${id || this.database.nextId()}`,
     );
   }
+
+
+  async add(data: DocumentData): Promise<MemoryDocumentReference> {
+    const reference = this.doc();
+    await reference.create(data);
+    return reference;
+  }
 }
 
 class MemoryCollectionGroup extends MemoryQuery {
@@ -417,6 +424,10 @@ export class MemoryFirestore {
 
   doc(path: string): MemoryDocumentReference {
     return this.documentReference(path);
+  }
+
+  async getAll(...references: MemoryDocumentReference[]): Promise<MemoryDocumentSnapshot[]> {
+    return Promise.all(references.map((reference) => reference.get()));
   }
 
   documentReference(path: string): MemoryDocumentReference {

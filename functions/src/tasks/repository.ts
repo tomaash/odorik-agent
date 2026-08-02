@@ -2,6 +2,11 @@ import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
+import {
+  accessForSourceRecord,
+  canMemberAccessSourceData,
+  type ResourceAudience,
+} from "../access.js";
 
 export type TaskStatus = "open" | "completed" | "dismissed";
 
@@ -36,6 +41,7 @@ export type CreateTaskInput = {
     callSummary?: string | null;
     transcriptExcerpt?: string | null;
   };
+  access?: ResourceAudience;
   deterministicId?: string;
 };
 
@@ -79,6 +85,12 @@ export async function createTask(input: CreateTaskInput) {
   const linkedCaseRef = input.caseId
     ? db.doc(companyDocumentPath(input.companyId, "cases", input.caseId))
     : null;
+  const linkedContactRef = input.contactId
+    ? db.doc(companyDocumentPath(input.companyId, "contacts", input.contactId))
+    : null;
+  const linkedCallRef = input.callId
+    ? db.doc(companyDocumentPath(input.companyId, "calls", input.callId))
+    : null;
   const taskRef = input.deterministicId
     ? db.doc(companyDocumentPath(input.companyId, "workItems", input.deterministicId))
     : db.collection(companyCollectionPath(input.companyId, "workItems")).doc();
@@ -86,18 +98,34 @@ export async function createTask(input: CreateTaskInput) {
   const dueAt = dueTimestamp(input.dueAt);
 
   return db.runTransaction(async (transaction) => {
-    const existing = await transaction.get(taskRef);
+    const [existing, linkedCase, linkedContact, linkedCall] = await Promise.all([
+      transaction.get(taskRef),
+      linkedCaseRef ? transaction.get(linkedCaseRef) : Promise.resolve(null),
+      linkedContactRef ? transaction.get(linkedContactRef) : Promise.resolve(null),
+      linkedCallRef ? transaction.get(linkedCallRef) : Promise.resolve(null),
+    ]);
     if (existing.exists) {
+      if (!canMemberAccessSourceData(existing.data(), input.actorUid)) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+      }
       return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
     }
-    const linkedCase = linkedCaseRef ? await transaction.get(linkedCaseRef) : null;
     if (linkedCase && (
       !linkedCase.exists
       || linkedCase.data()?.objectType !== "case"
       || linkedCase.data()?.archived === true
+      || !canMemberAccessSourceData(linkedCase.data(), input.actorUid)
     )) {
       throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an active case." });
     }
+    if (linkedContact && (
+      !linkedContact.exists
+      || !canMemberAccessSourceData(linkedContact.data(), input.actorUid)
+    )) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an accessible contact." });
+    if (linkedCall && (
+      !linkedCall.exists
+      || !canMemberAccessSourceData(linkedCall.data(), input.actorUid)
+    )) throw new TRPCError({ code: "BAD_REQUEST", message: "Choose an accessible call." });
     const caseContactId = linkedCase ? String(linkedCase.data()?.contactId || "") : null;
     if (linkedCase && !caseContactId) {
       throw new TRPCError({
@@ -112,6 +140,20 @@ export async function createTask(input: CreateTaskInput) {
       });
     }
     const contactId = caseContactId || input.contactId || null;
+    const callContactId = linkedCall && typeof linkedCall.data()?.contactId === "string"
+      ? linkedCall.data()?.contactId as string
+      : null;
+    if (callContactId && contactId && callContactId !== contactId) {
+      throw new TRPCError({
+        code: "BAD_REQUEST",
+        message: "The selected task contact does not match its call.",
+      });
+    }
+    const access = input.access
+      || (linkedCall ? accessForSourceRecord("call", linkedCall.data() || {}) : null)
+      || (linkedCase ? accessForSourceRecord("case", linkedCase.data() || {}) : null)
+      || (linkedContact ? accessForSourceRecord("contact", linkedContact.data() || {}) : null)
+      || { visibility: "company" as const };
     const now = Timestamp.now();
     const source = input.source || {
       kind: input.callId ? "call" : input.caseId ? "case" : "manual",
@@ -144,6 +186,7 @@ export async function createTask(input: CreateTaskInput) {
       source,
       authorization,
       context: input.context || null,
+      access,
       createdBy: input.actorUid,
       createdAt: now,
       updatedAt: now,
@@ -156,6 +199,7 @@ export async function createTask(input: CreateTaskInput) {
       ...(contactId ? { contactId } : {}),
       ...(input.callId ? { callId: input.callId } : {}),
       type: "task_created",
+      access,
       actor: {
         kind: input.source?.kind === "workflow" && !input.source.approvalId
           ? "system"
@@ -177,14 +221,15 @@ export async function createTask(input: CreateTaskInput) {
 
 export async function listTasks(input: {
   companyId: string;
+  memberUid?: string;
   status?: TaskStatus;
   statuses?: TaskStatus[];
   assigneeUid?: string;
   contactId?: string;
   caseId?: string;
   limit?: number;
-}) {
-  let query: FirebaseFirestore.Query = db.collection(
+}, database: FirebaseFirestore.Firestore = db) {
+  let query: FirebaseFirestore.Query = database.collection(
     companyCollectionPath(input.companyId, "workItems"),
   );
   const statuses = [...new Set(input.statuses || (input.status ? [input.status] : []))];
@@ -198,7 +243,10 @@ export async function listTasks(input: {
     .limit(Math.min(input.limit || 100, 200))
     .get();
   return jsonSafe(snapshot.docs
-    .filter((document) => document.data().objectType === "task")
+    .filter((document) => (
+      document.data().objectType === "task"
+      && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
+    ))
     .map((document) => ({ id: document.id, ...document.data() })));
 }
 
@@ -231,6 +279,9 @@ export async function updateTask(input: {
   return db.runTransaction(async (transaction) => {
     const snapshot = await transaction.get(ref);
     if (!snapshot.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+    if (!canMemberAccessSourceData(snapshot.data(), input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+    }
     if (snapshot.data()?.status !== "open") {
       throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Only open tasks can be edited." });
     }
@@ -245,6 +296,7 @@ export async function updateTask(input: {
         : {}),
       ...(typeof snapshot.data()?.callId === "string" ? { callId: snapshot.data()?.callId } : {}),
       type: "task_updated",
+      access: snapshot.data()?.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: {
         title: snapshot.data()?.title || null,
@@ -271,6 +323,9 @@ export async function transitionTask(input: {
   return db.runTransaction(async (transaction) => {
     const task = await transaction.get(taskRef);
     if (!task.exists) throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+    if (!canMemberAccessSourceData(task.data(), input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Task not found." });
+    }
     const before = String(task.data()?.status || "open") as TaskStatus;
     if (before === input.to) return jsonSafe({ id: task.id, ...task.data() });
     if (input.to === "open" && before !== "completed" && before !== "dismissed") {
@@ -309,6 +364,7 @@ export async function transitionTask(input: {
       ...(typeof task.data()?.contactId === "string" ? { contactId: task.data()?.contactId } : {}),
       ...(typeof task.data()?.callId === "string" ? { callId: task.data()?.callId } : {}),
       type: input.to === "open" ? "task_reopened" : `task_${input.to}`,
+      access: task.data()?.access || { visibility: "company" },
       actor: { kind: "user", id: input.actorUid },
       before: { status: before },
       after: { status: input.to, note: clean(input.note, 2_000) || null },

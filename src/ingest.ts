@@ -92,6 +92,9 @@ async function receiveRecording(
       connectionId,
       resourceId: resource.resourceId,
       contextEnabled: resource.contextEnabled,
+      access: resource.audience,
+      accessRevision: resource.audienceRevision,
+      indexingEnabled: resource.contextEnabled,
       source: {
         adapterId: "odorik",
         connectionId,

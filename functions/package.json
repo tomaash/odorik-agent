@@ -18,6 +18,7 @@
     "reset:google": "npm run build && node lib/reset-google-connectors.js",
     "migrate:multi-tenant": "npm run build && node lib/migrate-multi-tenant.js",
     "migrate:cases": "npm run build && node lib/migrate-cases.js",
+    "migrate:resource-audiences": "npm run build && node lib/migrate-resource-audiences.js",
     "seed:local": "node scripts/seed-local.js",
     "serve": "npm run build && firebase emulators:start --only auth,firestore,functions,hosting --import=./.emulator-data --export-on-exit=./.emulator-data"
   },

@@ -28,6 +28,7 @@ import {
   setCapabilityStatus,
   setConnectionStatus,
   setResourceStatus,
+  setResourceAudience,
 } from "../connectors/repository.js";
 import {
   capabilityGrantState,
@@ -85,6 +86,8 @@ test("source public views retain operational state and exclude credentials", asy
     externalId: "provider-folder-a",
     displayName: "Customers",
     status: "enabled",
+    audience: { visibility: "company" },
+    audienceRevision: 1,
     itemCount: 3,
     providerSecret: "resource-secret",
     syncToken: "private-provider-cursor",
@@ -148,6 +151,8 @@ test("source public views retain operational state and exclude credentials", asy
     externalId: "provider-folder-a",
     displayName: "Customers",
     status: "enabled",
+    audience: { visibility: "company" },
+    audienceRevision: 1,
     itemCount: 3,
     lastObservedAt: "2026-07-30T09:59:00.000Z",
     sync: {
@@ -284,10 +289,7 @@ test("connection and resource lifecycle preserves or removes context intentional
     actorUid: "admin-1",
   }, database);
   assert.equal(memory.read(resourcePath)?.status, "disabled");
-  assert.deepEqual(memory.read(contextPath)?.access, {
-    visibility: "restricted",
-    memberIds: [],
-  });
+  assert.deepEqual(memory.read(contextPath)?.access, { visibility: "company" });
   assert.equal(memory.read(contextPath)?.indexingEnabled, false);
   assert.equal(memory.read(otherContextPath)?.indexingEnabled, true);
 
@@ -366,6 +368,140 @@ test("connection and resource lifecycle preserves or removes context intentional
   assert.doesNotMatch(JSON.stringify(auditEvents), /encrypted-credential/);
 });
 
+test("resource audiences validate members and re-project every call-derived retrieval record", async () => {
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  const base = "companies/explorers";
+  const connection = `${base}/connections/odorik-a`;
+  const resource = `${connection}/resources/phone-a`;
+  memory.seed(connection, {
+    companyId: "explorers",
+    connectorId: "odorik",
+    providerId: "odorik",
+    status: "active",
+  });
+  memory.seed(resource, {
+    connectionId: "odorik-a",
+    capabilityId: "context.call.read",
+    resourceType: "phone_line",
+    externalId: "line:Sales",
+    displayName: "Sales",
+    status: "enabled",
+    audience: { visibility: "company" },
+    audienceRevision: 1,
+  });
+  memory.seed(`${base}/memberships/member-a`, { status: "active" });
+  memory.seed(`${base}/memberships/member-b`, { status: "active" });
+  memory.seed(`${base}/memberships/inactive`, { status: "disabled" });
+  memory.seed(`${base}/contextItems/context-a`, {
+    source: { connectionId: "odorik-a", resourceId: "phone-a" },
+    access: { visibility: "company" },
+    indexingEnabled: true,
+  });
+  memory.seed(`${base}/calls/call-a`, {
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    contactId: "contact-a",
+    access: { visibility: "company" },
+    contextEnabled: true,
+    indexingEnabled: true,
+  });
+  memory.seed(`${base}/contacts/contact-a`, {
+    origin: "call",
+    createdFromCallId: "call-a",
+    access: { visibility: "company" },
+    indexingEnabled: true,
+  });
+  for (const [collection, id, link] of [
+    ["workItems", "task-a", { callId: "call-a" }],
+    ["cases", "case-a", { callId: "call-a" }],
+    ["actionApprovals", "approval-a", { source: { callId: "call-a" } }],
+    ["workflowRuns", "run-a", { contextId: "call-a" }],
+    ["auditEvents", "event-a", { callId: "call-a" }],
+    ["actionApprovals", "approval-issue", { source: { issueContextItemId: "context-a" } }],
+    ["codingRuns", "coding-a", { github: { issueContextItemId: "context-a" } }],
+  ] as const) {
+    memory.seed(`${base}/${collection}/${id}`, {
+      ...link,
+      access: { visibility: "company" },
+      indexingEnabled: true,
+    });
+  }
+
+  await assert.rejects(() => setResourceAudience({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    audience: { visibility: "restricted", memberIds: ["inactive"] },
+    expectedRevision: 1,
+    confirmBroadening: false,
+    actorUid: "admin-a",
+  }, database), /inactive company member/);
+
+  const projected = await setResourceAudience({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    audience: { visibility: "restricted", memberIds: ["member-a"] },
+    expectedRevision: 1,
+    confirmBroadening: false,
+    actorUid: "admin-a",
+  }, database);
+  assert.deepEqual(projected, {
+    changed: true,
+    revision: 2,
+    projectedItems: 1,
+    projectedCalls: 1,
+  });
+  for (const path of [
+    resource,
+    `${base}/contextItems/context-a`,
+    `${base}/calls/call-a`,
+    `${base}/contacts/contact-a`,
+    `${base}/workItems/task-a`,
+    `${base}/cases/case-a`,
+    `${base}/actionApprovals/approval-a`,
+    `${base}/workflowRuns/run-a`,
+    `${base}/auditEvents/event-a`,
+    `${base}/actionApprovals/approval-issue`,
+    `${base}/codingRuns/coding-a`,
+  ]) {
+    const data = memory.read(path);
+    const audience = path === resource ? data?.audience : data?.access;
+    assert.deepEqual(audience, { visibility: "restricted", memberIds: ["member-a"] }, path);
+  }
+
+  await assert.rejects(() => setResourceAudience({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    audience: { visibility: "company" },
+    expectedRevision: 2,
+    confirmBroadening: false,
+    actorUid: "admin-a",
+  }, database), /AUDIENCE_BROADENING_REQUIRES_CONFIRMATION/);
+
+  await setResourceStatus({
+    companyId: "explorers",
+    connectionId: "odorik-a",
+    resourceId: "phone-a",
+    enabled: false,
+    actorUid: "admin-a",
+  }, database);
+  for (const path of [
+    `${base}/contextItems/context-a`,
+    `${base}/calls/call-a`,
+    `${base}/contacts/contact-a`,
+    `${base}/workItems/task-a`,
+    `${base}/cases/case-a`,
+    `${base}/actionApprovals/approval-a`,
+    `${base}/workflowRuns/run-a`,
+    `${base}/auditEvents/event-a`,
+    `${base}/actionApprovals/approval-issue`,
+    `${base}/codingRuns/coding-a`,
+  ]) assert.equal(memory.read(path)?.indexingEnabled, false, path);
+});
+
 test("Calendar incremental sync keeps stable identity and deletes cancellations", () => {
   const observedAt = Timestamp.fromDate(new Date("2026-07-30T11:00:00.000Z"));
   const event: CalendarEvent = {
@@ -387,6 +523,8 @@ test("Calendar incremental sync keeps stable identity and deletes cancellations"
     calendarId: "primary@example.com",
     calendarName: "Primary",
     observedAt,
+    audience: { visibility: "restricted" as const, memberIds: ["member-a"] },
+    audienceRevision: 4,
   };
   const initial = calendarEventContextItem({ ...baseInput, event });
   const changed = calendarEventContextItem({
@@ -411,7 +549,8 @@ test("Calendar incremental sync keeps stable identity and deletes cancellations"
     externalId: "event-1",
     version: "2026-07-30T10:30:00.000Z",
   });
-  assert.deepEqual(initial.access, { visibility: "company" });
+  assert.deepEqual(initial.access, { visibility: "restricted", memberIds: ["member-a"] });
+  assert.equal(initial.accessRevision, 4);
   assert.deepEqual(initial.participantRefs, [
     "owner@example.com",
     "customer@example.com",
@@ -507,6 +646,8 @@ test("Drive sync characterizes direct-child selection and normalized provenance"
     file,
     contentText: "Customer requested a renewal proposal.",
     observedAt,
+    audience: { visibility: "restricted", memberIds: ["member-a"] },
+    audienceRevision: 5,
   });
   assert.equal(
     folderResourceId("folder-a"),
@@ -528,7 +669,8 @@ test("Drive sync characterizes direct-child selection and normalized provenance"
     externalId: "doc-1",
     version: "2026-07-30T10:00:00.000Z",
   });
-  assert.deepEqual(item.access, { visibility: "company" });
+  assert.deepEqual(item.access, { visibility: "restricted", memberIds: ["member-a"] });
+  assert.equal(item.accessRevision, 5);
   assert.deepEqual(item.artifactRefs, [
     "https://drive.google.com/file/d/doc-1/view",
   ]);
@@ -550,6 +692,8 @@ test("Odorik context identity is connection-scoped and provenance is stable", ()
     transcript: "Please prepare the renewal.",
     processedAt: "2026-07-30T10:00:00.000Z",
     updatedAt: "2026-07-30T10:00:00.000Z",
+    access: { visibility: "restricted" as const, memberIds: ["member-a"] },
+    accessRevision: 6,
   };
   const first = odorikContextItem("call-1", call, "explorers");
   const second = odorikContextItem("call-1", { ...call }, "explorers");
@@ -564,6 +708,8 @@ test("Odorik context identity is connection-scoped and provenance is stable", ()
     odorikContextItemId("odorik-b", "call-1"),
   );
   assert.deepEqual(first.source, second.source);
+  assert.deepEqual(first.access, { visibility: "restricted", memberIds: ["member-a"] });
+  assert.equal(first.accessRevision, 6);
   assert.deepEqual(first.provenance, second.provenance);
   assert.equal(
     (first.provenance as Record<string, unknown>).rawRef,

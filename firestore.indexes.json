@@ -9,6 +9,14 @@
       ]
     },
     {
+      "collectionGroup": "calls",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "connectionId", "order": "ASCENDING" },
+        { "fieldPath": "resourceId", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "connections",
       "queryScope": "COLLECTION",
       "fields": [
