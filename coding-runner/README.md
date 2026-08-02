@@ -19,25 +19,36 @@ only a break-glass operator path.
 
 ## Security boundary
 
-The image pins Grok Build and a root-owned policy that disables bypass permissions, API-key auth, and auto-update. Grok runs with:
+The image pins Grok Build and a root-owned policy that disables API-key auth and
+auto-update. Grok runs with:
 
-- the strict workspace sandbox;
-- `dontAsk` permissions and a bounded local command allowlist;
-- no web tools, memory, plan review, or subagents;
-- explicit denies for GitHub writes, deployments, SSH, and container tools.
+- the **workspace** sandbox (writes confined to the repo/temp/Grok home; public
+  internet available to child processes for package installs and tooling);
+- **always-approve / yolo** so the agent is free to use local tools inside that
+  sandbox, instead of a brittle Bash allowlist;
+- no web-search tools, memory, plan review, or subagents;
+- explicit denies for GitHub writes, deployments, SSH, and container tools
+  (`deny` still wins under always-approve).
 
-Before the agent starts, `grok inspect --json` must report no hooks, plugins, marketplaces, MCP servers, or repository-provided permission rules. Source and output use short-lived signed HTTPS URLs. Raw URLs are never logged.
+Before the agent starts, `grok inspect --json` must report no hooks, plugins,
+marketplaces, MCP servers, or repository-provided permission rules. Source and
+output use short-lived signed HTTPS URLs. Raw URLs are never logged.
 
-The Job service account has access only to the Grok subscription secret. It has no Firestore, GitHub, or GCS bucket role; signed URLs carry the per-run input/output authority. Independent repository test execution is intentionally not implemented yet, because an unsandboxed child process could query the Cloud Run metadata server. Grok can run allowlisted tests inside its own strict sandbox.
+The Job service account has access only to the Grok subscription secret. It has
+no Firestore, GitHub, or GCS bucket role; signed URLs carry the per-run
+input/output authority. The agent therefore cannot easily reach internal Erik
+control-plane APIs even with public internet egress for package registries.
 
-The separate `erik-coding-signer` service account has object access to the coding artifact bucket and never runs repository code. The control plane may impersonate only this signer to mint short-lived per-run URLs. An operator can run `infra/smoke-coding-runner.sh` after receiving Token Creator on the signer service account.
+The separate `erik-coding-signer` service account has object access to the coding
+artifact bucket and never runs repository code. The control plane may impersonate
+only this signer to mint short-lived per-run URLs. An operator can run
+`infra/smoke-coding-runner.sh` after receiving Token Creator on the signer
+service account.
 
-The supervisor never resolves repository-controlled dependencies. Even with
-lifecycle scripts disabled, a lockfile can cause network requests while Cloud
-Run metadata is reachable. Existing/pre-provisioned dependencies may be used by
-Grok inside the strict sandbox; otherwise dependency-requiring checks are
-reported as unavailable. A later credential-free preparation Job may provide
-reviewed dependency trees without widening the runner boundary.
+The supervisor still never resolves repository-controlled dependencies itself
+(that path could run while privileged metadata is reachable). Grok may install
+or use dependencies inside the workspace sandbox after it starts. A later
+credential-free preparation Job may still pre-stage reviewed dependency trees.
 
 ## Input contract
 
@@ -162,4 +173,4 @@ environment. After a successful changed result, the same trusted image runs in
 publish mode to push the deterministic result branch and open a draft PR; the
 runner still receives no GitHub credential.
 
-The first verified production smoke execution, `erik-coding-runner-k56fj`, completed on 2026-07-31. It authenticated with Grok subscription OAuth, changed exactly one file in the strict sandbox, produced a verified result bundle, and uploaded the immutable artifact. This validates the Cloud Run second-generation namespace support required by Grok's Linux sandbox as well as the disk-backed ephemeral volume path.
+The first verified production smoke execution, `erik-coding-runner-k56fj`, completed on 2026-07-31. It authenticated with Grok subscription OAuth, changed exactly one file in the workspace sandbox, produced a verified result bundle, and uploaded the immutable artifact. This validates the Cloud Run second-generation namespace support required by Grok's Linux sandbox as well as the disk-backed ephemeral volume path.

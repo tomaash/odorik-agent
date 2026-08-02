@@ -13,7 +13,7 @@ ARG GROK_VERSION=0.2.117
 ENV NODE_ENV=production \
     LANG=C.UTF-8 \
     GROK_HOME=/home/grok/.grok \
-    GROK_SANDBOX=strict \
+    GROK_SANDBOX=workspace \
     WORKSPACE_ROOT=/workspace
 
 RUN apt-get update \
