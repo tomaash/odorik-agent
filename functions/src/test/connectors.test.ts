@@ -87,6 +87,18 @@ test("source public views retain operational state and exclude credentials", asy
     status: "enabled",
     itemCount: 3,
     providerSecret: "resource-secret",
+    syncToken: "private-provider-cursor",
+    syncLease: { runId: "private-run", token: "private-lease" },
+    sync: {
+      health: "retrying",
+      latestRunId: "sync-run-1",
+      lastAttemptAt: "2026-07-30T10:00:00.000Z",
+      lastSuccessAt: "2026-07-30T09:00:00.000Z",
+      lastChangeObservedAt: "2026-07-30T09:59:00.000Z",
+      lastReconciledAt: "2026-07-30T09:00:00.000Z",
+      nextRetryAt: "2026-07-30T10:05:00.000Z",
+      lastError: "Provider temporarily unavailable",
+    },
     lastObservedAt: "2026-07-30T09:59:00.000Z",
     createdAt: "2026-07-29T10:00:00.000Z",
     updatedAt: "2026-07-30T10:00:00.000Z",
@@ -138,6 +150,16 @@ test("source public views retain operational state and exclude credentials", asy
     status: "enabled",
     itemCount: 3,
     lastObservedAt: "2026-07-30T09:59:00.000Z",
+    sync: {
+      health: "retrying",
+      latestRunId: "sync-run-1",
+      lastAttemptAt: "2026-07-30T10:00:00.000Z",
+      lastSuccessAt: "2026-07-30T09:00:00.000Z",
+      lastChangeObservedAt: "2026-07-30T09:59:00.000Z",
+      lastReconciledAt: "2026-07-30T09:00:00.000Z",
+      nextRetryAt: "2026-07-30T10:05:00.000Z",
+      lastError: "Provider temporarily unavailable",
+    },
     createdAt: "2026-07-29T10:00:00.000Z",
     updatedAt: "2026-07-30T10:00:00.000Z",
   });
@@ -147,6 +169,7 @@ test("source public views retain operational state and exclude credentials", asy
   assert.doesNotMatch(publicJson, /must-stay-private/);
   assert.doesNotMatch(publicJson, /private-operator/);
   assert.doesNotMatch(publicJson, /resource-secret/);
+  assert.doesNotMatch(publicJson, /private-provider-cursor|private-lease|private-run/);
   assert.deepEqual(
     result.connectors.map((connector) => ({
       id: connector.id,

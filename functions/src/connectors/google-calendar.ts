@@ -9,10 +9,21 @@ import {
 } from "./google-oauth.js";
 import { calendarScopes } from "./registry.js";
 import {
-  markCapabilityAttention,
-  markCapabilitySynced,
-  writeResourceSyncState,
-} from "./sync-state.js";
+  acquireConnectorSyncLease,
+  claimConnectorSyncRun,
+  classifyConnectorSyncError,
+  commitConnectorSyncWrites,
+  completeConnectorSyncResource,
+  completeConnectorSyncRun,
+  connectorSyncRetryAt,
+  createConnectorSyncRun,
+  failConnectorSyncResource,
+  sanitizeConnectorSyncError,
+  type ConnectorSyncDependencies,
+  type ConnectorSyncResourceResult,
+  type ConnectorSyncRunResult,
+  type ConnectorSyncTrigger,
+} from "./sync-runtime.js";
 
 export { calendarScopes };
 const calendarCapabilityId = "context.calendar.read" as const;
@@ -89,8 +100,11 @@ export function calendarContextItemId(
   return `calendar_${sha256Hex(`${connectionId}:${calendarId}:${eventId}`).slice(0, 32)}`;
 }
 
-function contextItems(companyId: string) {
-  return db.collection(companyCollectionPath(companyId, "contextItems"));
+function contextItems(
+  companyId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  return database.collection(companyCollectionPath(companyId, "contextItems"));
 }
 
 async function allCalendarEntries(accessToken: string): Promise<CalendarListEntry[]> {
@@ -118,6 +132,7 @@ async function authorizedConnection(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
+  database?: FirebaseFirestore.Firestore;
 }) {
   return authorizedGoogleCapability(calendarCapabilityId, input);
 }
@@ -267,8 +282,11 @@ async function syncCalendarResource(input: {
   connectionId: string;
   resource: FirebaseFirestore.QueryDocumentSnapshot;
   accessToken: string;
+  lease: import("./sync-runtime.js").ConnectorSyncLease;
+  attemptRef: FirebaseFirestore.DocumentReference;
+  dependencies: ConnectorSyncDependencies;
   forceFullSync?: boolean;
-}): Promise<number> {
+}): Promise<{ changes: number; itemCount: number }> {
   const data = input.resource.data();
   const calendarId = String(data.externalId);
   const calendarName = String(data.displayName || calendarId);
@@ -293,19 +311,18 @@ async function syncCalendarResource(input: {
       );
     } catch (error) {
       if (storedSyncToken && error instanceof Error && error.message.includes("(410)")) {
-        await input.resource.ref.set({
-          syncToken: FieldValue.delete(),
-          updatedAt: FieldValue.serverTimestamp(),
-        }, { merge: true });
         return syncCalendarResource({ ...input, forceFullSync: true });
       }
       throw error;
     }
 
-    const writes: Array<(batch: FirebaseFirestore.WriteBatch) => void> = [];
+    const writes: Array<{
+      ref: FirebaseFirestore.DocumentReference;
+      value: Record<string, unknown> | null;
+    }> = [];
     for (const event of page.items || []) {
       if (!event.id) continue;
-      const itemRef = db.doc(companyDocumentPath(
+      const itemRef = input.dependencies.database.doc(companyDocumentPath(
         input.companyId,
         "contextItems",
         calendarContextItemId(input.connectionId, calendarId, event.id),
@@ -318,81 +335,237 @@ async function syncCalendarResource(input: {
         calendarName,
         event,
       });
-      if (contextItem) writes.push((batch) => batch.set(itemRef, contextItem, { merge: false }));
-      else writes.push((batch) => batch.delete(itemRef));
+      writes.push({ ref: itemRef, value: contextItem });
       synced += 1;
     }
     for (let offset = 0; offset < writes.length; offset += 400) {
-      const batch = db.batch();
-      for (const write of writes.slice(offset, offset + 400)) write(batch);
-      await batch.commit();
+      const pageWrites = writes.slice(offset, offset + 400);
+      await commitConnectorSyncWrites({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        resourceId: input.resource.id,
+        lease: input.lease,
+        apply: (transaction) => {
+          for (const write of pageWrites) {
+            if (write.value) transaction.set(write.ref, write.value, { merge: false });
+            else transaction.delete(write.ref);
+          }
+        },
+      }, input.dependencies);
     }
     pageToken = page.nextPageToken || "";
     nextSyncToken = page.nextSyncToken || nextSyncToken;
   } while (pageToken);
 
-  const itemCount = (await contextItems(input.companyId)
+  const itemCount = (await contextItems(input.companyId, input.dependencies.database)
     .where("source.connectionId", "==", input.connectionId)
     .where("source.resourceId", "==", input.resource.id)
     .count()
     .get()).data().count;
-  await writeResourceSyncState({
-    resource: input.resource.ref,
+  const finalSyncToken = nextSyncToken || (storedSyncToken ? String(data.syncToken || "") : "");
+  await completeConnectorSyncResource({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    resourceId: input.resource.id,
+    lease: input.lease,
+    attemptRef: input.attemptRef,
+    changes: synced,
     itemCount,
-    extra: {
+    cursorAfter: finalSyncToken || null,
+    cursorMode: storedSyncToken ? "incremental" : "full",
+    resourcePatch: {
       // Never restore the obsolete cursor after a forced rebuild. Google
       // normally returns nextSyncToken on the last full-sync page; null keeps
       // the following run full if it does not.
-      syncToken: nextSyncToken || (storedSyncToken ? data.syncToken : null),
+      syncToken: finalSyncToken || null,
     },
-  });
-  return synced;
+  }, input.dependencies);
+  return { changes: synced, itemCount };
 }
 
-export async function syncGoogleCalendarConnection(input: {
+type CalendarSyncInput = {
   companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
   credentialKey: string;
-}): Promise<{ calendars: number; changes: number }> {
-  const { accessToken, connection, capability } = await authorizedConnection(input);
-  const resources = await connection.ref.collection("resources")
+  trigger?: ConnectorSyncTrigger;
+  requestedBy?: string | null;
+  resourceIds?: string[];
+  replayOfRunId?: string | null;
+  database?: FirebaseFirestore.Firestore;
+  now?: () => Timestamp;
+};
+
+export type CalendarSyncResult = ConnectorSyncRunResult & {
+  calendars: number;
+};
+
+function calendarRunResult(
+  runId: string,
+  data: FirebaseFirestore.DocumentData,
+): CalendarSyncResult {
+  return {
+    runId,
+    status: data.status || "queued",
+    attempt: Number(data.attempt || 0),
+    resources: Number(data.resources || data.resourceIds?.length || 0),
+    calendars: Number(data.resources || data.resourceIds?.length || 0),
+    succeeded: Number(data.succeeded || 0),
+    failed: Number(data.failed || 0),
+    changes: Number(data.changes || 0),
+    nextAttemptAt: data.nextAttemptAt?.toDate?.().toISOString?.()
+      || data.nextAttemptAt
+      || null,
+  };
+}
+
+async function executeGoogleCalendarSyncRun(
+  input: CalendarSyncInput & { runId: string },
+): Promise<CalendarSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const runRef = database.doc(
+    `companies/${input.companyId}/connections/${input.connectionId}/syncRuns/${input.runId}`,
+  );
+  const claimed = await claimConnectorSyncRun(input, dependencies);
+  if (!claimed.claimed) {
+    const current = await runRef.get();
+    return calendarRunResult(input.runId, current.data() || claimed.data);
+  }
+  const configuredResourceIds = (claimed.attempt > 1
+    ? claimed.data.failedResourceIds
+    : claimed.data.resourceIds) as unknown;
+  const resourceIds = Array.isArray(configuredResourceIds)
+    ? configuredResourceIds.map(String)
+    : [];
+  const results: ConnectorSyncResourceResult[] = [];
+  let resources: FirebaseFirestore.QueryDocumentSnapshot[] = [];
+  try {
+    const { accessToken, connection } = await authorizedConnection(input);
+    const resourcesSnapshot = await connection.ref.collection("resources")
+      .where("capabilityId", "==", calendarCapabilityId)
+      .where("status", "==", "enabled")
+      .get();
+    resources = resourcesSnapshot.docs.filter(
+      (resource) => resourceIds.length === 0 || resourceIds.includes(resource.id),
+    );
+    for (const resource of resources) {
+      const claim = await acquireConnectorSyncLease({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        capabilityId: calendarCapabilityId,
+        serviceId: "calendar",
+        resourceId: resource.id,
+        runId: input.runId,
+        attempt: claimed.attempt,
+        cursorBefore: calendarSyncTokenForRun(resource.data()) || null,
+        cursorMode: calendarSyncTokenForRun(resource.data()) ? "incremental" : "full",
+      }, dependencies);
+      if (!claim.acquired || !claim.lease) {
+        results.push({
+          resourceId: resource.id,
+          status: claim.reason === "busy" ? "retry_scheduled" : "skipped",
+          changes: 0,
+          ...(claim.reason === "busy" ? {
+            failureKind: "transient" as const,
+            error: "Another synchronization attempt still owns this resource",
+          } : {}),
+        });
+        continue;
+      }
+      try {
+        const result = await syncCalendarResource({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resource,
+          accessToken,
+          lease: claim.lease,
+          attemptRef: claim.attemptRef,
+          dependencies,
+        });
+        results.push({
+          resourceId: resource.id,
+          status: "succeeded",
+          ...result,
+        });
+      } catch (error) {
+        const failureKind = classifyConnectorSyncError(error);
+        const retryAt = failureKind === "transient"
+          ? connectorSyncRetryAt(claimed.attempt, input.now?.() || Timestamp.now())
+          : null;
+        await failConnectorSyncResource({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceId: resource.id,
+          lease: claim.lease,
+          attemptRef: claim.attemptRef,
+          error,
+          failureKind,
+          retryAt,
+        }, dependencies);
+        results.push({
+          resourceId: resource.id,
+          status: retryAt ? "retry_scheduled" : "attention",
+          changes: 0,
+          failureKind,
+          error: sanitizeConnectorSyncError(error),
+        });
+      }
+    }
+    const completed = await completeConnectorSyncRun({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      runId: input.runId,
+      attempt: claimed.attempt,
+      results,
+    }, dependencies);
+    return { ...completed, calendars: resources.length };
+  } catch (error) {
+    const failureKind = classifyConnectorSyncError(error);
+    const completed = await completeConnectorSyncRun({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      runId: input.runId,
+      attempt: claimed.attempt,
+      results,
+      preparationError: error,
+      preparationFailureKind: failureKind,
+    }, dependencies);
+    return { ...completed, calendars: resources.length };
+  }
+}
+
+export async function syncGoogleCalendarConnection(
+  input: CalendarSyncInput,
+): Promise<CalendarSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const connection = database.doc(
+    companyDocumentPath(input.companyId, "connections", input.connectionId),
+  );
+  const resources = await connection.collection("resources")
     .where("capabilityId", "==", calendarCapabilityId)
     .where("status", "==", "enabled")
     .get();
-  let changes = 0;
-  try {
-    for (const resource of resources.docs) {
-      changes += await syncCalendarResource({
-        companyId: input.companyId,
-        connectionId: input.connectionId,
-        resource,
-        accessToken,
-      });
-    }
-    const itemCount = (await contextItems(input.companyId)
-      .where("source.connectionId", "==", input.connectionId)
-      .where("source.capabilityId", "==", calendarCapabilityId)
-      .count()
-      .get()).data().count;
-    const updated = await markCapabilitySynced({
-      connection: connection.ref,
-      capability: capability.ref,
-      itemCount,
-    });
-    if (!updated) {
-      throw new Error("Google Calendar connection was disconnected during synchronization");
-    }
-    return { calendars: resources.size, changes };
-  } catch (error) {
-    await markCapabilityAttention({
-      connection: connection.ref,
-      capability: capability.ref,
-      error,
-    });
-    throw error;
+  const selectedResourceIds = input.resourceIds?.filter(
+    (resourceId) => resources.docs.some((resource) => resource.id === resourceId),
+  ) || resources.docs.map((resource) => resource.id);
+  const created = await createConnectorSyncRun({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    capabilityId: calendarCapabilityId,
+    serviceId: "calendar",
+    trigger: input.trigger || "manual",
+    requestedBy: input.requestedBy,
+    resourceIds: selectedResourceIds,
+    replayOfRunId: input.replayOfRunId,
+  }, dependencies);
+  if (!created.created) {
+    const current = await connection.collection("syncRuns").doc(created.runId).get();
+    return calendarRunResult(created.runId, current.data() || {});
   }
+  return executeGoogleCalendarSyncRun({ ...input, runId: created.runId });
 }
 
 export async function selectGoogleCalendars(input: {
@@ -403,7 +576,7 @@ export async function selectGoogleCalendars(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
-}): Promise<{ selected: number; calendars: number; changes: number }> {
+}): Promise<{ selected: number } & CalendarSyncResult> {
   const calendars = await listGoogleCalendars(input);
   const byId = new Map(calendars.map((calendar) => [calendar.id, calendar]));
   const selectedIds = [...new Set(input.calendarIds)];
@@ -457,8 +630,94 @@ export async function selectGoogleCalendars(input: {
       await deleteBatch.commit();
     }
   }
-  const result = await syncGoogleCalendarConnection(input);
+  const result = await syncGoogleCalendarConnection({
+    ...input,
+    trigger: "selection",
+    requestedBy: input.actorUid,
+  });
   return { selected: selectedIds.length, ...result };
+}
+
+export async function replayGoogleCalendarSyncRun(input: {
+  companyId: string;
+  connectionId: string;
+  runId: string;
+  actorUid: string;
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+}): Promise<CalendarSyncResult> {
+  const prior = await db.doc(
+    `companies/${input.companyId}/connections/${input.connectionId}/syncRuns/${input.runId}`,
+  ).get();
+  if (
+    !prior.exists
+    || prior.data()?.companyId !== input.companyId
+    || prior.data()?.connectionId !== input.connectionId
+    || prior.data()?.capabilityId !== calendarCapabilityId
+    || prior.data()?.status !== "attention"
+  ) throw new Error("Only an attention-required Calendar sync run can be replayed");
+  const failedResourceIds = Array.isArray(prior.data()?.failedResourceIds)
+    ? prior.data()!.failedResourceIds.map(String)
+    : [];
+  return syncGoogleCalendarConnection({
+    ...input,
+    trigger: "operator_replay",
+    requestedBy: input.actorUid,
+    replayOfRunId: input.runId,
+    resourceIds: failedResourceIds,
+  });
+}
+
+export async function retryDueGoogleCalendarSyncRuns(input: {
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+  limit?: number;
+}): Promise<Array<CalendarSyncResult & { companyId: string; connectionId: string }>> {
+  const now = Timestamp.now();
+  const limit = Math.min(Math.max(input.limit || 20, 1), 100);
+  const [queued, scheduled, abandoned] = await Promise.all([
+    db.collectionGroup("syncRuns")
+      .where("serviceId", "==", "calendar")
+      .where("status", "==", "queued")
+      .where("queuedAt", "<=", Timestamp.fromMillis(now.toMillis() - 60_000))
+      .limit(limit)
+      .get(),
+    db.collectionGroup("syncRuns")
+      .where("serviceId", "==", "calendar")
+      .where("status", "==", "retry_scheduled")
+      .where("nextAttemptAt", "<=", now)
+      .limit(limit)
+      .get(),
+    db.collectionGroup("syncRuns")
+      .where("serviceId", "==", "calendar")
+      .where("status", "==", "running")
+      .where("executionLeaseExpiresAt", "<=", now)
+      .limit(limit)
+      .get(),
+  ]);
+  const due = new Map(
+    [...queued.docs, ...scheduled.docs, ...abandoned.docs].map((run) => [run.ref.path, run]),
+  );
+  const results: Array<CalendarSyncResult & { companyId: string; connectionId: string }> = [];
+  for (const run of [...due.values()].slice(0, limit)) {
+    const data = run.data();
+    const companyId = String(data.companyId || "");
+    const connectionId = String(data.connectionId || "");
+    if (!companyId || !connectionId) continue;
+    const result = await executeGoogleCalendarSyncRun({
+      companyId,
+      connectionId,
+      runId: run.id,
+      clientId: input.clientId,
+      clientSecret: input.clientSecret,
+      credentialKey: input.credentialKey,
+      trigger: "retry",
+    });
+    results.push({ companyId, connectionId, ...result });
+  }
+  return results;
 }
 
 export async function syncAllGoogleCalendarConnections(input: {
@@ -483,12 +742,19 @@ export async function syncAllGoogleCalendarConnections(input: {
       const capability = await connection.ref.collection("capabilities").doc("calendar").get();
       if (!capability.exists || capability.data()?.status !== "active") continue;
       try {
-        await syncGoogleCalendarConnection({
+        const run = await syncGoogleCalendarConnection({
           ...input,
           companyId: company.id,
           connectionId: connection.id,
+          trigger: "scheduled",
+          requestedBy: "scheduler:calendar",
         });
-        results.push({ companyId: company.id, connectionId: connection.id, ok: true });
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: run.status !== "attention",
+          ...(run.status === "attention" ? { error: "Calendar synchronization needs attention" } : {}),
+        });
       } catch (error) {
         results.push({
           companyId: company.id,

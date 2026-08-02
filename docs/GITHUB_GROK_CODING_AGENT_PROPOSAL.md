@@ -587,12 +587,15 @@ This matches Agent Erik’s product promise: agents do the work, people (or expl
 
 ## 21. Next concrete step
 
-Proceed to **CG5 configurable coding policy UI**. Preserve the CG4 contract:
-every initial implementation, retry, and PR-change attempt receives one human
-approval before Grok starts; that approval authorizes Grok plus automatic
-publication to the attempt's deterministic branch/draft PR. GitHub review
-remains the merge gate. CG6 policy delegation remains optional and requires a
-separate explicit product decision.
+The coding epic is paused after CG4 while the main product sequence returns to
+connector slice C3. Resume **CG5 configurable coding policy UI** only when the
+fixed repository, label, approver, or limit policy becomes an observed usage
+constraint. Preserve the CG4 contract when work resumes: every initial
+implementation, retry, and PR-change attempt receives one human approval before
+Grok starts; that approval authorizes Grok plus automatic publication to the
+attempt's deterministic branch/draft PR. GitHub review remains the merge gate.
+CG6 policy delegation remains optional and requires a separate explicit product
+decision.
 
 ---
 
