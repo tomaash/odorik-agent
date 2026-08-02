@@ -4,15 +4,22 @@ import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import {
   authorizedGoogleCapability,
-  connectionRef,
   requireGoogleSuccess,
 } from "./google-oauth.js";
 import { driveScopes } from "./registry.js";
 import {
-  markCapabilityAttention,
-  markCapabilitySynced,
-  writeResourceSyncState,
-} from "./sync-state.js";
+  commitConnectorSyncWrites,
+  connectorSyncRunResultFromData,
+  createConnectorSyncRun,
+  executeConnectorSyncRun,
+  listDueConnectorSyncRuns,
+  replayableConnectorSyncResources,
+  type ConnectorSyncDependencies,
+  type ConnectorSyncExecutionResource,
+  type ConnectorSyncResourceCompletion,
+  type ConnectorSyncRunResult,
+  type ConnectorSyncTrigger,
+} from "./sync-runtime.js";
 
 export { driveScopes };
 const driveCapabilityId = "context.document.read" as const;
@@ -50,6 +57,7 @@ export type SelectableFolder = {
 
 /** Bounded searchable text retained per document. */
 const maxDocumentTextLength = 50_000;
+type FetchLike = typeof fetch;
 
 export function folderResourceId(folderId: string): string {
   return `folder_${sha256Hex(folderId).slice(0, 24)}`;
@@ -122,25 +130,30 @@ export function driveContextItem(input: {
   };
 }
 
-function contextItems(companyId: string) {
-  return db.collection(companyCollectionPath(companyId, "contextItems"));
+function contextItems(
+  companyId: string,
+  database: FirebaseFirestore.Firestore = db,
+) {
+  return database.collection(companyCollectionPath(companyId, "contextItems"));
 }
 
 async function driveFiles(
   accessToken: string,
   query: URLSearchParams,
+  fetcher: FetchLike = fetch,
 ): Promise<DriveFileListResponse> {
-  const response = await fetch(
+  const response = await fetcher(
     `https://www.googleapis.com/drive/v3/files?${query.toString()}`,
     {
       headers: { authorization: `Bearer ${accessToken}` },
       signal: AbortSignal.timeout(30_000),
     },
   );
+  const body = await response.json().catch(() => ({})) as DriveFileListResponse;
   return requireGoogleSuccess(
     driveDisplayName,
     response,
-    await response.json() as DriveFileListResponse,
+    body,
   );
 }
 
@@ -150,11 +163,15 @@ async function authorizedDriveConnection(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
+  database?: FirebaseFirestore.Firestore;
 }) {
   return authorizedGoogleCapability(driveCapabilityId, input);
 }
 
-export async function fetchDriveFolders(accessToken: string): Promise<DriveFileEntry[]> {
+export async function fetchDriveFolders(
+  accessToken: string,
+  fetcher: FetchLike = fetch,
+): Promise<DriveFileEntry[]> {
   const folders: DriveFileEntry[] = [];
   let pageToken: string | undefined;
   do {
@@ -163,7 +180,7 @@ export async function fetchDriveFolders(accessToken: string): Promise<DriveFileE
       fields: "nextPageToken, files(id, name, parents, description, shared, createdTime, modifiedTime)",
       pageSize: "100",
       ...(pageToken ? { pageToken } : {}),
-    }));
+    }), fetcher);
     folders.push(...(body.files || []));
     pageToken = body.nextPageToken;
   } while (pageToken);
@@ -176,9 +193,11 @@ export async function listGoogleDriveFolders(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
+  database?: FirebaseFirestore.Firestore;
+  fetcher?: FetchLike;
 }): Promise<SelectableFolder[]> {
   const { accessToken, connection } = await authorizedDriveConnection(input);
-  const folders = await fetchDriveFolders(accessToken);
+  const folders = await fetchDriveFolders(accessToken, input.fetcher);
   const resourceSnapshots = await connection.ref.collection("resources")
     .where("capabilityId", "==", driveCapabilityId)
     .get();
@@ -215,9 +234,14 @@ export async function selectGoogleDriveFolders(input: {
   clientId: string;
   clientSecret: string;
   credentialKey: string;
+  actorUid?: string;
+  database?: FirebaseFirestore.Firestore;
+  fetcher?: FetchLike;
+  now?: () => Timestamp;
 }): Promise<SelectableFolder[]> {
+  const database = input.database || db;
   const { accessToken, connection } = await authorizedDriveConnection(input);
-  const folders = await fetchDriveFolders(accessToken);
+  const folders = await fetchDriveFolders(accessToken, input.fetcher);
   const folderMap = new Map(folders.map((folder) => [folder.id, folder]));
   const selectedSet = new Set(input.folderIds);
   if ([...selectedSet].some((folderId) => !folderMap.has(folderId))) {
@@ -234,8 +258,8 @@ export async function selectGoogleDriveFolders(input: {
       .map((resource) => [String(resource.data().externalId), resource]),
   );
 
-  const now = Timestamp.now();
-  const batch = db.batch();
+  const now = input.now?.() || Timestamp.now();
+  const batch = database.batch();
 
   for (const folderId of selectedSet) {
     const folder = folderMap.get(folderId)!;
@@ -264,7 +288,7 @@ export async function selectGoogleDriveFolders(input: {
   for (const [folderId, resource] of existingMap.entries()) {
     if (selectedSet.has(folderId)) continue;
     batch.delete(resource.ref);
-    const items = await contextItems(input.companyId)
+    const items = await contextItems(input.companyId, database)
       .where("source.connectionId", "==", input.connectionId)
       .where("source.resourceId", "==", resource.id)
       .get();
@@ -272,7 +296,11 @@ export async function selectGoogleDriveFolders(input: {
   }
 
   await batch.commit();
-  await syncGoogleDriveConnection(input);
+  await syncGoogleDriveConnection({
+    ...input,
+    trigger: "selection",
+    requestedBy: input.actorUid || null,
+  });
   return listGoogleDriveFolders(input);
 }
 
@@ -280,6 +308,7 @@ export async function selectGoogleDriveFolders(input: {
 async function driveFileText(
   file: DriveFileEntry & { id: string; name: string },
   accessToken: string,
+  fetcher: FetchLike = fetch,
 ): Promise<string> {
   const metadataSummary = [
     `File: ${file.name}`,
@@ -288,122 +317,369 @@ async function driveFileText(
   ].join("\n");
   const isPlainText = file.mimeType?.startsWith("text/")
     || [".md", ".txt", ".json", ".csv"].some((suffix) => file.name.endsWith(suffix));
-  try {
-    if (file.mimeType === "application/vnd.google-apps.document") {
-      const exported = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`,
-        {
-          headers: { authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-      return exported.ok ? await exported.text() : metadataSummary;
+  if (file.mimeType === "application/vnd.google-apps.document") {
+    const exported = await fetcher(
+      `https://www.googleapis.com/drive/v3/files/${file.id}/export?mimeType=text/plain`,
+      {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    if (!exported.ok) {
+      throw new Error(`Google Drive document export failed (${exported.status})`);
     }
-    if (isPlainText) {
-      const downloaded = await fetch(
-        `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
-        {
-          headers: { authorization: `Bearer ${accessToken}` },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-      return downloaded.ok ? await downloaded.text() : metadataSummary;
-    }
-    return metadataSummary;
-  } catch (error) {
-    console.warn(`Failed to read content for Drive file ${file.id}:`, error);
-    return `File: ${file.name}\nDescription: ${file.description || ""}`;
+    return exported.text();
   }
+  if (isPlainText) {
+    const downloaded = await fetcher(
+      `https://www.googleapis.com/drive/v3/files/${file.id}?alt=media`,
+      {
+        headers: { authorization: `Bearer ${accessToken}` },
+        signal: AbortSignal.timeout(30_000),
+      },
+    );
+    if (!downloaded.ok) {
+      throw new Error(`Google Drive file download failed (${downloaded.status})`);
+    }
+    return downloaded.text();
+  }
+  return metadataSummary;
 }
 
-export async function syncDriveFolder(input: {
+function timestampMillis(value: unknown): number | null {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+function nestedRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+
+function driveContextMatches(
+  existing: FirebaseFirestore.DocumentData | undefined,
+  next: Record<string, unknown>,
+): boolean {
+  const existingSource = nestedRecord(existing?.source);
+  const nextSource = nestedRecord(next.source);
+  const existingProvenance = nestedRecord(existing?.provenance);
+  const nextProvenance = nestedRecord(next.provenance);
+  return existingSource.version === nextSource.version
+    && existingProvenance.checksum === nextProvenance.checksum
+    && existing?.title === next.title;
+}
+
+async function syncDriveFolderResource(input: {
   companyId: string;
   connectionId: string;
-  folderId: string;
+  resource: ConnectorSyncExecutionResource;
   accessToken: string;
-}): Promise<{ syncedCount: number }> {
+  lease: import("./sync-runtime.js").ConnectorSyncLease;
+  dependencies: ConnectorSyncDependencies;
+  fetcher?: FetchLike;
+}): Promise<ConnectorSyncResourceCompletion> {
   let pageToken: string | undefined;
-  let syncedCount = 0;
-  const resourceId = folderResourceId(input.folderId);
-  const now = Timestamp.now();
+  let changes = 0;
+  const folderId = String(input.resource.data.externalId);
+  const now = input.dependencies.now?.() || Timestamp.now();
+  const existing = await contextItems(input.companyId, input.dependencies.database)
+    .where("source.connectionId", "==", input.connectionId)
+    .where("source.resourceId", "==", input.resource.id)
+    .get();
+  const existingById = new Map(existing.docs.map((item) => [item.id, item]));
+  const observedContextIds = new Set<string>();
+  const lastChangeMillis = timestampMillis(
+    nestedRecord(input.resource.data.sync).lastChangeObservedAt,
+  );
 
   do {
     const body = await driveFiles(
       input.accessToken,
-      driveFolderFilesQuery(input.folderId, pageToken),
+      driveFolderFilesQuery(folderId, pageToken),
+      input.fetcher,
     );
 
     const files = importableDriveFiles(body.files || []);
-
+    const writes: Array<{
+      ref: FirebaseFirestore.DocumentReference;
+      value: Record<string, unknown>;
+    }> = [];
     for (const file of files) {
-      const contentText = await driveFileText(file, input.accessToken);
-      const itemRef = db.doc(companyDocumentPath(
+      const itemId = driveContextItemId(input.connectionId, folderId, file.id);
+      observedContextIds.add(itemId);
+      const itemRef = input.dependencies.database.doc(companyDocumentPath(
         input.companyId,
         "contextItems",
-        driveContextItemId(input.connectionId, input.folderId, file.id),
+        itemId,
       ));
-      await itemRef.set(driveContextItem({
+      const prior = existingById.get(itemId)?.data();
+      const providerVersion = file.md5Checksum || file.modifiedTime || "v1";
+      const priorVersion = nestedRecord(prior?.source).version;
+      if (prior && priorVersion === providerVersion) {
+        const modifiedMillis = timestampMillis(file.modifiedTime);
+        if (
+          modifiedMillis !== null
+          && (lastChangeMillis === null || modifiedMillis > lastChangeMillis)
+        ) changes += 1;
+        continue;
+      }
+      const contentText = await driveFileText(file, input.accessToken, input.fetcher);
+      const value = driveContextItem({
         companyId: input.companyId,
         connectionId: input.connectionId,
-        folderId: input.folderId,
+        folderId,
         file,
         contentText,
         observedAt: now,
-      }), { merge: true });
-      syncedCount += 1;
+      });
+      if (!driveContextMatches(prior, value)) {
+        writes.push({ ref: itemRef, value });
+        changes += 1;
+      }
+    }
+    for (let offset = 0; offset < writes.length; offset += 350) {
+      const pageWrites = writes.slice(offset, offset + 350);
+      await commitConnectorSyncWrites({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        resourceId: input.resource.id,
+        lease: input.lease,
+        apply: (transaction) => {
+          for (const write of pageWrites) {
+            transaction.set(write.ref, write.value, { merge: false });
+          }
+        },
+      }, input.dependencies);
     }
 
     pageToken = body.nextPageToken;
   } while (pageToken);
 
-  await writeResourceSyncState({
-    resource: connectionRef(input.companyId, input.connectionId)
-      .collection("resources").doc(resourceId),
-    itemCount: syncedCount,
-  });
+  const staleItems = existing.docs.filter((item) => !observedContextIds.has(item.id));
+  for (let offset = 0; offset < staleItems.length; offset += 400) {
+    const pageDeletes = staleItems.slice(offset, offset + 400);
+    await commitConnectorSyncWrites({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      resourceId: input.resource.id,
+      lease: input.lease,
+      apply: (transaction) => {
+        for (const item of pageDeletes) transaction.delete(item.ref);
+      },
+    }, input.dependencies);
+  }
+  changes += staleItems.length;
 
-  return { syncedCount };
+  return {
+    changes,
+    itemCount: observedContextIds.size,
+    cursorAfter: null,
+    cursorMode: "full",
+  };
 }
 
-export async function syncGoogleDriveConnection(input: {
+type DriveSyncInput = {
   companyId: string;
   connectionId: string;
   clientId: string;
   clientSecret: string;
   credentialKey: string;
-}): Promise<{ totalSynced: number }> {
-  const { accessToken, connection, capability } = await authorizedDriveConnection(input);
-  const resources = await connection.ref.collection("resources")
+  trigger?: ConnectorSyncTrigger;
+  requestedBy?: string | null;
+  resourceIds?: string[];
+  replayOfRunId?: string | null;
+  database?: FirebaseFirestore.Firestore;
+  fetcher?: FetchLike;
+  now?: () => Timestamp;
+};
+
+export type DriveSyncResult = ConnectorSyncRunResult & {
+  folders: number;
+  totalSynced: number;
+};
+
+function driveRunResult(
+  runId: string,
+  data: FirebaseFirestore.DocumentData,
+): DriveSyncResult {
+  const result = connectorSyncRunResultFromData(runId, data);
+  return { ...result, folders: result.resources, totalSynced: result.changes };
+}
+
+async function executeGoogleDriveSyncRun(
+  input: DriveSyncInput & { runId: string },
+): Promise<DriveSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const completed = await executeConnectorSyncRun({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    runId: input.runId,
+    capabilityId: driveCapabilityId,
+    serviceId: "drive",
+    prepare: () => authorizedDriveConnection(input),
+    listResources: async ({ connection }) => {
+      const snapshot = await connection.ref.collection("resources")
+        .where("capabilityId", "==", driveCapabilityId)
+        .where("status", "==", "enabled")
+        .get();
+      return snapshot.docs.map((resource) => ({ id: resource.id, data: resource.data() }));
+    },
+    cursorMode: () => "full",
+    synchronizeResource: ({ preparation, resource, lease, dependencies: runDependencies }) => (
+      syncDriveFolderResource({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        resource,
+        accessToken: preparation.accessToken,
+        lease,
+        dependencies: runDependencies,
+        fetcher: input.fetcher,
+      })
+    ),
+  }, dependencies);
+  return { ...completed, folders: completed.resources, totalSynced: completed.changes };
+}
+
+export async function syncGoogleDriveConnection(
+  input: DriveSyncInput,
+): Promise<DriveSyncResult> {
+  const database = input.database || db;
+  const dependencies: ConnectorSyncDependencies = { database, now: input.now };
+  const connection = database.doc(companyDocumentPath(
+    input.companyId,
+    "connections",
+    input.connectionId,
+  ));
+  const resources = await connection.collection("resources")
     .where("capabilityId", "==", driveCapabilityId)
     .where("status", "==", "enabled")
     .get();
-
-  let totalSynced = 0;
-  try {
-    for (const resource of resources.docs) {
-      const result = await syncDriveFolder({
-        companyId: input.companyId,
-        connectionId: input.connectionId,
-        folderId: String(resource.data().externalId),
-        accessToken,
-      });
-      totalSynced += result.syncedCount;
-    }
-    const updated = await markCapabilitySynced({
-      connection: connection.ref,
-      capability: capability.ref,
-      itemCount: totalSynced,
-    });
-    if (!updated) {
-      throw new Error("Google Drive connection was disconnected during synchronization");
-    }
-    return { totalSynced };
-  } catch (error) {
-    await markCapabilityAttention({
-      connection: connection.ref,
-      capability: capability.ref,
-      error,
-    });
-    throw error;
+  const selectedResourceIds = input.resourceIds?.filter(
+    (resourceId) => resources.docs.some((resource) => resource.id === resourceId),
+  ) || resources.docs.map((resource) => resource.id);
+  const created = await createConnectorSyncRun({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    capabilityId: driveCapabilityId,
+    serviceId: "drive",
+    trigger: input.trigger || "manual",
+    requestedBy: input.requestedBy,
+    resourceIds: selectedResourceIds,
+    replayOfRunId: input.replayOfRunId,
+  }, dependencies);
+  if (!created.created || created.deferred) {
+    const current = await connection.collection("syncRuns").doc(created.runId).get();
+    return driveRunResult(created.runId, current.data() || {});
   }
+  return executeGoogleDriveSyncRun({ ...input, runId: created.runId });
+}
+
+export async function replayGoogleDriveSyncRun(input: DriveSyncInput & {
+  runId: string;
+  actorUid: string;
+}): Promise<DriveSyncResult> {
+  const database = input.database || db;
+  const failedResourceIds = await replayableConnectorSyncResources({
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    runId: input.runId,
+    capabilityId: driveCapabilityId,
+    serviceId: "drive",
+  }, { database, now: input.now });
+  return syncGoogleDriveConnection({
+    ...input,
+    trigger: "operator_replay",
+    requestedBy: input.actorUid,
+    replayOfRunId: input.runId,
+    resourceIds: failedResourceIds,
+  });
+}
+
+export async function retryDueGoogleDriveSyncRuns(input: {
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+  limit?: number;
+  database?: FirebaseFirestore.Firestore;
+  fetcher?: FetchLike;
+  now?: () => Timestamp;
+}): Promise<Array<DriveSyncResult & { companyId: string; connectionId: string }>> {
+  const database = input.database || db;
+  const dependencies = { database, now: input.now };
+  const due = await listDueConnectorSyncRuns({ serviceId: "drive", limit: input.limit }, dependencies);
+  const results: Array<DriveSyncResult & { companyId: string; connectionId: string }> = [];
+  for (const run of due) {
+    const result = await executeGoogleDriveSyncRun({
+      companyId: run.companyId,
+      connectionId: run.connectionId,
+      runId: run.runId,
+      clientId: input.clientId,
+      clientSecret: input.clientSecret,
+      credentialKey: input.credentialKey,
+      trigger: "retry",
+      database,
+      fetcher: input.fetcher,
+      now: input.now,
+    });
+    results.push({ companyId: run.companyId, connectionId: run.connectionId, ...result });
+  }
+  return results;
+}
+
+export async function syncAllGoogleDriveConnections(input: {
+  clientId: string;
+  clientSecret: string;
+  credentialKey: string;
+  database?: FirebaseFirestore.Firestore;
+  fetcher?: FetchLike;
+  now?: () => Timestamp;
+}): Promise<Array<{ companyId: string; connectionId: string; ok: boolean; error?: string }>> {
+  const database = input.database || db;
+  const companies = await database.collection("companies").get();
+  const results: Array<{
+    companyId: string;
+    connectionId: string;
+    ok: boolean;
+    error?: string;
+  }> = [];
+  for (const company of companies.docs) {
+    if (company.data().status !== "active") continue;
+    const connections = await company.ref.collection("connections")
+      .where("connectorId", "==", "google_workspace")
+      .where("status", "in", ["active", "attention"])
+      .get();
+    for (const connection of connections.docs) {
+      const capability = await connection.ref.collection("capabilities").doc("drive").get();
+      if (!capability.exists || capability.data()?.status !== "active") continue;
+      try {
+        const run = await syncGoogleDriveConnection({
+          ...input,
+          companyId: company.id,
+          connectionId: connection.id,
+          trigger: "scheduled",
+          requestedBy: "scheduler:drive",
+          database,
+        });
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: run.status !== "attention",
+          ...(run.status === "attention" ? { error: "Drive synchronization needs attention" } : {}),
+        });
+      } catch (error) {
+        results.push({
+          companyId: company.id,
+          connectionId: connection.id,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  return results;
 }

@@ -56,6 +56,7 @@ import {
 } from "./connectors/google-calendar.js";
 import {
   listGoogleDriveFolders,
+  replayGoogleDriveSyncRun,
   selectGoogleDriveFolders,
   syncGoogleDriveConnection,
 } from "./connectors/google-drive.js";
@@ -67,6 +68,7 @@ import {
   configuredGitHubInstallationId,
   connectGitHubInstallation,
   githubConfigurationFromEnvironment,
+  replayGitHubSyncRun,
   syncGitHubConnection,
 } from "./connectors/github.js";
 import {
@@ -497,19 +499,6 @@ export const appRouter = router({
           clientSecret: googleConnectorClientSecret.value(),
           credentialKey: connectorCredentialKey.value(),
         })),
-      replay: adminProcedure
-        .input(z.object({
-          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
-          runId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
-        }))
-        .mutation(({ ctx, input }) => replayGoogleCalendarSyncRun({
-          companyId: ctx.companyId,
-          actorUid: ctx.uid,
-          ...input,
-          clientId: googleConnectorClientId.value(),
-          clientSecret: googleConnectorClientSecret.value(),
-          credentialKey: connectorCredentialKey.value(),
-        })),
     }),
     googleDrive: router({
       folders: adminProcedure
@@ -531,6 +520,7 @@ export const appRouter = router({
         .mutation(({ ctx, input }) => selectGoogleDriveFolders({
           companyId: ctx.companyId,
           ...input,
+          actorUid: ctx.uid,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
           credentialKey: connectorCredentialKey.value(),
@@ -542,6 +532,8 @@ export const appRouter = router({
         .mutation(({ ctx, input }) => syncGoogleDriveConnection({
           companyId: ctx.companyId,
           ...input,
+          trigger: "manual",
+          requestedBy: ctx.uid,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
           credentialKey: connectorCredentialKey.value(),
@@ -562,9 +554,57 @@ export const appRouter = router({
         .mutation(({ ctx, input }) => syncGitHubConnection({
           companyId: ctx.companyId,
           connectionId: input.connectionId,
+          trigger: "manual",
+          requestedBy: ctx.uid,
           configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
         })),
     }),
+    replaySync: adminProcedure
+      .input(z.object({
+        connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        runId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const run = await db.doc(
+          `${companyDocumentPath(ctx.companyId, "connections", input.connectionId)}`
+            + `/syncRuns/${input.runId}`,
+        ).get();
+        if (!run.exists) {
+          throw new TRPCError({ code: "NOT_FOUND", message: "Synchronization run not found" });
+        }
+        switch (run.data()?.serviceId) {
+          case "calendar":
+            return replayGoogleCalendarSyncRun({
+              companyId: ctx.companyId,
+              ...input,
+              actorUid: ctx.uid,
+              clientId: googleConnectorClientId.value(),
+              clientSecret: googleConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+          case "drive":
+            return replayGoogleDriveSyncRun({
+              companyId: ctx.companyId,
+              ...input,
+              actorUid: ctx.uid,
+              clientId: googleConnectorClientId.value(),
+              clientSecret: googleConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+          case "issues":
+            return replayGitHubSyncRun({
+              companyId: ctx.companyId,
+              ...input,
+              actorUid: ctx.uid,
+              configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+            });
+          default:
+            throw new TRPCError({
+              code: "BAD_REQUEST",
+              message: "This synchronization run cannot be replayed",
+            });
+        }
+      }),
     grok: router({
       connect: adminProcedure.mutation(async ({ ctx }) => {
         try {
@@ -735,11 +775,65 @@ export const appRouter = router({
             ...input,
             actorUid: ctx.uid,
           });
-          return { ok: true };
+          if (!input.enabled) return { ok: true, sync: null };
+          const connectionPath = companyDocumentPath(
+            ctx.companyId,
+            "connections",
+            input.connectionId,
+          );
+          const [connection, resource] = await Promise.all([
+            db.doc(connectionPath).get(),
+            db.doc(`${connectionPath}/resources/${input.resourceId}`).get(),
+          ]);
+          const capabilityId = resource.data()?.capabilityId;
+          if (connection.data()?.connectorId === "google_workspace") {
+            if (capabilityId === "context.calendar.read") {
+              const sync = await syncGoogleCalendarConnection({
+                companyId: ctx.companyId,
+                connectionId: input.connectionId,
+                resourceIds: [input.resourceId],
+                trigger: "selection",
+                requestedBy: ctx.uid,
+                clientId: googleConnectorClientId.value(),
+                clientSecret: googleConnectorClientSecret.value(),
+                credentialKey: connectorCredentialKey.value(),
+              });
+              return { ok: true, sync };
+            }
+            if (capabilityId === "context.document.read") {
+              const sync = await syncGoogleDriveConnection({
+                companyId: ctx.companyId,
+                connectionId: input.connectionId,
+                resourceIds: [input.resourceId],
+                trigger: "selection",
+                requestedBy: ctx.uid,
+                clientId: googleConnectorClientId.value(),
+                clientSecret: googleConnectorClientSecret.value(),
+                credentialKey: connectorCredentialKey.value(),
+              });
+              return { ok: true, sync };
+            }
+          }
+          if (
+            connection.data()?.connectorId === "github"
+            && capabilityId === "context.github.issue.read"
+          ) {
+            const sync = await syncGitHubConnection({
+              companyId: ctx.companyId,
+              connectionId: input.connectionId,
+              resourceIds: [input.resourceId],
+              trigger: "selection",
+              requestedBy: ctx.uid,
+              configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+            });
+            return { ok: true, sync };
+          }
+          return { ok: true, sync: null };
         } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
           throw new TRPCError({
-            code: "NOT_FOUND",
-            message: error instanceof Error ? error.message : String(error),
+            code: message === "Connection resource not found" ? "NOT_FOUND" : "BAD_REQUEST",
+            message,
           });
         }
       }),

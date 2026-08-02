@@ -609,15 +609,18 @@ Exit criteria:
 **Usable outcome:** an administrator can distinguish fresh, stale, failed, and
 recovering sources and can safely replay a failed resource.
 
-**Implementation status (2026-08-02):** C3A is implemented in the repository
-and awaits test-production acceptance. Calendar manual, selection, scheduled,
-and recovery paths now share durable capability runs, distinct resource
-attempts, fenced resource leases, four bounded attempts (one initial attempt
-plus 1/5/30-minute backoff), stale-run recovery, truthful timestamps, and an
-operator replay action in Sources. The schema is additive and retains legacy
-sync fields as read fallbacks. C3 remains in progress: Drive and GitHub still
-need to adopt the runtime, and Firestore-to-Qdrant delivery/freshness remains a
-separate unfinished reliability plane.
+**Implementation status (2026-08-02):** C3A and C3B are implemented in the
+repository and await test-production acceptance. Calendar, Drive, and GitHub
+manual, selection/enable, scheduled, and recovery paths now share durable
+capability runs, distinct resource attempts, fenced resource leases, four
+bounded attempts (one initial attempt plus 1/5/30-minute backoff), stale-run
+recovery, truthful timestamps, and one provider-neutral operator replay action
+in Sources. Drive reconciles its current direct-child contract, and GitHub
+polling health remains separate from webhook delivery health. Concurrent sync
+requests coalesce without losing a newly selected resource. The schema is
+additive and retains legacy sync fields as read fallbacks. C3 remains in
+progress only for the separate Firestore-to-Qdrant delivery/freshness plane
+(C3C).
 
 Build:
 
@@ -691,15 +694,14 @@ Calendar:
 
 Drive:
 
-- schedule synchronization as well as supporting manual sync;
-- define selected-folder behavior as recursive;
+- extend the scheduled direct-child reconciliation established in C3B to
+  recursive selected-folder behavior;
 - prevent overlapping selected parent/child roots from creating duplicate
   context;
 - extract supported Google Docs, plain text/Markdown, and PDF text;
 - treat unsupported binary files as metadata and a deep link, not fake text
   extraction;
-- delete context for files deleted, trashed, moved out of scope, or no longer
-  visible; and
+- preserve C3B deletion/move cleanup across recursive and overlapping roots;
 - reconcile counts from stored context rather than the latest page scan.
 
 Initial service targets:
@@ -1154,3 +1156,30 @@ YYYY-MM-DD — Slice
   in the test-production account as inspectable acceptance evidence.
 - **Decision:** C2 passed. Keep mandatory named approval and the immutable
   registry boundary; continue to C3 before adding Gmail or an external write.
+
+### 2026-08-02 — C3B implementation checkpoint
+
+- **Implementation:** the C3A primitives now expose one shared adapter executor,
+  due-run discovery, replay validation, and a coalesced successor for resource
+  selections made during an active run. Calendar was moved onto that executor;
+  Drive folders and GitHub repositories now use the same claim, fenced lease,
+  bounded retry, terminal attention, aggregate-health, and replay semantics.
+- **Drive:** selection, manual sync, 30-minute polling, five-minute recovery,
+  direct-child stale deletion, actual change counting, and supported-text
+  extraction failures are durable per folder. Recursive roots and PDF
+  extraction remain C5.
+- **GitHub:** manual sync, resource enable, 30-minute polling, five-minute
+  recovery, actual issue change counting, and stale issue deletion are durable
+  per repository. Webhook delivery remains independently idempotent and its
+  health is not overwritten by polling. Transactional webhook mutations defer
+  while polling holds the repository lease, closing the poll/event race without
+  reporting a false webhook failure.
+- **Verification:** adapter integration tests cover isolated transient failure,
+  failed-resource-only retry, permanent Drive attention and replay, stale
+  cleanup, idempotent reconciliation, webhook-health isolation, and active-run
+  successor coalescing. The full redesign suite passes 121 tests: 11 shared
+  workflow, 102 Functions, and 8 frontend tests; all production builds pass.
+  Full test-production acceptance is still required.
+- **Decision:** do not call C3 complete until C3B passes real Drive/GitHub
+  acceptance and C3C makes Firestore-to-Qdrant delivery measurable and
+  recoverable.

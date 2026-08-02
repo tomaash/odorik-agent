@@ -35,6 +35,7 @@ export type ConnectorSyncLease = {
   runId: string;
   attemptId: string;
   generation: number;
+  connectionGeneration: number;
   expiresAt: Timestamp;
 };
 
@@ -56,6 +57,21 @@ export type ConnectorSyncRunResult = {
   failed: number;
   changes: number;
   nextAttemptAt?: string | null;
+};
+
+export type ConnectorSyncExecutionResource<
+  TData extends FirebaseFirestore.DocumentData = FirebaseFirestore.DocumentData,
+> = {
+  id: string;
+  data: TData;
+};
+
+export type ConnectorSyncResourceCompletion = {
+  changes: number;
+  itemCount: number;
+  resourcePatch?: Record<string, unknown>;
+  cursorAfter?: string | null;
+  cursorMode?: string | null;
 };
 
 export type ConnectorSyncDependencies = {
@@ -177,6 +193,38 @@ function connectionRef(input: {
   return input.database.doc(`companies/${input.companyId}/connections/${input.connectionId}`);
 }
 
+function connectorSyncRunDocument(input: {
+  companyId: string;
+  connectionId: string;
+  capabilityId: SourceCapabilityId;
+  serviceId: CapabilityServiceId;
+  trigger: ConnectorSyncTrigger;
+  requestedBy?: string | null;
+  resourceIds: string[];
+  replayOfRunId?: string | null;
+  connectionGeneration: number;
+  now: Timestamp;
+}): Record<string, unknown> {
+  return {
+    companyId: input.companyId,
+    connectionId: input.connectionId,
+    capabilityId: input.capabilityId,
+    serviceId: input.serviceId,
+    trigger: input.trigger,
+    requestedBy: input.requestedBy || null,
+    replayOfRunId: input.replayOfRunId || null,
+    connectionGeneration: input.connectionGeneration,
+    resourceIds: [...new Set(input.resourceIds)],
+    status: "queued" satisfies ConnectorSyncRunStatus,
+    attempt: 0,
+    maxAttempts: connectorSyncMaxAttempts,
+    queuedAt: input.now,
+    createdAt: input.now,
+    updatedAt: input.now,
+    expiresAt: Timestamp.fromMillis(input.now.toMillis() + 90 * 24 * 60 * 60 * 1_000),
+  };
+}
+
 export async function createConnectorSyncRun(input: {
   companyId: string;
   connectionId: string;
@@ -189,6 +237,7 @@ export async function createConnectorSyncRun(input: {
 }, deps: ConnectorSyncDependencies): Promise<{
   runId: string;
   created: boolean;
+  deferred?: boolean;
 }> {
   const runRef = connectionRef({ ...input, database: deps.database })
     .collection("syncRuns").doc();
@@ -212,30 +261,86 @@ export async function createConnectorSyncRun(input: {
     if (activeRunId) {
       const activeRun = await transaction.get(syncRunRef({ ...input, database: deps.database, runId: activeRunId }));
       if (activeRun.exists && activeRunStatuses.has(activeRun.data()?.status)) {
-        return { runId: activeRun.id, created: false };
+        const currentResourceIds = Array.isArray(activeRun.data()?.resourceIds)
+          ? activeRun.data()!.resourceIds.map(String)
+          : [];
+        const requestedResourceIds = [...new Set(input.resourceIds)];
+        const mergedResourceIds = [...new Set([...currentResourceIds, ...requestedResourceIds])];
+        if (activeRun.data()?.status !== "running") {
+          const now = clock(deps);
+          if (mergedResourceIds.length !== currentResourceIds.length) {
+            const failedResourceIds = Array.isArray(activeRun.data()?.failedResourceIds)
+              ? activeRun.data()!.failedResourceIds.map(String)
+              : [];
+            transaction.set(activeRun.ref, {
+              resourceIds: mergedResourceIds,
+              ...(activeRun.data()?.status === "retry_scheduled" ? {
+                failedResourceIds: [...new Set([...failedResourceIds, ...requestedResourceIds])],
+              } : {}),
+              updatedAt: now,
+            }, { merge: true });
+          }
+          transaction.set(capability, {
+            stats: {
+              latestRunId: activeRun.id,
+              syncHealth: activeRun.data()?.status === "retry_scheduled"
+                ? "retrying"
+                : "syncing",
+              lastAttemptAt: now,
+            },
+            updatedAt: now,
+          }, { merge: true });
+          return { runId: activeRun.id, created: false };
+        }
+        if (requestedResourceIds.every((resourceId) => currentResourceIds.includes(resourceId))) {
+          return { runId: activeRun.id, created: false };
+        }
+        const pendingRunId = String(capabilitySnapshot.data()?.stats?.pendingRunId || "");
+        if (pendingRunId) {
+          const pendingRun = await transaction.get(syncRunRef({
+            ...input,
+            database: deps.database,
+            runId: pendingRunId,
+          }));
+          if (pendingRun.exists && pendingRun.data()?.status === "queued") {
+            const pendingResources = Array.isArray(pendingRun.data()?.resourceIds)
+              ? pendingRun.data()!.resourceIds.map(String)
+              : [];
+            transaction.set(pendingRun.ref, {
+              resourceIds: [...new Set([...pendingResources, ...requestedResourceIds])],
+              updatedAt: clock(deps),
+            }, { merge: true });
+            return { runId: pendingRun.id, created: false, deferred: true };
+          }
+        }
+        const now = clock(deps);
+        transaction.create(runRef, connectorSyncRunDocument({
+          ...input,
+          connectionGeneration: Number(connectionSnapshot.data()?.syncGeneration || 0),
+          now,
+        }));
+        transaction.set(capability, {
+          stats: {
+            pendingRunId: runRef.id,
+            latestRunId: runRef.id,
+            syncHealth: "syncing" satisfies ConnectorSyncHealth,
+            lastAttemptAt: now,
+          },
+          updatedAt: now,
+        }, { merge: true });
+        return { runId: runRef.id, created: true, deferred: true };
       }
     }
     const now = clock(deps);
-    transaction.create(runRef, {
-      companyId: input.companyId,
-      connectionId: input.connectionId,
-      capabilityId: input.capabilityId,
-      serviceId: input.serviceId,
-      trigger: input.trigger,
-      requestedBy: input.requestedBy || null,
-      replayOfRunId: input.replayOfRunId || null,
-      resourceIds: [...new Set(input.resourceIds)],
-      status: "queued" satisfies ConnectorSyncRunStatus,
-      attempt: 0,
-      maxAttempts: connectorSyncMaxAttempts,
-      queuedAt: now,
-      createdAt: now,
-      updatedAt: now,
-      expiresAt: Timestamp.fromMillis(now.toMillis() + 90 * 24 * 60 * 60 * 1_000),
-    });
+    transaction.create(runRef, connectorSyncRunDocument({
+      ...input,
+      connectionGeneration: Number(connectionSnapshot.data()?.syncGeneration || 0),
+      now,
+    }));
     transaction.set(capability, {
       stats: {
         activeRunId: runRef.id,
+        pendingRunId: null,
         latestRunId: runRef.id,
         syncHealth: "syncing" satisfies ConnectorSyncHealth,
         lastAttemptAt: now,
@@ -262,6 +367,63 @@ export async function claimConnectorSyncRun(input: {
     const data = snapshot.data() || {};
     const status = data.status as ConnectorSyncRunStatus;
     const now = clock(deps);
+    const serviceId = data.serviceId as CapabilityServiceId;
+    const capability = capabilityRef({ ...input, database: deps.database, serviceId });
+    const connection = connectionRef({ ...input, database: deps.database });
+    const [capabilitySnapshot, connectionSnapshot] = await Promise.all([
+      transaction.get(capability),
+      transaction.get(connection),
+    ]);
+    if (
+      !capabilitySnapshot.exists
+      || !connectionSnapshot.exists
+      || !activeConnectionStatuses.has(String(connectionSnapshot.data()?.status))
+      || Number(connectionSnapshot.data()?.syncGeneration || 0)
+        !== Number(data.connectionGeneration || 0)
+    ) {
+      transaction.set(runRef, {
+        status: "skipped" satisfies ConnectorSyncRunStatus,
+        lastError: null,
+        executionLeaseExpiresAt: null,
+        finishedAt: now,
+        updatedAt: now,
+      }, { merge: true });
+      if (
+        capabilitySnapshot.exists
+        && (
+          capabilitySnapshot.data()?.stats?.activeRunId === input.runId
+          || capabilitySnapshot.data()?.stats?.pendingRunId === input.runId
+        )
+      ) {
+        transaction.set(capability, {
+          stats: {
+            ...(capabilitySnapshot.data()?.stats?.activeRunId === input.runId
+              ? { activeRunId: null }
+              : {}),
+            ...(capabilitySnapshot.data()?.stats?.pendingRunId === input.runId
+              ? { pendingRunId: null }
+              : {}),
+          },
+          updatedAt: now,
+        }, { merge: true });
+      }
+      return {
+        claimed: false,
+        attempt: Number(data.attempt || 0),
+        data: { ...data, status: "skipped" },
+      };
+    }
+    const activeRunId = String(capabilitySnapshot.data()?.stats?.activeRunId || "");
+    if (activeRunId && activeRunId !== input.runId) {
+      const activeRun = await transaction.get(syncRunRef({
+        ...input,
+        database: deps.database,
+        runId: activeRunId,
+      }));
+      if (activeRun.exists && activeRunStatuses.has(activeRun.data()?.status)) {
+        return { claimed: false, attempt: Number(data.attempt || 0), data };
+      }
+    }
     const leaseExpiresAt = timestampMillis(data.executionLeaseExpiresAt) || 0;
     if (status === "running" && leaseExpiresAt > now.toMillis()) {
       return { claimed: false, attempt: Number(data.attempt || 0), data };
@@ -284,6 +446,18 @@ export async function claimConnectorSyncRun(input: {
       lastAttemptAt: now,
       nextAttemptAt: null,
       executionLeaseExpiresAt: Timestamp.fromMillis(now.toMillis() + connectorSyncLeaseMs),
+      updatedAt: now,
+    }, { merge: true });
+    transaction.set(capability, {
+      stats: {
+        activeRunId: input.runId,
+        ...(capabilitySnapshot.data()?.stats?.pendingRunId === input.runId
+          ? { pendingRunId: null }
+          : {}),
+        latestRunId: input.runId,
+        syncHealth: "syncing" satisfies ConnectorSyncHealth,
+        lastAttemptAt: now,
+      },
       updatedAt: now,
     }, { merge: true });
     return { claimed: true, attempt, data: { ...data, status: "running", attempt } };
@@ -361,10 +535,12 @@ export async function acquireConnectorSyncLease(input: {
       return { acquired: false, reason: "busy" as const, attemptRef };
     }
     const generation = Number(resourceData.syncLeaseGeneration || 0) + 1;
+    const connectionGeneration = Number(connectionSnapshot.data()?.syncGeneration || 0);
     const lease: ConnectorSyncLease = {
       runId: input.runId,
       attemptId,
       generation,
+      connectionGeneration,
       expiresAt: Timestamp.fromMillis(now.toMillis() + connectorSyncLeaseMs),
     };
     transaction.set(resource, {
@@ -386,6 +562,7 @@ export async function acquireConnectorSyncLease(input: {
       resourceId: input.resourceId,
       status: "running",
       leaseGeneration: generation,
+      connectionGeneration,
       cursorBefore: input.cursorBefore || null,
       cursorMode: input.cursorMode || null,
       startedAt: now,
@@ -409,8 +586,15 @@ function assertLeaseData(
   ) throw new Error("Connector sync lease is no longer current");
 }
 
-function assertActiveConnectionData(data: FirebaseFirestore.DocumentData | undefined): void {
-  if (!data || !activeConnectionStatuses.has(String(data.status))) {
+function assertActiveConnectionData(
+  data: FirebaseFirestore.DocumentData | undefined,
+  lease?: ConnectorSyncLease,
+): void {
+  if (
+    !data
+    || !activeConnectionStatuses.has(String(data.status))
+    || (lease && Number(data.syncGeneration || 0) !== lease.connectionGeneration)
+  ) {
     throw new Error("Connector connection is no longer active");
   }
 }
@@ -425,7 +609,7 @@ export async function assertConnectorSyncLease(input: {
     connectionRef({ ...input, database: deps.database }).get(),
     resourceRef({ ...input, database: deps.database }).get(),
   ]);
-  assertActiveConnectionData(connection.data());
+  assertActiveConnectionData(connection.data(), input.lease);
   assertLeaseData(resource.data(), input.lease);
 }
 
@@ -443,7 +627,7 @@ export async function commitConnectorSyncWrites(input: {
       transaction.get(connection),
       transaction.get(resource),
     ]);
-    assertActiveConnectionData(connectionSnapshot.data());
+    assertActiveConnectionData(connectionSnapshot.data(), input.lease);
     assertLeaseData(snapshot.data(), input.lease);
     input.apply(transaction);
   });
@@ -469,7 +653,7 @@ export async function completeConnectorSyncResource(input: {
       transaction.get(connection),
       transaction.get(resource),
     ]);
-    assertActiveConnectionData(connectionSnapshot.data());
+    assertActiveConnectionData(connectionSnapshot.data(), input.lease);
     assertLeaseData(snapshot.data(), input.lease);
     const priorSync = snapshot.data()?.sync || {};
     transaction.set(resource, {
@@ -558,6 +742,213 @@ export async function failConnectorSyncResource(input: {
   });
 }
 
+function connectorSyncWasInvalidated(error: unknown): boolean {
+  const message = sanitizeConnectorSyncError(error);
+  return message === "Connector sync lease is no longer current"
+    || message === "Connector connection is no longer active";
+}
+
+async function abandonConnectorSyncResource(input: {
+  companyId: string;
+  connectionId: string;
+  resourceId: string;
+  lease: ConnectorSyncLease;
+  attemptRef: FirebaseFirestore.DocumentReference;
+}, deps: ConnectorSyncDependencies): Promise<void> {
+  const resource = resourceRef({ ...input, database: deps.database });
+  const now = clock(deps);
+  await deps.database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(resource);
+    if (
+      snapshot.exists
+      && snapshot.data()?.syncLease?.runId === input.lease.runId
+      && Number(snapshot.data()?.syncLease?.generation) === input.lease.generation
+    ) {
+      transaction.set(resource, { syncLease: null, updatedAt: now }, { merge: true });
+    }
+    transaction.set(input.attemptRef, {
+      status: "skipped",
+      reason: "inactive",
+      finishedAt: now,
+      updatedAt: now,
+    }, { merge: true });
+  });
+}
+
+export function connectorSyncRunResultFromData(
+  runId: string,
+  data: FirebaseFirestore.DocumentData,
+): ConnectorSyncRunResult {
+  return {
+    runId,
+    status: data.status || "queued",
+    attempt: Number(data.attempt || 0),
+    resources: Number(data.resources || data.resourceIds?.length || 0),
+    succeeded: Number(data.succeeded || 0),
+    failed: Number(data.failed || 0),
+    changes: Number(data.changes || 0),
+    nextAttemptAt: data.nextAttemptAt?.toDate?.().toISOString?.()
+      || data.nextAttemptAt
+      || null,
+  };
+}
+
+export async function executeConnectorSyncRun<
+  TPreparation,
+  TResourceData extends FirebaseFirestore.DocumentData = FirebaseFirestore.DocumentData,
+>(input: {
+  companyId: string;
+  connectionId: string;
+  runId: string;
+  capabilityId: SourceCapabilityId;
+  serviceId: CapabilityServiceId;
+  prepare: () => Promise<TPreparation>;
+  listResources: (
+    preparation: TPreparation,
+  ) => Promise<Array<ConnectorSyncExecutionResource<TResourceData>>>;
+  cursorBefore?: (
+    resource: ConnectorSyncExecutionResource<TResourceData>,
+  ) => string | null;
+  cursorMode?: (
+    resource: ConnectorSyncExecutionResource<TResourceData>,
+  ) => string | null;
+  synchronizeResource: (value: {
+    preparation: TPreparation;
+    resource: ConnectorSyncExecutionResource<TResourceData>;
+    attempt: number;
+    lease: ConnectorSyncLease;
+    attemptRef: FirebaseFirestore.DocumentReference;
+    dependencies: ConnectorSyncDependencies;
+  }) => Promise<ConnectorSyncResourceCompletion>;
+  classifyError?: (error: unknown) => ConnectorSyncFailureKind;
+}, deps: ConnectorSyncDependencies): Promise<ConnectorSyncRunResult> {
+  const runRef = syncRunRef({ ...input, database: deps.database });
+  const claimed = await claimConnectorSyncRun(input, deps);
+  if (!claimed.claimed) {
+    const current = await runRef.get();
+    return connectorSyncRunResultFromData(input.runId, current.data() || claimed.data);
+  }
+  const configuredResourceIds = (claimed.attempt > 1
+    ? claimed.data.failedResourceIds
+    : claimed.data.resourceIds) as unknown;
+  const resourceIds = Array.isArray(configuredResourceIds)
+    ? configuredResourceIds.map(String)
+    : [];
+  const results: ConnectorSyncResourceResult[] = [];
+  const classifyError = input.classifyError || classifyConnectorSyncError;
+  try {
+    const preparation = await input.prepare();
+    const availableResources = await input.listResources(preparation);
+    const resources = availableResources.filter(
+      (resource) => resourceIds.length === 0 || resourceIds.includes(resource.id),
+    );
+    for (const missingResourceId of resourceIds.filter(
+      (resourceId) => !availableResources.some((resource) => resource.id === resourceId),
+    )) {
+      results.push({ resourceId: missingResourceId, status: "skipped", changes: 0 });
+    }
+    for (const resource of resources) {
+      const acquired = await acquireConnectorSyncLease({
+        companyId: input.companyId,
+        connectionId: input.connectionId,
+        capabilityId: input.capabilityId,
+        serviceId: input.serviceId,
+        resourceId: resource.id,
+        runId: input.runId,
+        attempt: claimed.attempt,
+        cursorBefore: input.cursorBefore?.(resource) || null,
+        cursorMode: input.cursorMode?.(resource) || null,
+      }, deps);
+      if (!acquired.acquired || !acquired.lease) {
+        results.push({
+          resourceId: resource.id,
+          status: acquired.reason === "busy" ? "retry_scheduled" : "skipped",
+          changes: 0,
+          ...(acquired.reason === "busy" ? {
+            failureKind: "transient" as const,
+            error: "Another synchronization attempt still owns this resource",
+          } : {}),
+        });
+        continue;
+      }
+      try {
+        const completion = await input.synchronizeResource({
+          preparation,
+          resource,
+          attempt: claimed.attempt,
+          lease: acquired.lease,
+          attemptRef: acquired.attemptRef,
+          dependencies: deps,
+        });
+        await completeConnectorSyncResource({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceId: resource.id,
+          lease: acquired.lease,
+          attemptRef: acquired.attemptRef,
+          ...completion,
+        }, deps);
+        results.push({
+          resourceId: resource.id,
+          status: "succeeded",
+          changes: completion.changes,
+          itemCount: completion.itemCount,
+        });
+      } catch (error) {
+        if (connectorSyncWasInvalidated(error)) {
+          await abandonConnectorSyncResource({
+            companyId: input.companyId,
+            connectionId: input.connectionId,
+            resourceId: resource.id,
+            lease: acquired.lease,
+            attemptRef: acquired.attemptRef,
+          }, deps);
+          results.push({ resourceId: resource.id, status: "skipped", changes: 0 });
+          continue;
+        }
+        const failureKind = classifyError(error);
+        const retryAt = failureKind === "transient"
+          ? connectorSyncRetryAt(claimed.attempt, clock(deps))
+          : null;
+        await failConnectorSyncResource({
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceId: resource.id,
+          lease: acquired.lease,
+          attemptRef: acquired.attemptRef,
+          error,
+          failureKind,
+          retryAt,
+        }, deps);
+        results.push({
+          resourceId: resource.id,
+          status: retryAt ? "retry_scheduled" : "attention",
+          changes: 0,
+          failureKind,
+          error: sanitizeConnectorSyncError(error),
+        });
+      }
+    }
+    return completeConnectorSyncRun({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      runId: input.runId,
+      attempt: claimed.attempt,
+      results,
+    }, deps);
+  } catch (error) {
+    return completeConnectorSyncRun({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      runId: input.runId,
+      attempt: claimed.attempt,
+      results,
+      preparationError: error,
+      preparationFailureKind: classifyError(error),
+    }, deps);
+  }
+}
+
 export async function completeConnectorSyncRun(input: {
   companyId: string;
   connectionId: string;
@@ -595,11 +986,14 @@ export async function completeConnectorSyncRun(input: {
     ...priorTerminalFailures,
     ...currentTerminalFailures,
   ])];
+  const configuredResourceCount = Array.isArray(runData.resourceIds)
+    ? runData.resourceIds.length
+    : 0;
   const status: ConnectorSyncRunStatus = canRetry
     ? "retry_scheduled"
     : input.preparationError || failed.length > 0 || terminalFailedResourceIds.length > 0
       ? "attention"
-      : succeeded.length === 0 && skipped.length > 0
+      : succeeded.length === 0 && (skipped.length > 0 || configuredResourceCount === 0)
         ? "skipped"
         : "succeeded";
   const nextAttemptAt = status === "retry_scheduled" ? retryAt : null;
@@ -637,6 +1031,7 @@ export async function completeConnectorSyncRun(input: {
     ]);
     if (!latestRun.exists || Number(latestRun.data()?.attempt) !== input.attempt) return;
     const capabilityData = latestCapability.data() || {};
+    const capabilityStats = capabilityData.stats || {};
     const currentStatus = String(capabilityData.status || "attention");
     const capabilityStatus = currentStatus === "disabled"
       || currentStatus === "reauthorization_required"
@@ -659,18 +1054,57 @@ export async function completeConnectorSyncRun(input: {
       || !latestConnection.exists
       || !activeConnectionStatuses.has(String(latestConnection.data()?.status))
     ) return;
+    if (
+      Number(latestConnection.data()?.syncGeneration || 0)
+      !== Number(runData.connectionGeneration || 0)
+    ) {
+      const ownsActiveRun = capabilityStats.activeRunId === input.runId;
+      const ownsPendingRun = capabilityStats.pendingRunId === input.runId;
+      if (ownsActiveRun || ownsPendingRun) {
+        transaction.set(capability, {
+          stats: {
+            ...(ownsActiveRun ? { activeRunId: null } : {}),
+            ...(ownsPendingRun ? { pendingRunId: null } : {}),
+            syncHealth: capabilityStats.lastReconciledAt || capabilityStats.lastSyncAt
+              ? "fresh"
+              : "unmeasured",
+          },
+          updatedAt: now,
+        }, { merge: true });
+      }
+      return;
+    }
+    const ownsActiveRun = capabilityStats.activeRunId === input.runId;
+    const pendingRunId = typeof capabilityStats.pendingRunId === "string"
+      ? capabilityStats.pendingRunId
+      : null;
+    const hasPendingRun = Boolean(pendingRunId && pendingRunId !== input.runId);
+    const promotesPendingRun = status !== "retry_scheduled" && ownsActiveRun && hasPendingRun;
+    const nextActiveRunId = status === "retry_scheduled"
+      ? input.runId
+      : promotesPendingRun
+        ? pendingRunId
+      : ownsActiveRun
+        ? null
+        : capabilityStats.activeRunId || null;
+    const syncHealth: ConnectorSyncHealth = status === "attention"
+      ? "attention"
+      : status === "retry_scheduled"
+        ? "retrying"
+        : hasPendingRun
+          ? "syncing"
+          : status === "skipped"
+            ? "unmeasured"
+            : "fresh";
     transaction.set(capability, {
       status: capabilityStatus,
       stats: {
-        ...(status === "retry_scheduled" ? { activeRunId: input.runId } : { activeRunId: null }),
-        latestRunId: input.runId,
-        syncHealth: status === "succeeded"
-          ? "fresh"
-          : status === "retry_scheduled"
-            ? "retrying"
-            : status === "skipped"
-              ? "unmeasured"
-              : "attention",
+        activeRunId: nextActiveRunId,
+        pendingRunId: promotesPendingRun ? null : pendingRunId,
+        latestRunId: hasPendingRun && status !== "attention"
+          ? pendingRunId
+          : input.runId,
+        syncHealth,
         lastAttemptAt: now,
         ...(status === "succeeded" ? {
           lastSuccessAt: now,
@@ -721,6 +1155,9 @@ export async function refreshConnectorSyncAggregates(input: {
   await capability.set({
     stats: {
       itemCount,
+      ...(resources.length === 0 && !capabilityStats.activeRunId
+        ? { syncHealth: "unmeasured" satisfies ConnectorSyncHealth }
+        : {}),
       lastObservedAt: lastChangeObservedAt || capabilityStats.lastObservedAt || null,
       lastChangeObservedAt: lastChangeObservedAt || capabilityStats.lastChangeObservedAt || null,
     },
@@ -748,15 +1185,23 @@ export async function refreshConnectorSyncAggregates(input: {
   const aggregateLastObservedAt = latestTimestamp(capabilityValues.map(
     (value) => value.stats?.lastChangeObservedAt || value.stats?.lastObservedAt,
   ));
+  const capabilityHealth = capabilityValues.map((value) => (
+    value.stats?.syncHealth
+    || (value.stats?.lastReconciledAt || value.stats?.lastSyncAt ? "fresh" : "never_synced")
+  ));
   const syncHealth: ConnectorSyncHealth = attention
     ? "attention"
-    : capabilityValues.some((value) => value.stats?.syncHealth === "retrying")
+    : capabilityHealth.includes("retrying")
       ? "retrying"
-      : capabilityValues.some((value) => value.stats?.syncHealth === "syncing")
+      : capabilityHealth.includes("syncing")
         ? "syncing"
-        : capabilityValues.length > 0
-          ? "fresh"
-          : "unmeasured";
+        : capabilityHealth.includes("never_synced")
+          ? "never_synced"
+          : capabilityHealth.includes("unmeasured")
+            ? "unmeasured"
+            : capabilityValues.length > 0
+              ? "fresh"
+              : "unmeasured";
   if (!activeConnectionStatuses.has(String(connectionSnapshot.data()?.status))) return;
   await connection.set({
     status: attention ? "attention" : "active",
@@ -772,6 +1217,77 @@ export async function refreshConnectorSyncAggregates(input: {
       lastError: attention?.stats?.lastError || null,
     },
   }, { merge: true });
+}
+
+export type DueConnectorSyncRun = {
+  runId: string;
+  companyId: string;
+  connectionId: string;
+  serviceId: CapabilityServiceId;
+};
+
+export async function listDueConnectorSyncRuns(input: {
+  serviceId: CapabilityServiceId;
+  limit?: number;
+}, deps: ConnectorSyncDependencies): Promise<DueConnectorSyncRun[]> {
+  const now = clock(deps);
+  const limit = Math.min(Math.max(input.limit || 20, 1), 100);
+  const [queued, scheduled, abandoned] = await Promise.all([
+    deps.database.collectionGroup("syncRuns")
+      .where("serviceId", "==", input.serviceId)
+      .where("status", "==", "queued")
+      .where("queuedAt", "<=", Timestamp.fromMillis(now.toMillis() - 60_000))
+      .limit(limit)
+      .get(),
+    deps.database.collectionGroup("syncRuns")
+      .where("serviceId", "==", input.serviceId)
+      .where("status", "==", "retry_scheduled")
+      .where("nextAttemptAt", "<=", now)
+      .limit(limit)
+      .get(),
+    deps.database.collectionGroup("syncRuns")
+      .where("serviceId", "==", input.serviceId)
+      .where("status", "==", "running")
+      .where("executionLeaseExpiresAt", "<=", now)
+      .limit(limit)
+      .get(),
+  ]);
+  const due = new Map(
+    [...queued.docs, ...scheduled.docs, ...abandoned.docs].map((run) => [run.ref.path, run]),
+  );
+  return [...due.values()].slice(0, limit).flatMap((run) => {
+    const data = run.data();
+    const companyId = String(data.companyId || "");
+    const connectionId = String(data.connectionId || "");
+    if (!companyId || !connectionId) return [];
+    return [{
+      runId: run.id,
+      companyId,
+      connectionId,
+      serviceId: input.serviceId,
+    }];
+  });
+}
+
+export async function replayableConnectorSyncResources(input: {
+  companyId: string;
+  connectionId: string;
+  runId: string;
+  capabilityId: SourceCapabilityId;
+  serviceId: CapabilityServiceId;
+}, deps: ConnectorSyncDependencies): Promise<string[]> {
+  const prior = await syncRunRef({ ...input, database: deps.database }).get();
+  if (
+    !prior.exists
+    || prior.data()?.companyId !== input.companyId
+    || prior.data()?.connectionId !== input.connectionId
+    || prior.data()?.capabilityId !== input.capabilityId
+    || prior.data()?.serviceId !== input.serviceId
+    || prior.data()?.status !== "attention"
+  ) throw new Error("Only an attention-required connector sync run can be replayed");
+  return Array.isArray(prior.data()?.failedResourceIds)
+    ? prior.data()!.failedResourceIds.map(String)
+    : [];
 }
 
 export function connectorSyncPublicState(

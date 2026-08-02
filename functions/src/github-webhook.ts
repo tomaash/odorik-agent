@@ -4,6 +4,7 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onRequest } from "firebase-functions/v2/https";
 import { db } from "./firestore.js";
 import {
+  GitHubWebhookDeferredError,
   GitHubWebhookRequestError,
   processGitHubWebhookDelivery,
   queueGitHubWebhookDelivery,
@@ -111,6 +112,14 @@ export const processGitHubWebhook = onDocumentCreated(
       }, { merge: true });
     } catch (error) {
       const message = (error instanceof Error ? error.message : String(error)).slice(0, 1_000);
+      if (error instanceof GitHubWebhookDeferredError) {
+        await deliveryRef.set({
+          status: "pending",
+          lastError: null,
+          deferredAt: FieldValue.serverTimestamp(),
+        }, { merge: true });
+        throw error;
+      }
       await Promise.all([
         deliveryRef.set({
           status: "failed",

@@ -44,6 +44,8 @@ export class GitHubWebhookRequestError extends Error {
   }
 }
 
+export class GitHubWebhookDeferredError extends Error {}
+
 const maxWebhookBodyBytes = 750_000;
 const deliveryRetentionMs = 7 * 24 * 60 * 60 * 1000;
 const deliveryPattern = /^[A-Za-z0-9-]{1,100}$/;
@@ -345,6 +347,48 @@ async function updateResourceItemCount(input: {
   }, { merge: true });
 }
 
+function timestampMillis(value: unknown): number | null {
+  if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isNaN(parsed) ? null : parsed;
+  }
+  return null;
+}
+
+async function commitWebhookContextMutation(input: {
+  database: FirebaseFirestore.Firestore;
+  connectionRef: FirebaseFirestore.DocumentReference;
+  resourceRef: FirebaseFirestore.DocumentReference;
+  contextRef: FirebaseFirestore.DocumentReference;
+  observedAt: Timestamp;
+  value?: Record<string, unknown>;
+}): Promise<boolean> {
+  return input.database.runTransaction(async (transaction) => {
+    const [connection, resource] = await Promise.all([
+      transaction.get(input.connectionRef),
+      transaction.get(input.resourceRef),
+    ]);
+    if (
+      !connection.exists
+      || !["active", "attention"].includes(String(connection.data()?.status))
+      || !resource.exists
+      || resource.data()?.capabilityId !== githubIssueCapabilityId
+      || resource.data()?.status !== "enabled"
+    ) return false;
+    const leaseExpiresAt = timestampMillis(resource.data()?.syncLease?.expiresAt);
+    if (leaseExpiresAt !== null && leaseExpiresAt > input.observedAt.toMillis()) {
+      throw new GitHubWebhookDeferredError(
+        "GitHub webhook deferred while repository reconciliation is active",
+      );
+    }
+    if (input.value) transaction.set(input.contextRef, input.value, { merge: false });
+    else transaction.delete(input.contextRef);
+    return true;
+  });
+}
+
 export async function processGitHubWebhookDelivery(input: {
   deliveryId: string;
   event: GitHubWebhookEvent;
@@ -403,8 +447,14 @@ export async function processGitHubWebhookDelivery(input: {
         `companies/${input.companyId}/contextItems/${contextItemId}`,
       );
       if (input.event === "issues" && input.action === "deleted") {
-        await contextRef.delete();
-        outcome = "issue_deleted";
+        const committed = await commitWebhookContextMutation({
+          database,
+          connectionRef,
+          resourceRef,
+          contextRef,
+          observedAt,
+        });
+        outcome = committed ? "issue_deleted" : "ignored_inactive_repository";
       } else {
         const canonical = await fetchGitHubIssueWithComments({
           configuration: input.configuration,
@@ -416,26 +466,35 @@ export async function processGitHubWebhookDelivery(input: {
         if (canonical.issue.pull_request) {
           outcome = "ignored_pull_request";
         } else {
-          await contextRef.set(githubIssueContextItem({
-            companyId: input.companyId,
-            connectionId: input.connectionId,
-            resourceId: resource.id,
-            repository,
-            issue: canonical.issue,
-            comments: canonical.comments,
+          const committed = await commitWebhookContextMutation({
+            database,
+            connectionRef,
+            resourceRef,
+            contextRef,
             observedAt,
-          }), { merge: false });
-          outcome = "issue_upserted";
-          observedIssueContextItemId = contextItemId;
+            value: githubIssueContextItem({
+              companyId: input.companyId,
+              connectionId: input.connectionId,
+              resourceId: resource.id,
+              repository,
+              issue: canonical.issue,
+              comments: canonical.comments,
+              observedAt,
+            }),
+          });
+          outcome = committed ? "issue_upserted" : "ignored_inactive_repository";
+          if (committed) observedIssueContextItemId = contextItemId;
         }
       }
-      await updateResourceItemCount({
-        database,
-        companyId: input.companyId,
-        connectionId: input.connectionId,
-        resourceRef,
-        observedAt,
-      });
+      if (!outcome.startsWith("ignored_inactive_")) {
+        await updateResourceItemCount({
+          database,
+          companyId: input.companyId,
+          connectionId: input.connectionId,
+          resourceRef,
+          observedAt,
+        });
+      }
     }
   }
   await recordWebhookOutcome({

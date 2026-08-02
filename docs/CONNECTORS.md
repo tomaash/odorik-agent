@@ -28,7 +28,10 @@ be rebuilt.
 ```text
 companies/{companyId}
   connections/{connectionId}
+    capabilities/{serviceId}
     resources/{resourceId}
+    syncRuns/{runId}
+      resourceAttempts/{attemptId}
   contextItems/{contextItemId}
 
 oauthStates/{stateHash}
@@ -97,14 +100,15 @@ For each selection:
 6. Deselecting a calendar deletes its normalized context.
 7. A private scheduled function reconciles every 30 minutes.
 
-Calendar reconciliation creates a durable capability run with immutable
-per-resource attempts. A fenced lease prevents two workers from committing the
-same calendar concurrently. Transient failures retry after 1, 5, and 30
-minutes; exhausted or permanent failures become visible attention state and an
-administrator can replay the failed run from Sources. Run commits re-check the
-connection and resource lifecycle so an in-flight worker cannot revive a
-disabled, disconnected, or deleted source. Run and attempt history is retained
-for 90 days.
+Calendar, Drive, and GitHub polling reconciliation create durable capability
+runs with immutable per-resource attempts. A fenced lease prevents two workers
+from committing the same resource concurrently. Transient failures retry after
+1, 5, and 30 minutes; exhausted or permanent failures become visible attention
+state and an administrator can replay the failed run from Sources. Run commits
+re-check the connection and resource lifecycle so an in-flight worker cannot
+revive a disabled, disconnected, or deleted source. Run and attempt history is
+retained for 90 days. A request arriving during an active run is coalesced into
+one safe successor when it includes a newly selected resource.
 
 Calendar events are visible to all members of their company. Do not connect a
 calendar that should be visible to only some team members until
@@ -118,15 +122,35 @@ implementation imports non-folder files that are direct children of each
 selected folder. It extracts Google Docs and text-like files and otherwise
 stores searchable metadata plus a provider link.
 
-Drive sync currently runs when a folder is selected or an administrator
-requests it manually. Recursive selection, scheduled reconciliation,
-provider-side deletion/move cleanup, PDF extraction, and restricted member
-audiences are not yet implemented. Their order and acceptance criteria are
-defined in `CONNECTOR_EPIC.md`. Drive context currently records the provider
-folder ID as `source.resourceId` while the resource document uses a hashed ID.
-Adapter-specific folder deselection removes context correctly, but the generic
-resource enable/disable path does not match those Drive items; C1 owns the
-identity migration.
+Drive sync runs when a folder is selected, when an administrator requests it,
+and every 30 minutes. Each selected folder is an independently leased full
+reconciliation. Healthy folders finish while a failing folder retries. After a
+complete direct-child enumeration, context for files deleted, trashed, moved
+out of that folder, or no longer visible is removed. Supported Google Docs and
+text extraction failures are actionable; unsupported binaries remain honest
+metadata-only records. `source.resourceId` uses the same hashed internal folder
+identity as the resource document.
+
+Recursive selection, overlapping-root deduplication, PDF extraction, and
+restricted member audiences are not yet implemented. Their order and
+acceptance criteria are defined in `CONNECTOR_EPIC.md`.
+
+## GitHub adapter
+
+GitHub App installation repositories remain explicitly selectable in Erik.
+Manual and 30-minute polling synchronization use one durable run per Issues
+capability and one fenced attempt per enabled repository. A repository failure
+does not stop healthy repositories; polling removes issues no longer returned
+only after complete repository enumeration. Five-minute recovery retries only
+failed repositories, and permanent failures can be replayed by an
+administrator.
+
+Signed GitHub webhooks remain a separate idempotent event-delivery lane. Their
+delivery health is shown separately and never substitutes for a successful
+full repository reconciliation. If polling currently holds a repository lease,
+the retry-enabled webhook worker defers its transactional context mutation until
+that reconciliation finishes so an older poll snapshot cannot overwrite a newer
+event.
 
 ## Operations
 
@@ -141,12 +165,12 @@ identity migration.
   provider.
 - Refresh tokens and Basic-auth passwords never enter model prompts or browser
   API responses.
-- Firestore write triggers keep Qdrant synchronized after every normalized
-  context write or deletion.
-- Calendar exposes distinct syncing, retrying, stale, fresh, and attention
-  state with separate attempt, success, change-observed, and reconciliation
-  timestamps. Other adapters retain their legacy health behavior until their
-  C3 cutover.
+- Firestore write triggers attempt Qdrant synchronization after every
+  normalized context write or deletion. Firestore remains authoritative;
+  durable delivery state and measured context-to-search freshness remain C3C.
+- Calendar, Drive, and GitHub expose distinct syncing, retrying, stale, fresh,
+  and attention state with separate attempt, success, change-observed, and
+  reconciliation timestamps.
 
 Google Auth Platform is currently in testing mode. Only listed test users may
 authorize Calendar, and refresh tokens expire after seven days. Complete OAuth

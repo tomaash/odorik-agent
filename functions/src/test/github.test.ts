@@ -4,6 +4,7 @@ import {
   generateKeyPairSync,
 } from "node:crypto";
 import test from "node:test";
+import { Timestamp } from "firebase-admin/firestore";
 import {
   connectGitHubInstallation,
   configuredGitHubInstallationId,
@@ -12,6 +13,8 @@ import {
   githubIssueContextItemId,
   githubRepositoryResourceId,
   inspectGitHubInstallation,
+  replayGitHubSyncRun,
+  retryDueGitHubSyncRuns,
   syncGitHubConnection,
   type GitHubAppConfiguration,
   type GitHubIssue,
@@ -243,13 +246,16 @@ test("GitHub connection preserves explicit selection, removes stale context, and
     source: { connectionId, resourceId },
     indexingEnabled: true,
   });
-  assert.deepEqual(await syncGitHubConnection({
+  const sync = await syncGitHubConnection({
     companyId: "explorers",
     connectionId,
     configuration,
     fetcher: githubFixtureFetcher(),
     database,
-  }), { repositories: 1, issues: 1 });
+  });
+  assert.equal(sync.status, "succeeded");
+  assert.equal(sync.repositories, 1);
+  assert.equal(sync.issues, 1);
   assert.equal(memory.read("companies/explorers/contextItems/stale-current-repo"), undefined);
   const contextId = githubIssueContextItemId(connectionId, repository.id, 7001);
   const context = memory.read(`companies/explorers/contextItems/${contextId}`);
@@ -265,4 +271,199 @@ test("GitHub connection preserves explicit selection, removes stale context, and
   });
   assert.match(String(context?.text), /Confirmed on the current main branch/);
   assert.doesNotMatch(JSON.stringify(memory.entries()), /short-lived-installation-token|BEGIN PRIVATE KEY/);
+});
+
+test("GitHub retries only a transient repository and preserves webhook health", async () => {
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  const connectionId = `github_${installationId}`;
+  const connectionPath = `companies/explorers/connections/${connectionId}`;
+  const repositoryB: GitHubRepository = {
+    ...repository,
+    id: 987655,
+    name: "bravo",
+    full_name: "tomaash/bravo",
+    html_url: "https://github.com/tomaash/bravo",
+  };
+  const resourceA = githubRepositoryResourceId(repository.id);
+  const resourceB = githubRepositoryResourceId(repositoryB.id);
+  let now = Timestamp.fromDate(new Date("2026-08-02T10:00:00.000Z"));
+  let repositoryBUnavailable = true;
+  let repositoryBVisible = true;
+  const issueRequests: string[] = [];
+  memory.seed(connectionPath, {
+    companyId: "explorers",
+    connectorId: "github",
+    status: "active",
+    installationId,
+    stats: {},
+    webhook: {
+      status: "active",
+      lastDeliveryAt: "2026-08-02T09:59:00.000Z",
+      lastEvent: "issues",
+      lastError: null,
+    },
+  });
+  memory.seed(`${connectionPath}/capabilities/issues`, {
+    capabilityId: "context.github.issue.read",
+    serviceId: "issues",
+    status: "active",
+    stats: {},
+  });
+  for (const [resourceId, repo] of [[resourceA, repository], [resourceB, repositoryB]] as const) {
+    memory.seed(`${connectionPath}/resources/${resourceId}`, {
+      connectionId,
+      capabilityId: "context.github.issue.read",
+      resourceType: "repository",
+      externalId: String(repo.id),
+      displayName: repo.full_name,
+      status: "enabled",
+      itemCount: 0,
+    });
+  }
+  const fetcher = (async (request: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(request));
+    if (url.pathname === "/app") {
+      return jsonResponse({ id: configuration.appId, slug: configuration.appSlug });
+    }
+    if (url.pathname === `/app/installations/${installationId}`) {
+      return jsonResponse({
+        id: installationId,
+        app_id: configuration.appId,
+        account: { id: 12345, login: "tomaash", type: "User" },
+        repository_selection: "selected",
+        permissions: installationPermissions,
+        suspended_at: null,
+      });
+    }
+    if (url.pathname === `/app/installations/${installationId}/access_tokens`) {
+      assert.equal(init?.method, "POST");
+      return jsonResponse({
+        token: "short-lived-installation-token",
+        expires_at: "2026-08-02T11:00:00Z",
+        permissions,
+        repository_selection: "selected",
+      });
+    }
+    if (url.pathname === "/installation/repositories") {
+      return jsonResponse({
+        repositories: repositoryBVisible ? [repository, repositoryB] : [repository],
+      });
+    }
+    if (url.pathname === "/repos/tomaash/elixir-play/issues") {
+      issueRequests.push(repository.full_name);
+      return jsonResponse([{
+        id: 7101,
+        number: 21,
+        title: "Alpha issue",
+        body: "Alpha body",
+        state: "open",
+        html_url: "https://github.com/tomaash/elixir-play/issues/21",
+        created_at: "2026-08-02T08:00:00Z",
+        updated_at: "2026-08-02T09:00:00Z",
+        closed_at: null,
+        comments: 0,
+        user: { login: "tomaash" },
+      } satisfies GitHubIssue]);
+    }
+    if (url.pathname === "/repos/tomaash/bravo/issues") {
+      issueRequests.push(repositoryB.full_name);
+      if (repositoryBUnavailable) return jsonResponse({ message: "temporary" }, 503);
+      return jsonResponse([{
+        id: 7201,
+        number: 22,
+        title: "Bravo issue",
+        body: "Bravo body",
+        state: "open",
+        html_url: "https://github.com/tomaash/bravo/issues/22",
+        created_at: "2026-08-02T08:30:00Z",
+        updated_at: "2026-08-02T09:30:00Z",
+        closed_at: null,
+        comments: 0,
+        user: { login: "tomaash" },
+      } satisfies GitHubIssue]);
+    }
+    return jsonResponse({ message: `Unexpected fixture request ${url.pathname}` }, 404);
+  }) as typeof fetch;
+
+  const first = await syncGitHubConnection({
+    companyId: "explorers",
+    connectionId,
+    configuration,
+    fetcher,
+    database,
+    now: () => now,
+  });
+  assert.equal(first.status, "retry_scheduled");
+  assert.deepEqual(
+    memory.read(`${connectionPath}/syncRuns/${first.runId}`)?.failedResourceIds,
+    [resourceB],
+  );
+  assert.ok(memory.read(
+    `companies/explorers/contextItems/${githubIssueContextItemId(connectionId, repository.id, 7101)}`,
+  ));
+  assert.deepEqual(memory.read(connectionPath)?.webhook, {
+    status: "active",
+    lastDeliveryAt: "2026-08-02T09:59:00.000Z",
+    lastEvent: "issues",
+    lastError: null,
+  });
+
+  repositoryBUnavailable = false;
+  now = Timestamp.fromMillis(now.toMillis() + 60_001);
+  const recovered = await retryDueGitHubSyncRuns({
+    configuration,
+    fetcher,
+    database,
+    now: () => now,
+  });
+  assert.equal(recovered.length, 1);
+  assert.equal(recovered[0]?.status, "succeeded");
+  assert.equal(issueRequests.filter((name) => name === repository.full_name).length, 1);
+  assert.equal(issueRequests.filter((name) => name === repositoryB.full_name).length, 2);
+  const attempts = memory.list(`${connectionPath}/syncRuns/${first.runId}/resourceAttempts`);
+  assert.equal(attempts.filter((attempt) => attempt.resourceId === resourceA).length, 1);
+  assert.equal(attempts.filter((attempt) => attempt.resourceId === resourceB).length, 2);
+
+  const idempotent = await syncGitHubConnection({
+    companyId: "explorers",
+    connectionId,
+    configuration,
+    fetcher,
+    database,
+    now: () => now,
+  });
+  assert.equal(idempotent.status, "succeeded");
+  assert.equal(idempotent.changes, 0);
+
+  repositoryBVisible = false;
+  const inaccessible = await syncGitHubConnection({
+    companyId: "explorers",
+    connectionId,
+    configuration,
+    fetcher,
+    database,
+    now: () => now,
+  });
+  assert.equal(inaccessible.status, "attention");
+  assert.deepEqual(
+    memory.read(`${connectionPath}/syncRuns/${inaccessible.runId}`)?.failedResourceIds,
+    [resourceB],
+  );
+  repositoryBVisible = true;
+  const replayed = await replayGitHubSyncRun({
+    companyId: "explorers",
+    connectionId,
+    runId: inaccessible.runId,
+    actorUid: "admin-1",
+    configuration,
+    fetcher,
+    database,
+    now: () => now,
+  });
+  assert.equal(replayed.status, "succeeded");
+  assert.equal(
+    memory.read(`${connectionPath}/syncRuns/${replayed.runId}`)?.replayOfRunId,
+    inaccessible.runId,
+  );
 });

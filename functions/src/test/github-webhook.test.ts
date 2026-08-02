@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import test from "node:test";
 import { Timestamp } from "firebase-admin/firestore";
 import {
+  GitHubWebhookDeferredError,
   githubWebhookSignature,
   processGitHubWebhookDelivery,
   queueGitHubWebhookDelivery,
@@ -310,6 +311,41 @@ test("deleted issue deliveries remove context without a provider round trip", as
   });
   assert.deepEqual(result, { outcome: "issue_deleted" });
   assert.equal(memory.read(`companies/explorers/contextItems/${contextId}`), undefined);
+});
+
+test("issue deliveries defer while repository reconciliation holds the resource lease", async () => {
+  const memory = new MemoryFirestore();
+  const resourceId = seedConnection(memory);
+  const resourcePath = `companies/explorers/connections/${connectionId}/resources/${resourceId}`;
+  memory.seed(resourcePath, {
+    ...memory.read(resourcePath),
+    syncLease: {
+      runId: "poll-run",
+      expiresAt: Timestamp.fromDate(new Date("2026-07-31T12:45:00Z")),
+    },
+  });
+  await assert.rejects(
+    processGitHubWebhookDelivery({
+      deliveryId: "delivery-deferred-1",
+      event: "issues",
+      action: "deleted",
+      companyId: "explorers",
+      connectionId,
+      installationId,
+      payload: webhookPayload({ action: "deleted" }),
+      configuration,
+      fetcher: (async () => {
+        throw new Error("provider must not be called");
+      }) as typeof fetch,
+      database: memory.asFirestore(),
+      observedAt: Timestamp.fromDate(new Date("2026-07-31T12:30:00Z")),
+    }),
+    (error: unknown) => error instanceof GitHubWebhookDeferredError,
+  );
+  assert.equal(
+    memory.read(`companies/explorers/connections/${connectionId}`)?.webhook,
+    undefined,
+  );
 });
 
 test("processing fails closed when the queued tenant route is tampered with", async () => {

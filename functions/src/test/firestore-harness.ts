@@ -85,6 +85,19 @@ function isDirectDocument(collectionPath: string, documentPath: string): boolean
     && collectionSegments.every((segment, index) => documentSegments[index] === segment);
 }
 
+function isCollectionGroupDocument(collectionName: string, documentPath: string): boolean {
+  const segments = documentPath.split("/");
+  return segments.length >= 2 && segments.at(-2) === collectionName;
+}
+
+function comparableValue(value: unknown): unknown {
+  if (value && typeof value === "object" && typeof (value as { toMillis?: unknown }).toMillis === "function") {
+    return (value as { toMillis(): number }).toMillis();
+  }
+  if (value instanceof Date) return value.getTime();
+  return value;
+}
+
 class MemoryDocumentSnapshot {
   constructor(
     readonly ref: MemoryDocumentReference,
@@ -118,18 +131,25 @@ class MemoryQuery {
     protected readonly collectionPath: string,
     private readonly filters: Array<{
       field: string;
+      operator: string;
       value: unknown;
     }> = [],
     private readonly ordering: { field: string; direction: Direction } | null = null,
+    private readonly maximum: number | null = null,
+    private readonly collectionGroup = false,
   ) {}
 
   where(field: string, operator: string, value: unknown): MemoryQuery {
-    if (operator !== "==") throw new Error(`Unsupported in-memory operator ${operator}`);
+    if (!["==", "<=", "in"].includes(operator)) {
+      throw new Error(`Unsupported in-memory operator ${operator}`);
+    }
     return new MemoryQuery(
       this.database,
       this.collectionPath,
-      [...this.filters, { field, value }],
+      [...this.filters, { field, operator, value }],
       this.ordering,
+      this.maximum,
+      this.collectionGroup,
     );
   }
 
@@ -139,6 +159,19 @@ class MemoryQuery {
       this.collectionPath,
       this.filters,
       { field, direction },
+      this.maximum,
+      this.collectionGroup,
+    );
+  }
+
+  limit(maximum: number): MemoryQuery {
+    return new MemoryQuery(
+      this.database,
+      this.collectionPath,
+      this.filters,
+      this.ordering,
+      maximum,
+      this.collectionGroup,
     );
   }
 
@@ -152,11 +185,22 @@ class MemoryQuery {
   }
 
   async get(): Promise<MemoryQuerySnapshot> {
-    const values = this.database.entries()
-      .filter(([path]) => isDirectDocument(this.collectionPath, path))
-      .filter(([, data]) => this.filters.every(
-        (filter) => nestedValue(data, filter.field) === filter.value,
-      ));
+    let values = this.database.entries()
+      .filter(([path]) => this.collectionGroup
+        ? isCollectionGroupDocument(this.collectionPath, path)
+        : isDirectDocument(this.collectionPath, path))
+      .filter(([, data]) => this.filters.every((filter) => {
+        const actual = comparableValue(nestedValue(data, filter.field));
+        const expected = comparableValue(filter.value);
+        if (filter.operator === "==") return actual === expected;
+        if (filter.operator === "<=") {
+          return typeof actual === "number" && typeof expected === "number"
+            ? actual <= expected
+            : String(actual) <= String(expected);
+        }
+        return Array.isArray(filter.value)
+          && filter.value.map(comparableValue).includes(actual);
+      }));
     if (this.ordering) {
       const { field, direction } = this.ordering;
       values.sort((left, right) => {
@@ -166,6 +210,7 @@ class MemoryQuery {
         return direction === "asc" ? comparison : -comparison;
       });
     }
+    if (this.maximum !== null) values = values.slice(0, this.maximum);
     return new MemoryQuerySnapshot(values.map(
       ([path, data]) => new MemoryDocumentSnapshot(
         this.database.documentReference(path),
@@ -187,6 +232,12 @@ class MemoryCollectionReference extends MemoryQuery {
     return this.database.documentReference(
       `${this.collectionPath}/${id || this.database.nextId()}`,
     );
+  }
+}
+
+class MemoryCollectionGroup extends MemoryQuery {
+  constructor(database: MemoryFirestore, collectionName: string) {
+    super(database, collectionName, [], null, null, true);
   }
 }
 
@@ -354,6 +405,10 @@ export class MemoryFirestore {
 
   collection(path: string): MemoryCollectionReference {
     return this.collectionReference(path);
+  }
+
+  collectionGroup(name: string): MemoryCollectionGroup {
+    return new MemoryCollectionGroup(this, name);
   }
 
   collectionReference(path: string): MemoryCollectionReference {

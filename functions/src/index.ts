@@ -18,7 +18,12 @@ import {
   syncAllGoogleCalendarConnections,
 } from "./connectors/google-calendar.js";
 import {
+  retryDueGoogleDriveSyncRuns,
+  syncAllGoogleDriveConnections,
+} from "./connectors/google-drive.js";
+import {
   githubConfigurationFromEnvironment,
+  retryDueGitHubSyncRuns,
   syncAllGitHubConnections,
 } from "./connectors/github.js";
 import {
@@ -175,6 +180,64 @@ export const recoverCalendarSourceSyncs = onSchedule(
   },
 );
 
+export const syncDriveSources = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await syncAllGoogleDriveConnections({
+      clientId: googleConnectorClientId.value(),
+      clientSecret: googleConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more Google Drive connections failed to synchronize", failures);
+    }
+  },
+);
+
+export const recoverDriveSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await retryDueGoogleDriveSyncRuns({
+      clientId: googleConnectorClientId.value(),
+      clientSecret: googleConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more Drive synchronization runs exhausted recovery", attention);
+    }
+  },
+);
+
 export const syncGitHubSources = onSchedule(
   {
     schedule: "every 30 minutes",
@@ -194,7 +257,29 @@ export const syncGitHubSources = onSchedule(
     const failures = results.filter((result) => !result.ok);
     if (failures.length) {
       console.error("One or more GitHub connections failed to reconcile", failures);
-      throw new Error(`${failures.length} GitHub connection(s) failed`);
+    }
+  },
+);
+
+export const recoverGitHubSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [githubAppPrivateKey],
+  },
+  async () => {
+    const results = await retryDueGitHubSyncRuns({
+      configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more GitHub synchronization runs exhausted recovery", attention);
     }
   },
 );
