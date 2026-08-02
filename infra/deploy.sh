@@ -6,8 +6,16 @@ source infra/project.env
 : "${DASHBOARD_TOKEN:?Set DASHBOARD_TOKEN}"
 : "${ODORIK_UPLOAD_USER:?Set ODORIK_UPLOAD_USER}"
 : "${ODORIK_UPLOAD_PASSWORD:?Set ODORIK_UPLOAD_PASSWORD}"
-: "${GEMINI_API_KEY:?Set GEMINI_API_KEY}"
 : "${DEEPGRAM_API_KEY:?Set DEEPGRAM_API_KEY}"
+
+# The Gemini key lives in GEMINI_API_KEY, owned by the Functions deploy
+# (`firebase functions:secrets:set GEMINI_API_KEY`). This script only reads it,
+# so it must not upsert a value here: a mismatched value would rotate the secret
+# and destroy the version that deployed functions are pinned to.
+if ! gcloud secrets describe GEMINI_API_KEY --project="$PROJECT_ID" >/dev/null 2>&1; then
+  echo "GEMINI_API_KEY does not exist. Set it with 'firebase functions:secrets:set GEMINI_API_KEY' first." >&2
+  exit 1
+fi
 
 IMAGE="$REGION-docker.pkg.dev/$PROJECT_ID/$ARTIFACT_REPOSITORY/app:$(date -u +%Y%m%d%H%M%S)"
 
@@ -53,7 +61,6 @@ destroy_superseded_versions() {
 upsert_secret dashboard-token "$DASHBOARD_TOKEN"
 upsert_secret odorik-upload-user "$ODORIK_UPLOAD_USER"
 upsert_secret odorik-upload-password "$ODORIK_UPLOAD_PASSWORD"
-upsert_secret gemini-api-key "$GEMINI_API_KEY"
 upsert_secret DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY"
 if [[ -n "${CONNECTOR_CREDENTIAL_KEY:-}" ]]; then
   upsert_secret CONNECTOR_CREDENTIAL_KEY "$CONNECTOR_CREDENTIAL_KEY"
@@ -75,7 +82,7 @@ if gcloud secrets describe CONNECTOR_CREDENTIAL_KEY --project="$PROJECT_ID" >/de
     --role=roles/secretmanager.secretAccessor \
     --project="$PROJECT_ID" >/dev/null
 fi
-gcloud secrets add-iam-policy-binding gemini-api-key \
+gcloud secrets add-iam-policy-binding GEMINI_API_KEY \
   --member="serviceAccount:odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
   --role=roles/secretmanager.secretAccessor \
   --project="$PROJECT_ID" >/dev/null
@@ -124,7 +131,7 @@ gcloud run deploy odorik-processor \
   --region="$REGION" \
   --service-account="odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
   --set-env-vars="$COMMON_ENV" \
-  --set-secrets="GEMINI_API_KEY=gemini-api-key:latest,DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest" \
+  --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest" \
   --no-allow-unauthenticated \
   --min=0 \
   --max=3 \
