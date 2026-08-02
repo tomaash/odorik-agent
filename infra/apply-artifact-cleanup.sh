@@ -14,9 +14,9 @@ source "$(dirname "$0")/project.env"
 DRY_RUN="${DRY_RUN:-1}"
 POLICY_FILE="$(dirname "$0")/artifact-cleanup-policy.json"
 
-dry_run_flag="--cleanup-policy-dry-run"
+dry_run_flag="--dry-run"
 if [[ "$DRY_RUN" != "1" ]]; then
-  dry_run_flag="--no-cleanup-policy-dry-run"
+  dry_run_flag="--no-dry-run"
 fi
 
 apply_policy() {
@@ -24,14 +24,22 @@ apply_policy() {
   local location="$2"
   gcloud artifacts repositories set-cleanup-policies "$repository" \
     --location="$location" \
-    --policy-file="$POLICY_FILE" \
+    --policy="$POLICY_FILE" \
     "$dry_run_flag" \
     --project="$PROJECT_ID"
   echo "Applied cleanup policy to $repository ($location), dry-run=$DRY_RUN."
 }
 
+# gcf-artifacts is deliberately excluded. Firebase points every deployed
+# function at the mutable `:version_1` tag and leaves the previous images
+# untagged, but Cloud Run revisions pin the *digest* they were deployed with:
+# revision api-00091 pins an untagged digest. Deleting untagged images there
+# would destroy the rollback targets of live services. It is also only ~0.5 GB
+# of the ~5.3 GB total. Use Firebase's own supported policy for that repository:
+#
+#   firebase functions:artifacts:setpolicy
+#
 apply_policy erik-coding europe-west1
-apply_policy gcf-artifacts "$REGION"
 apply_policy "$ARTIFACT_REPOSITORY" "$REGION"
 
 echo

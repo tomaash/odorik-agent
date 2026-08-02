@@ -65,9 +65,23 @@ The rule that separates the two cases: **public-by-construction** values (an
 OAuth client ID) can be env vars; **non-public infrastructure identity** should
 not be, even when it is not itself a credential.
 
-## B. Duplicate holding the same credential
+## B. Duplicate holding the same credential — APPLIED 2026-08-02
 
 ### `gemini-api-key` (legacy) vs `GEMINI_API_KEY`
+
+**Status: done except the final delete.** Both values were confirmed byte
+identical (SHA-256 match). `odorik-processor` now mounts `GEMINI_API_KEY:latest`
+(revision `odorik-processor-00005-vhq`, Ready), the service account was granted
+`secretAccessor` on it, and `deploy.sh` no longer creates or references the
+lowercase secret. Nothing mounts `gemini-api-key` any more, so it can be removed:
+
+```
+gcloud secrets delete gemini-api-key --project=odorik-tx-260720-c58d
+```
+
+Note that `deploy.sh` deliberately does **not** upsert `GEMINI_API_KEY`. That
+secret is owned by the Functions deploy, and letting two deploy paths write it
+would let one rotate the version the other is pinned to.
 
 Two secrets holding the same Gemini key, split only by naming convention: the
 lowercase one predates the Firebase Functions migration and is read solely by the
@@ -114,6 +128,18 @@ Functions and the coding dispatcher job) apart from `GITHUB_WEBHOOK_SECRET`
 connector credentials, so rotating it is a data-migration event, not a
 credential swap.
 
+## The worker fix is not live until the job is redeployed
+
+The destroy-instead-of-disable fix landed in `grok-auth-worker/src/protocol.ts`,
+but `erik-grok-auth` still runs the image built before it
+(`erik-coding/grok-auth:20260801192956`). The leak is therefore still active:
+a Grok reconnect at 2026-08-02 17:25 — *after* that day's prune — created
+version 5 of `grok-subscription-auth` and left version 4 **disabled rather than
+destroyed**, which is exactly the billable state the fix removes.
+
+Until `infra/deploy-grok-auth-worker.sh` is run, every reconnect strands another
+version and `infra/prune-secret-versions.sh` has to mop up behind it.
+
 ## E. Everything has a consumer
 
 Every one of the 15 secrets is mounted by something. In particular
@@ -135,7 +161,8 @@ use.
 |---|---|
 | Before the 2026-08-02 prune | 24 |
 | After the prune | 15 |
-| After this plan | **12** |
+| Now (Gemini merge applied, delete pending) | 15 |
+| After the remaining steps | **12** |
 
 Across the billing account (4 projects) that moves the total from 42 → ~21, or
 roughly **Kč 45/month → Kč 19/month**. The absolute numbers are small; the reason
