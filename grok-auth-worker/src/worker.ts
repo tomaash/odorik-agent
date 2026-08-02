@@ -4,7 +4,7 @@ import { join } from "node:path";
 import {
   accessLatestGrokSecretVersion,
   addGrokSecretVersion,
-  disableOtherGrokSecretVersions,
+  destroyOtherGrokSecretVersions,
   extractDeviceAuthorization,
   metadataAccessToken,
   postAuthCallback,
@@ -105,7 +105,7 @@ async function connect(environment: WorkerEnvironment): Promise<void> {
   } finally {
     authPayload.fill(0);
   }
-  await disableOtherGrokSecretVersions({
+  await destroyOtherGrokSecretVersions({
     projectId,
     secretName,
     keepVersion: secretVersion,
@@ -129,7 +129,7 @@ async function disconnect(environment: WorkerEnvironment): Promise<void> {
   const sessionId = required(environment, "GROK_AUTH_SESSION_ID");
   const callbackUrl = required(environment, "GROK_AUTH_CALLBACK_URL");
   const accessToken = await metadataAccessToken();
-  const disabledVersions = await disableOtherGrokSecretVersions({
+  const destroyedVersions = await destroyOtherGrokSecretVersions({
     projectId,
     secretName,
     accessToken,
@@ -140,7 +140,7 @@ async function disconnect(environment: WorkerEnvironment): Promise<void> {
       type: "completed",
       action: "disconnect",
       sessionId,
-      disabledVersions,
+      destroyedVersions,
     },
   });
 }
@@ -171,7 +171,7 @@ async function refresh(environment: WorkerEnvironment): Promise<void> {
     }
     // Also heal a prior partial rotation that left more than one version
     // enabled even when the current credential itself does not need refresh.
-    await disableOtherGrokSecretVersions({
+    await destroyOtherGrokSecretVersions({
       projectId,
       secretName,
       keepVersion: secretVersion,

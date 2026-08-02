@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   accessLatestGrokSecretVersion,
   addGrokSecretVersion,
-  disableOtherGrokSecretVersions,
+  destroyOtherGrokSecretVersions,
   extractDeviceAuthorization,
   refreshGrokAuthDocument,
   validateGrokAuthDocument,
@@ -62,7 +62,7 @@ test("accepts subscription OAuth auth.json and rejects API-key shaped state", ()
   }))), /not subscription OAuth/);
 });
 
-test("disconnect disables enabled versions without reading their payloads", async () => {
+test("disconnect destroys superseded versions without reading their payloads", async () => {
   const requests: string[] = [];
   const fetcher: typeof fetch = async (url, init) => {
     requests.push(`${init?.method || "GET"} ${String(url)}`);
@@ -77,17 +77,22 @@ test("disconnect disables enabled versions without reading their payloads", asyn
     }
     return new Response("{}", { status: 200 });
   };
-  const disabled = await disableOtherGrokSecretVersions({
+  const destroyed = await destroyOtherGrokSecretVersions({
     projectId: "project-1",
     secretName: "grok-subscription-auth",
     keepVersion: "projects/project-1/secrets/grok-subscription-auth/versions/2",
     accessToken: "access-token",
     fetcher,
   });
-  assert.equal(disabled, 1);
-  assert.equal(requests.filter((request) => request.endsWith(":disable")).length, 1);
+  // Version 1 is enabled and version 3 was left disabled by an older rotation;
+  // both are billable until destroyed, and neither is the version being kept.
+  assert.equal(destroyed, 2);
+  assert.equal(requests.filter((request) => request.endsWith(":destroy")).length, 2);
   assert.ok(requests.some((request) => request.includes(
-    "projects/project-1/secrets/grok-subscription-auth/versions/1:disable",
+    "projects/project-1/secrets/grok-subscription-auth/versions/1:destroy",
+  )));
+  assert.ok(requests.some((request) => request.includes(
+    "projects/project-1/secrets/grok-subscription-auth/versions/3:destroy",
   )));
   assert.ok(requests.every((request) => !request.includes(":access")));
 });
