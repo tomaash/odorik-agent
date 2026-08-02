@@ -56,18 +56,34 @@ async function sendInvitationEmail(input: {
   const origin = process.env.APP_ORIGIN?.trim() || productionAppOrigin;
   const invitationUrl = `${origin.replace(/\/$/, "")}/join?token=${encodeURIComponent(token)}`;
   const resend = new Resend(resendApiKey.value());
+  const plainText = [
+    "Hey,",
+    "",
+    `${input.inviterName} invited you to ${input.teamName} on Agent Erik.`,
+    "If you want in, open this link and sign in with this same Google account:",
+    "",
+    invitationUrl,
+    "",
+    "It expires in about a week.",
+    "",
+    "Thanks",
+  ].join("\n");
   try {
     const { data, error } = await resend.emails.send({
       from: "Agent Erik <hello@agenterik.cz>",
       to: input.email,
-      subject: `Join ${input.teamName} on Agent Erik`,
-      html: [
-        "<p>Hello,</p>",
-        `<p>${escapeHtml(input.inviterName)} invited you to join <strong>${escapeHtml(input.teamName)}</strong> on Agent Erik.</p>`,
-        `<p><a href="${escapeHtml(invitationUrl)}">Review invitation</a></p>`,
-        "<p>This invitation expires in seven days. Sign in with the Google account matching this email address.</p>",
-      ].join(""),
-      text: `${input.inviterName} invited you to join ${input.teamName} on Agent Erik.\n\n${invitationUrl}\n\nThis invitation expires in seven days.`,
+      subject: `${input.inviterName} invited you to ${input.teamName}`,
+      // Keep HTML a thin wrapper around the same plain copy so clients that
+      // prefer HTML still look like a short personal note, not a template.
+      text: plainText,
+      html: plainText
+        .split("\n")
+        .map((line) => (
+          line === invitationUrl
+            ? `<a href="${escapeHtml(invitationUrl)}">${escapeHtml(invitationUrl)}</a>`
+            : escapeHtml(line)
+        ))
+        .join("<br>\n"),
     }, {
       idempotencyKey: `team-invite/${input.companyId}/${input.invitationId}/${input.tokenVersion}`,
     });
