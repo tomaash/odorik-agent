@@ -2,7 +2,7 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C3 — Durable synchronization and operator recovery
+**Current implementation slice:** C4 — Permission-aware resources and context
 
 **Last plan revision:** 2026-07-31
 
@@ -609,9 +609,8 @@ Exit criteria:
 **Usable outcome:** an administrator can distinguish fresh, stale, failed, and
 recovering sources and can safely replay a failed resource.
 
-**Implementation status (2026-08-02):** C3A, C3B, and C3C are implemented in
-the repository. C3C has passed test-production acceptance; the remaining C3
-gate is real-account provider acceptance for C3B. Calendar, Drive, and GitHub
+**Implementation status (2026-08-02):** C3A, C3B, and C3C are implemented and
+accepted in test production. Calendar, Drive, and GitHub
 manual, selection/enable, scheduled, and recovery paths now share durable
 capability runs, distinct resource attempts, fenced resource leases, four
 bounded attempts (one initial attempt plus 1/5/30-minute backoff), stale-run
@@ -624,8 +623,7 @@ Firestore-to-Qdrant plane now records deterministic per-record deliveries,
 generation-fenced leases, bounded retry, stale-lease recovery, terminal
 attention, targeted replay, one-time existing-record backfill, and measured
 context-to-search p95. Provider reconciliation and search-index health remain
-separate. C3 remains in progress until the remaining real-account provider
-acceptance evidence is recorded.
+separate. C3 is complete; the next implementation slice is C4.
 
 Build:
 
@@ -1251,3 +1249,44 @@ YYYY-MM-DD — Slice
 - **Decision:** C3C is accepted in test production. C3 remains open only for
   the separate real Drive/GitHub C3B acceptance scenarios; provider health and
   search-index health continue to be evaluated independently.
+
+### 2026-08-02 — C3B test-production acceptance
+
+- **Drive reconciliation:** a real Google Doc was created in the selected
+  `test` folder, updated in place, moved outside the selected root, and then
+  moved to Drive trash. Create and update advanced one normalized context item
+  without duplication; the selected-folder count moved from one to two and
+  returned to one after move-out. Qdrant delivery generations one and two
+  upserted on their first attempts in 758 ms and 659 ms, and generation three
+  deleted the moved-out item with zero points and no error.
+- **GitHub reconciliation:** issue
+  [#6](https://github.com/tomaash/elixir-play/issues/6) was created, updated,
+  and closed in the connected `tomaash/elixir-play` repository. The repository
+  count moved from two to three and stayed at three without duplication. The
+  normalized item reflects the updated title, body, closure state, and cleanup
+  comment; Qdrant generations one through three succeeded on their first
+  attempts, with measured create and update delays of 690 ms and 667 ms.
+- **Scheduled stability:** both deployed 30-minute Scheduler jobs were invoked
+  for two complete cycles. All four requests returned HTTP 200. The second
+  Drive and GitHub cycles were true no-ops: item and context counts stayed at
+  1/1 and 3/3, `lastAttemptAt` and `lastSuccessAt` advanced together,
+  `lastChangeObservedAt` did not move, and no health or error state drifted.
+- **Recovery and replay:** synthetic due-retry states were injected only into
+  the isolated, already completed acceptance runs so real credentials did not
+  need to be broken. The deployed Drive and GitHub recovery Scheduler workers
+  completed attempt two, cleared failed-resource and error state, and restored
+  fresh capability and resource health. Synthetic terminal-attention states
+  then appeared in the deployed Sources UI; each scoped administrator replay
+  created a new successful `operator_replay` run while preserving its prior
+  attention run as audit history.
+- **Settled evidence:** Sources reported Calendar current with 341 items,
+  Drive current with one selected-folder item, and GitHub current with three
+  repository items. Search-index health was 502/502 tracked and expected, zero
+  pending, zero attention, and within the two-minute freshness target. Recent
+  sync and recovery service logs and the deployed browser console contained no
+  errors or warnings.
+- **Cleanup:** the disposable Drive document is in recoverable provider trash
+  and will be permanently deleted by Google after 30 days. GitHub issue #6
+  remains closed as inspectable acceptance evidence.
+- **Decision:** C3B and the full C3 slice are accepted in test production.
+  Continue to C4 permission-aware resources and context.
