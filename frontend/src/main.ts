@@ -16,6 +16,17 @@ import '@fontsource/ibm-plex-mono/latin-ext-400.css'
 import '@fontsource/ibm-plex-mono/latin-ext-500.css'
 import 'primeicons/primeicons.css'
 import './index.css'
+import { clearStaleChunkReloadGuard, recoverFromStaleChunkError } from './chunk-load-recovery'
+
+clearStaleChunkReloadGuard()
+
+// Vite fires this when a preloaded lazy chunk 404s after a deploy (hashed filename gone).
+window.addEventListener('vite:preloadError', (event) => {
+  const error = 'payload' in event ? (event as Event & { payload?: unknown }).payload : event
+  if (recoverFromStaleChunkError(error ?? event)) {
+    event.preventDefault()
+  }
+})
 
 const app = createApp(App)
 app.use(createPinia())
