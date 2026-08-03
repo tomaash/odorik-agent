@@ -7,8 +7,9 @@ Secret Manager bills roughly **$0.06 per active secret version per month**, wher
 versions are free per billing account. Cost therefore tracks the *number of
 secrets*, not how often they are read, so consolidation is the lever.
 
-State after the 2026-08-02 prune: **15 secrets, 15 versions** (down from 24
-versions). The plan below takes that to **12**.
+State as of 2026-08-03: **14 secrets, 14 versions** (down from 24 versions
+before the 2026-08-02 prune, and 15 before the Gemini duplicate was deleted).
+The plan below takes that to **12**.
 
 ## Consumer map
 
@@ -23,13 +24,12 @@ in `europe-west1` that mount their credentials as files.
 | `GOOGLE_CONNECTOR_CLIENT_ID` | 6 — api, googleoauthcallback, recover{calendar,drive}sourcesyncs, sync{calendar,drive}sources | env |
 | `GOOGLE_CONNECTOR_CLIENT_SECRET` | 6 — same six as above | env |
 | `GITHUB_APP_PRIVATE_KEY` | 5 — api, processgithubwebhook, recovergithubsourcesyncs, syncgithubsources, **erik-coding-dispatcher** | env + volume |
-| `GEMINI_API_KEY` | 3 — api, recoverknowledgeindexdeliveries, syncknowledgeindex | env |
-| `QDRANT_API_KEY` | 3 — same three as above | env |
+| `GEMINI_API_KEY` | 4 — api, recoverknowledgeindexdeliveries, syncknowledgeindex, odorik-processor | env |
+| `QDRANT_API_KEY` | 3 — api, recoverknowledgeindexdeliveries, syncknowledgeindex | env |
 | `QDRANT_URL` | 3 — same three as above | env |
 | `RESEND_API_KEY` | 2 — api, sendpartnerform | env |
 | `GITHUB_WEBHOOK_SECRET` | 1 — githubwebhook | env |
 | `DEEPGRAM_API_KEY` | 1 — odorik-processor | env |
-| `gemini-api-key` | 1 — odorik-processor | env |
 | `dashboard-token` | 1 — odorik-api | env |
 | `odorik-upload-user` | 1 — odorik-ingest | env |
 | `odorik-upload-password` | 1 — odorik-ingest | env |
@@ -65,15 +65,16 @@ The rule that separates the two cases: **public-by-construction** values (an
 OAuth client ID) can be env vars; **non-public infrastructure identity** should
 not be, even when it is not itself a credential.
 
-## B. Duplicate holding the same credential — APPLIED 2026-08-02
+## B. Duplicate holding the same credential — COMPLETED 2026-08-03
 
 ### `gemini-api-key` (legacy) vs `GEMINI_API_KEY`
 
-**Status: done except the final delete.** Both values were confirmed byte
-identical (SHA-256 match). `odorik-processor` now mounts `GEMINI_API_KEY:latest`
-(revision `odorik-processor-00005-vhq`, Ready), the service account was granted
+**Status: done.** Both values were confirmed byte identical (SHA-256 match).
+`odorik-processor` mounts `GEMINI_API_KEY:latest` (revision
+`odorik-processor-00005-vhq`, Ready), the service account was granted
 `secretAccessor` on it, and `deploy.sh` no longer creates or references the
-lowercase secret. Nothing mounts `gemini-api-key` any more, so it can be removed:
+lowercase secret. With no consumer left in either region and no reference left
+in the repo, the duplicate was deleted on 2026-08-03:
 
 ```
 gcloud secrets delete gemini-api-key --project=odorik-tx-260720-c58d
@@ -128,21 +129,28 @@ Functions and the coding dispatcher job) apart from `GITHUB_WEBHOOK_SECRET`
 connector credentials, so rotating it is a data-migration event, not a
 credential swap.
 
-## The worker fix is not live until the job is redeployed
+## The worker fix went live 2026-08-03
 
-The destroy-instead-of-disable fix landed in `grok-auth-worker/src/protocol.ts`,
-but `erik-grok-auth` still runs the image built before it
-(`erik-coding/grok-auth:20260801192956`). The leak is therefore still active:
-a Grok reconnect at 2026-08-02 17:25 — *after* that day's prune — created
-version 5 of `grok-subscription-auth` and left version 4 **disabled rather than
-destroyed**, which is exactly the billable state the fix removes.
+The destroy-instead-of-disable fix landed in `grok-auth-worker/src/protocol.ts`
+on 2026-08-02, but for a day `erik-grok-auth` kept running the image built
+before it (`erik-coding/grok-auth:20260801192956`), so the leak stayed active: a
+Grok reconnect at 2026-08-02 17:25 — *after* that day's prune — created version
+5 of `grok-subscription-auth` and left version 4 **disabled rather than
+destroyed**, exactly the billable state the fix removes.
 
-Until `infra/deploy-grok-auth-worker.sh` is run, every reconnect strands another
-version and `infra/prune-secret-versions.sh` has to mop up behind it.
+`infra/deploy-grok-auth-worker.sh` was run on 2026-08-03; the job now runs
+`erik-coding/grok-auth:20260803080758`. Reconnects destroy the superseded
+version from here on, so `infra/prune-secret-versions.sh` is no longer needed to
+mop up behind the worker. The stranded version 4 has since been destroyed —
+`grok-subscription-auth` is down to version 5 alone.
+
+The general lesson: a fix to a job's source is not a fix to production until
+the job is redeployed, and this repo deploys from working trees rather than
+from tags, so the commit date says nothing about what is running.
 
 ## E. Everything has a consumer
 
-Every one of the 15 secrets is mounted by something. In particular
+Every one of the remaining 14 secrets is mounted by something. In particular
 `grok-subscription-auth` is **not** an orphan: `erik-coding-runner` mounts it at
 `/secrets/grok/auth.json` from version `latest`. That job is *on demand* — it
 sits idle between coding runs, so its absence from a running-workload listing
@@ -161,8 +169,15 @@ use.
 |---|---|
 | Before the 2026-08-02 prune | 24 |
 | After the prune | 15 |
-| Now (Gemini merge applied, delete pending) | 15 |
+| After the Gemini duplicate was deleted (2026-08-03) | 14 |
 | After the remaining steps | **12** |
+
+Verified live on 2026-08-03: 14 secrets, each holding exactly one non-destroyed
+version. The unbounded growth is stopped at the source now that the worker fix
+is deployed, so the count only moves when a secret is deliberately added or
+merged. The last 2 are one each from section A (`GOOGLE_CONNECTOR_CLIENT_ID`
+demoted to an env var) and section C (the `odorik-upload-*` bundle); both are
+still open.
 
 Across the billing account (4 projects) that moves the total from 42 → ~21, or
 roughly **Kč 45/month → Kč 19/month**. The absolute numbers are small; the reason
