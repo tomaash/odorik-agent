@@ -28,6 +28,10 @@ import {
   syncAllGoogleDriveConnections,
 } from "./connectors/google-drive.js";
 import {
+  retryDueGoogleGmailSyncRuns,
+  syncAllGoogleGmailConnections,
+} from "./connectors/google-gmail.js";
+import {
   githubConfigurationFromEnvironment,
   retryDueGitHubSyncRuns,
   syncAllGitHubConnections,
@@ -279,6 +283,64 @@ export const recoverDriveSourceSyncs = onSchedule(
     const attention = results.filter((result) => result.status === "attention");
     if (attention.length) {
       console.error("One or more Drive synchronization runs exhausted recovery", attention);
+    }
+  },
+);
+
+export const syncMailSources = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await syncAllGoogleGmailConnections({
+      clientId: googleConnectorClientId.value(),
+      clientSecret: googleConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more Gmail connections failed to synchronize", failures);
+    }
+  },
+);
+
+export const recoverMailSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await retryDueGoogleGmailSyncRuns({
+      clientId: googleConnectorClientId.value(),
+      clientSecret: googleConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more Gmail synchronization runs exhausted recovery", attention);
     }
   },
 );

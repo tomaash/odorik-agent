@@ -71,6 +71,12 @@ import {
   syncGoogleDriveConnection,
 } from "./connectors/google-drive.js";
 import {
+  listGmailLabels,
+  replayGoogleGmailSyncRun,
+  selectGmailLabels,
+  syncGoogleGmailConnection,
+} from "./connectors/google-gmail.js";
+import {
   createGoogleWorkspaceAuthorization,
   revokeGoogleWorkspaceAuthorization,
 } from "./connectors/google-oauth.js";
@@ -531,7 +537,8 @@ export const appRouter = router({
           capabilityIds: z.array(z.enum([
             "context.calendar.read",
             "context.document.read",
-          ])).min(1).max(2),
+            "context.mail.read_scoped",
+          ])).min(1).max(3),
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
           returnOrigin: z.string().max(200).optional(),
         }))
@@ -576,6 +583,45 @@ export const appRouter = router({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
         .mutation(({ ctx, input }) => syncGoogleCalendarConnection({
+          companyId: ctx.companyId,
+          ...input,
+          trigger: "manual",
+          requestedBy: ctx.uid,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+    }),
+    googleMail: router({
+      labels: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .query(({ ctx, input }) => listGmailLabels({
+          companyId: ctx.companyId,
+          ...input,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      select: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          labelIds: z.array(z.string().min(1).max(1000)).max(50),
+        }))
+        .mutation(({ ctx, input }) => selectGmailLabels({
+          companyId: ctx.companyId,
+          ...input,
+          actorUid: ctx.uid,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      sync: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ ctx, input }) => syncGoogleGmailConnection({
           companyId: ctx.companyId,
           ...input,
           trigger: "manual",
@@ -682,6 +728,15 @@ export const appRouter = router({
             });
           case "drive":
             return replayGoogleDriveSyncRun({
+              companyId: ctx.companyId,
+              ...input,
+              actorUid: ctx.uid,
+              clientId: googleConnectorClientId.value(),
+              clientSecret: googleConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+          case "mail":
+            return replayGoogleGmailSyncRun({
               companyId: ctx.companyId,
               ...input,
               actorUid: ctx.uid,
@@ -805,6 +860,7 @@ export const appRouter = router({
         capabilityId: z.enum([
           "context.calendar.read",
           "context.document.read",
+          "context.mail.read_scoped",
         ]),
         enabled: z.boolean(),
       }))

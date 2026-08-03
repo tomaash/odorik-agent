@@ -477,11 +477,12 @@ export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
   | 'context.document.read'
+  | 'context.mail.read_scoped'
   | 'context.github.issue.read'
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId
-  serviceId: 'calls' | 'calendar' | 'drive' | 'issues'
+  serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'issues'
   direction: 'observe'
   resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
   requiredScopes: string[]
@@ -1019,7 +1020,7 @@ export async function setSourceConnectionStatus(
 
 export async function setSourceCapabilityStatus(
   connectionId: string,
-  capabilityId: 'context.calendar.read' | 'context.document.read',
+  capabilityId: WorkspaceCapabilityId,
   enabled: boolean,
 ) {
   return trpc.sources.setCapabilityStatus.mutate({
@@ -1061,8 +1062,28 @@ export type SelectableFolder = {
   enabled: boolean
 }
 
+/** Every Google Workspace service a member can enable on one account connection. */
+export type WorkspaceCapabilityId =
+  | 'context.calendar.read'
+  | 'context.document.read'
+  | 'context.mail.read_scoped'
+
+export const workspaceCapabilityIds: WorkspaceCapabilityId[] = [
+  'context.calendar.read',
+  'context.document.read',
+  'context.mail.read_scoped',
+]
+
+export type SelectableMailLabel = {
+  id: string
+  displayName: string
+  type: string
+  messageCount: number | null
+  selected: boolean
+}
+
 export async function startGoogleWorkspaceAuthorization(
-  capabilityIds: Array<'context.calendar.read' | 'context.document.read'>,
+  capabilityIds: WorkspaceCapabilityId[],
   connectionId?: string,
 ) {
   return trpc.sources.googleWorkspace.authorizationUrl.mutate({
@@ -1082,6 +1103,18 @@ export async function selectGoogleCalendars(connectionId: string, calendarIds: s
 
 export async function syncGoogleCalendars(connectionId: string) {
   return trpc.sources.googleCalendar.sync.mutate({ connectionId })
+}
+
+export async function getGmailLabels(connectionId: string): Promise<SelectableMailLabel[]> {
+  return trpc.sources.googleMail.labels.query({ connectionId }) as Promise<SelectableMailLabel[]>
+}
+
+export async function selectGmailLabels(connectionId: string, labelIds: string[]) {
+  return trpc.sources.googleMail.select.mutate({ connectionId, labelIds })
+}
+
+export async function syncGmailLabels(connectionId: string) {
+  return trpc.sources.googleMail.sync.mutate({ connectionId })
 }
 
 export async function replaySourceSync(connectionId: string, runId: string) {

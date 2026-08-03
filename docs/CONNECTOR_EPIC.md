@@ -2,9 +2,10 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** C5 complete — Gmail decision gate is next
+**Current implementation slice:** G1 in progress — Gmail read implemented, awaiting
+real-account acceptance
 
-**Last plan revision:** 2026-08-02
+**Last plan revision:** 2026-08-03
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -126,6 +127,18 @@ and sends the draft in the mailbox that owns it.
 10. **No placeholder capability.** A connector or workflow block is not shown
     as usable until its operating loop and failure behavior exist.
 
+    A capability's operating loop is the loop *it* performs, not the epic's final
+    one. For an observe capability that is select a resource, ingest it, and cite
+    it in an answer, together with its cursor recovery and failure states. It is
+    **not** the external-write loop: requiring G2–G3 before a mail capability could
+    be configured at all would be circular, since the read loop cannot be exercised
+    without the configuration surface that drives it. An execute capability is held
+    to its own loop — approval, provider call, result or honest uncertainty,
+    reconciliation — and that one is genuinely gated on G3.
+
+    What this rules out is unchanged: a card that offers a service with no adapter
+    behind it, or one whose failures are invisible.
+
 ## Current baseline
 
 The baseline was last accepted in the deployed test environment on 2026-08-02.
@@ -138,7 +151,7 @@ The baseline was last accepted in the deployed test environment on 2026-08-02.
 | Google Drive | Workspace subsystem with least-privilege consent, recursive folder selection, deterministic overlapping-root ownership, canonical per-file identity, Google Docs/text/PDF extraction, honest metadata-only fallbacks, complete-snapshot stale cleanup, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Provider ACLs are deliberately not mirrored; administrators choose the Erik audience explicitly |
 | Context | Provider/capability/connection/resource identity, provenance, durable indexing, citations, enforced `company`/`restricted` envelopes, and provider-to-context/search freshness samples | Provider ACLs are deliberately not projected; the selected Erik resource remains the governing access boundary |
 | Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; G1–G3 must prove the mail evidence and execution loop |
-| Connector catalog | Working Odorik, Google Workspace, GitHub, and isolated Grok subscription entries are shown | Gmail remains deliberately absent until G1 has a complete operating loop |
+| Connector catalog | Working Odorik, Google Workspace, GitHub, and isolated Grok subscription entries are shown | Gmail is offered as a Workspace service now that its read loop exists; mail *drafting* stays absent until G3 |
 
 The first slices protect and improve this baseline rather than immediately
 adding another provider.
@@ -243,7 +256,7 @@ Every action capability must define:
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Completed | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Completed | Accepted in test production |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
-| G1 | Add selected-label Gmail evidence to Google Workspace | Pending | Cross-source call + email answer succeeds |
+| G1 | Add selected-label Gmail evidence to Google Workspace | In progress | Cross-source call + email answer succeeds |
 | G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
 | M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
@@ -1075,6 +1088,47 @@ Exit criteria:
 **Usable outcome:** a member can ask Erik about relevant email without giving
 the whole company an invisible mailbox import.
 
+#### G1 verification decision — 2026-08-03
+
+Neither a CASA security assessment nor a Workspace-Internal app is planned. The
+OAuth app therefore stays External with a **Testing** publishing status, which caps
+it at 100 test users and expires every refresh token seven days after consent.
+Three facts make that a cost rather than a blocker:
+
+- **Gmail adds no new gate.** `drive.readonly` is already a Google *restricted*
+  scope, so restricted-scope verification has applied since C1. `gmail.readonly`
+  joins an existing gate instead of creating one, and the ceiling it implies —
+  dogfood and design partners, no general availability — is already today's ceiling.
+- **Gmail costs no extra re-consent.** One connection holds one credential envelope,
+  so the reconnect Calendar and Drive already need weekly restores mail in the same
+  pass. Frequency is unchanged; only what is restored grows.
+- **The failure is already modeled.** C5.1's typed reauthorization moves the
+  capability to `reauthorization_required` while preserving resources, audiences,
+  and cursors, with no retry loop.
+
+The design consequence is that weekly re-consent is a normal operating condition,
+not an exception. Two things follow, and both are implemented: one consent restores
+every enabled service, and mail sync treats an expired cursor as a primary path.
+
+#### G1 contract decisions
+
+- **The mail grant is mailbox-wide.** Google publishes no label-scoped read scope;
+  `gmail.metadata` is also restricted and omits bodies, so it cannot answer a cited
+  question. Label selection is therefore an application boundary over a full-mailbox
+  grant, and the Sources card says exactly that rather than implying Google scoped
+  the token. This is the same honesty rule C1 applied to account-level revocation.
+- **Push is deferred.** A Gmail `watch` expires in seven days and the credential
+  expires weekly regardless, so push would add Pub/Sub infrastructure and failure
+  modes while inheriting the same latency floor. Polling reuses the C3/C5 runtime,
+  consistent with C3's "push comes only after polling and reconciliation are
+  correct."
+- **Mail defaults to restricted.** A new label resource is visible to the connecting
+  member only, deliberately diverging from the company-visible Calendar/Drive
+  default. Broadening goes through the existing confirmation-protected C4 action.
+- **One item per message.** Context identity hashes connection and Gmail message ID,
+  so a message under two selected labels is one observation whose `source.resourceId`
+  names its owning label, mirroring the C5 Drive ownership rule.
+
 Build:
 
 - add `context.mail.read_scoped` as a capability configuration of an existing
@@ -1090,9 +1144,24 @@ Build:
 - attachment names and provider references only; attachment content is
   deferred;
 - restricted audience defaulting to the connecting member;
-- Gmail push notification handling plus periodic reconciliation and watch
-  renewal; and
+- scheduled reconciliation on the existing 30-minute cadence, with an expired
+  `historyId` triggering a complete bounded rebuild rather than a partial overlay
+  (push notifications and watch renewal are deferred, see the contract decisions
+  above); and
 - message deletion/label-removal behavior consistent with the selected scope.
+
+**Implementation status (2026-08-03):** implemented and green locally; real-account
+acceptance is outstanding. The capability, scope planning, and grant state reuse the
+generic Workspace machinery unchanged. `functions/src/connectors/google-gmail.ts`
+carries label discovery and selection, the 90-day bounded import, `historyId`
+incremental sync, expired-cursor rebuild with complete-snapshot stale
+reconciliation, and label-removal cleanup. `syncMailSources` and
+`recoverMailSourceSyncs` join the C3 durable-run and replay contract, and Sources
+offers mail as a Workspace service with a label picker and the mailbox-wide
+disclosure. Reconnecting now re-requests every service still enabled on the
+connection, closing a latent defect where consenting to one service replaced the
+shared credential envelope without the others' scopes; the OAuth callback also
+validated capability IDs against a hardcoded pair, silently dropping any third.
 
 Not included:
 

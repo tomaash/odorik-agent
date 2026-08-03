@@ -14,6 +14,15 @@ export const driveScopes = [
   "https://www.googleapis.com/auth/drive.readonly",
 ] as const;
 
+/**
+ * Google publishes no label-scoped mail read scope, so this grant covers the whole
+ * mailbox. Erik's label selection is an application boundary over that grant, never a
+ * claim that the provider itself was scoped to the selected labels.
+ */
+export const mailScopes = [
+  "https://www.googleapis.com/auth/gmail.readonly",
+] as const;
+
 export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDescriptor> = {
   "context.call.read": {
     id: "context.call.read",
@@ -42,6 +51,15 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     syncMode: "reconcile",
     requiresApproval: false,
   },
+  "context.mail.read_scoped": {
+    id: "context.mail.read_scoped",
+    serviceId: "mail",
+    direction: "observe",
+    resourceType: "label",
+    requiredScopes: [...mailScopes],
+    syncMode: "incremental",
+    requiresApproval: false,
+  },
   "context.github.issue.read": {
     id: "context.github.issue.read",
     serviceId: "issues",
@@ -58,6 +76,21 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
   },
 };
 
+/**
+ * Every capability that can be granted on a Google Workspace connection.
+ *
+ * This is deliberately separate from what the catalog *offers*: a capability is
+ * grantable once its scopes and grant state are modeled, but it is only listed on the
+ * connector card once its operating loop exists. Validation of OAuth state must use
+ * this set rather than a hand-maintained literal, so adding a Google capability never
+ * needs a second edit in the callback.
+ */
+export const googleWorkspaceCapabilityIds: readonly SourceCapabilityId[] = [
+  "context.calendar.read",
+  "context.document.read",
+  "context.mail.read_scoped",
+] as const;
+
 const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
   odorik: {
     id: "odorik",
@@ -69,11 +102,18 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
   google_workspace: {
     id: "google_workspace",
     name: "Google Workspace",
-    description: "Selected calendars and Drive folders from one Google account.",
+    description:
+      "Selected calendars, Drive folders, and mail labels from one Google account.",
     availability: "available",
+    // Invariant 10 gates a capability on its *operating loop*, which for an observe
+    // capability is select a resource, ingest it, and cite it in an answer — plus the
+    // failure behavior around that. It is not the external-write loop; requiring G2/G3
+    // before the mail card could even be configured would be circular, since the loop
+    // cannot be exercised without the configuration UI that shows it.
     capabilities: [
       sourceCapabilities["context.calendar.read"],
       sourceCapabilities["context.document.read"],
+      sourceCapabilities["context.mail.read_scoped"],
     ],
   },
   github: {

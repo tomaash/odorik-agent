@@ -500,6 +500,11 @@ const messages = {
       driveExtractionSummary: 'Rekurzivně · Markdown {markdown} · text {text} · pouze metadata {metadata}',
       emptyPhoneLines: 'Linka se objeví automaticky po přijetí první nahrávky.',
       emptyRepositories: 'Vyberte repozitáře, jejichž issues se mají zahrnout do firemního kontextu.',
+      emptyLabels: 'Vyberte štítky, jejichž zprávy se mají zahrnout do kontextu.',
+      chooseLabels: 'Vybrat štítky',
+      mailFullMailboxNotice: 'Google uděluje přístup pro čtení celé schránky. Erik ukládá pouze zprávy z vybraných štítků a nové štítky jsou zpřístupněny jen vám.',
+      mailRestrictedDefault: 'Pouze vy',
+      mailInitialImport: 'Prvních 90 dní',
       lastObserved: 'Naposledy přijato',
       never: 'Zatím nic',
       needsConfiguration: 'Vyžaduje OAuth konfiguraci',
@@ -549,6 +554,12 @@ const messages = {
               description: 'Rekurzivně načítat dokumenty z vybraných složek. Vybraná podsložka tvoří vlastní hranici přístupu a PDF se převádějí do Markdownu.',
             },
           },
+          mail: {
+            read_scoped: {
+              name: 'Pošta',
+              description: 'Načítat zprávy pouze z výslovně vybraných štítků. Google uděluje přístup pro čtení celé schránky — výběr štítků je hranice, kterou drží Erik, nikoli Google.',
+            },
+          },
           github: {
             issue: {
               read: {
@@ -563,6 +574,7 @@ const messages = {
         calendarList: 'Zobrazit seznam kalendářů',
         calendarEvents: 'Číst události ve vybraných kalendářích',
         drive: 'Číst dokumenty ve vybraných složkách',
+        gmail: 'Číst poštu v celé schránce',
         githubContents: 'Číst obsah repozitáře',
         githubContentsWrite: 'Číst a zapisovat větve repozitáře',
         githubIssues: 'Číst issues a komentáře',
@@ -739,6 +751,15 @@ const messages = {
         none: 'V tomto Google účtu nejsou dostupné žádné kalendáře.',
         submit: 'Uložit výběr a synchronizovat',
         privacy: 'Události z vybraných kalendářů budou dostupné všem povoleným členům této firmy.',
+      },
+      mailPicker: {
+        title: 'Vyberte štítky',
+        description: 'Do kontextu se načtou pouze zprávy z označených štítků, zpětně za 90 dní. Výběr můžete později změnit.',
+        system: 'Systémový',
+        none: 'V této schránce nejsou dostupné žádné štítky.',
+        messageCount: 'Zpráv ve štítku: {count}',
+        submit: 'Uložit výběr a synchronizovat',
+        privacy: 'Nový štítek vidíte zprvu jen vy. Zpřístupnit ho dalším členům lze později u zdroje, a to s výslovným potvrzením.',
       },
       drivePicker: {
         title: 'Vyberte složky',
@@ -1270,6 +1291,11 @@ const messages = {
       driveExtractionSummary: 'Recursive · Markdown {markdown} · text {text} · metadata only {metadata}',
       emptyPhoneLines: 'A line appears automatically after its first recording is received.',
       emptyRepositories: 'Choose which repositories should contribute issues to company context.',
+      emptyLabels: 'Choose which labels should contribute messages to context.',
+      chooseLabels: 'Choose labels',
+      mailFullMailboxNotice: 'Google grants read access to the entire mailbox. Erik stores only messages from the labels you select, and a new label is visible to you alone.',
+      mailRestrictedDefault: 'Only you',
+      mailInitialImport: 'First 90 days',
       lastObserved: 'Last received',
       never: 'Nothing yet',
       needsConfiguration: 'OAuth configuration required',
@@ -1319,6 +1345,12 @@ const messages = {
               description: 'Recursively import documents from selected Drive folders. A selected child folder owns its access boundary, and PDFs are converted to Markdown.',
             },
           },
+          mail: {
+            read_scoped: {
+              name: 'Mail',
+              description: 'Import messages only from explicitly selected labels. Google grants read access to the entire mailbox — the label selection is a boundary Erik holds, not one Google enforces.',
+            },
+          },
           github: {
             issue: {
               read: {
@@ -1333,6 +1365,7 @@ const messages = {
         calendarList: 'View the calendar list',
         calendarEvents: 'Read events in selected calendars',
         drive: 'Read documents in selected folders',
+        gmail: 'Read mail across the entire mailbox',
         githubContents: 'Read repository contents',
         githubContentsWrite: 'Read repository contents and write result branches',
         githubIssues: 'Read issues and comments',
@@ -1509,6 +1542,15 @@ const messages = {
         none: 'No calendars are available in this Google account.',
         submit: 'Save selection and synchronize',
         privacy: 'Events from selected calendars will be available to every enabled member of this company.',
+      },
+      mailPicker: {
+        title: 'Choose labels',
+        description: 'Only messages carrying a checked label are imported, going back 90 days. You can change the selection later.',
+        system: 'System',
+        none: 'No labels are available in this mailbox.',
+        messageCount: '{count} messages in this label',
+        submit: 'Save selection and synchronize',
+        privacy: 'A new label is visible to you alone at first. You can share it with other members later from the source, with an explicit confirmation.',
       },
       drivePicker: {
         title: 'Choose folders',
