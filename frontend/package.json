@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:emulator": "VITE_USE_FIREBASE_EMULATORS=true vite",
+    "dev:prod": "VITE_USE_FIREBASE_EMULATORS=false vite",
     "build": "vue-tsc -p tsconfig.app.json --noEmit && vite build",
     "typecheck": "vue-tsc -p tsconfig.app.json --noEmit",
     "test": "vitest run",

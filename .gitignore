@@ -17,6 +17,7 @@ frontend/.env.*
 !frontend/.env.example
 functions/node_modules/
 functions/lib/
+functions/.secret.local
 .emulator-data/
 uploads/
 

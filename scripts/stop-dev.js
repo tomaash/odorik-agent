@@ -1,10 +1,18 @@
 import { execSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
 
 const PORTS = [9099, 8085, 5001, 5005, 4041, 5173]
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
+const functionsDir = path.join(root, 'functions')
 
 console.log('[stop] Exporting emulator data before shutdown...')
 try {
-  execSync('npx --prefix functions firebase emulators:export ./.emulator-data', { stdio: 'inherit' })
+  // Must match functions/package.json serve import/export path (cwd: functions/).
+  execSync('npx firebase emulators:export ./.emulator-data', {
+    cwd: functionsDir,
+    stdio: 'inherit',
+  })
 } catch {
   // If export fails (e.g. emulators not active), proceed to cleanup
 }
