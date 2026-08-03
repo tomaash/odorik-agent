@@ -1,11 +1,29 @@
+import dns from 'node:dns'
+import https from 'node:https'
 import { defineConfig, loadEnv } from 'vite'
 import vue from '@vitejs/plugin-vue'
+
+// Prefer IPv4 for outbound proxy hops. Many local networks advertise AAAA for
+// Firebase Hosting but cannot reach IPv6; Node's dual-stack connect then
+// surfaces AggregateError [ETIMEDOUT] on /api via the Vite proxy.
+dns.setDefaultResultOrder('ipv4first')
 
 // Production Hosting origin that rewrites /api and OAuth callbacks to Functions.
 // Prefer the current app site; the legacy project-id site is still deployed.
 const productionOrigin = 'https://agent-erik-app.web.app'
 const emulatorFunctionsOrigin =
   'http://127.0.0.1:5001/odorik-tx-260720-c58d/europe-west3'
+
+/** Force IPv4 for HTTPS proxy targets (http-proxy ignores dns result order alone). */
+const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true })
+
+function proxyTo(target: string) {
+  return {
+    target,
+    changeOrigin: true as const,
+    ...(target.startsWith('https:') ? { agent: ipv4HttpsAgent } : {}),
+  }
+}
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
@@ -42,23 +60,16 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       strictPort: true,
       proxy: {
-        '/api': {
-          target,
-          changeOrigin: true,
-        },
+        '/api': proxyTo(target),
         '/oauth/google/callback': useEmulators
           ? {
-              target,
-              changeOrigin: true,
-              rewrite: (path) => path.replace(
+              ...proxyTo(target),
+              rewrite: (path: string) => path.replace(
                 /^\/oauth\/google\/callback/,
                 '/googleOAuthCallback',
               ),
             }
-          : {
-              target: productionOrigin,
-              changeOrigin: true,
-            },
+          : proxyTo(productionOrigin),
       },
     },
     test: {
