@@ -40,12 +40,13 @@ export const sourceCapabilityIds = [
   "context.call.read",
   "context.calendar.read",
   "context.document.read",
+  "context.mail.read_scoped",
   "context.github.issue.read",
 ] as const;
 
 export type SourceCapabilityId = typeof sourceCapabilityIds[number];
-export type CapabilityServiceId = "calls" | "calendar" | "drive" | "issues";
-export type ResourceType = "phone_line" | "calendar" | "folder" | "repository";
+export type CapabilityServiceId = "calls" | "calendar" | "drive" | "mail" | "issues";
+export type ResourceType = "phone_line" | "calendar" | "folder" | "label" | "repository";
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId;

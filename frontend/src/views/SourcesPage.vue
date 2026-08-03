@@ -40,8 +40,14 @@ import {
   type SourceConnector,
   type SourceConnection,
   type SourceResource,
+  getGmailLabels,
+  selectGmailLabels,
+  syncGmailLabels,
+  workspaceCapabilityIds,
   type SelectableCalendar,
   type SelectableFolder,
+  type SelectableMailLabel,
+  type WorkspaceCapabilityId,
   type SourcesResponse,
   type GrokAuthorization,
   type KnowledgeIndexStatus,
@@ -76,12 +82,19 @@ const currentFolderId = ref<string | null>(null)
 const loadingFolders = ref(false)
 const searchContainerRef = ref<HTMLElement | null>(null)
 const synchronizingId = ref('')
+const mailConnection = ref<SourceConnection | null>(null)
+const mailLabels = ref<SelectableMailLabel[]>([])
+const selectedLabelIds = ref<string[]>([])
+const loadingLabels = ref(false)
 const workspaceDialogVisible = ref(false)
 const workspaceConnection = ref<SourceConnection | null>(null)
-const selectedWorkspaceCapabilities = ref<Array<'context.calendar.read' | 'context.document.read'>>([
-  'context.calendar.read',
-  'context.document.read',
-])
+const selectedWorkspaceCapabilities = ref<WorkspaceCapabilityId[]>([...workspaceCapabilityIds])
+
+function isWorkspaceCapability(
+  capabilityId: SourceCapabilityId,
+): capabilityId is WorkspaceCapabilityId {
+  return (workspaceCapabilityIds as SourceCapabilityId[]).includes(capabilityId)
+}
 const pendingDeleteId = ref('')
 const deletingId = ref('')
 const grokAuthorization = ref<GrokAuthorization | null>(null)
@@ -130,6 +143,12 @@ const calendarPickerVisible = computed({
   get: () => calendarConnection.value !== null,
   set: (visible: boolean) => {
     if (!visible) closeCalendarPicker()
+  },
+})
+const mailPickerVisible = computed({
+  get: () => mailConnection.value !== null,
+  set: (visible: boolean) => {
+    if (!visible) closeMailPicker()
   },
 })
 const pendingDeleteConnection = computed(() => (
@@ -412,6 +431,7 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/calendar.calendarlist.readonly': t('sources.scopes.calendarList'),
     'https://www.googleapis.com/auth/calendar.events.readonly': t('sources.scopes.calendarEvents'),
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
+    'https://www.googleapis.com/auth/gmail.readonly': t('sources.scopes.gmail'),
     'contents:read': t('sources.scopes.githubContents'),
     'contents:write': t('sources.scopes.githubContentsWrite'),
     'issues:read': t('sources.scopes.githubIssues'),
@@ -425,6 +445,7 @@ function emptyResourceMessage(capabilityId: string) {
   if (capabilityId === 'context.calendar.read') return t('sources.emptyCalendars')
   if (capabilityId === 'context.document.read') return t('sources.emptyFolders')
   if (capabilityId === 'context.call.read') return t('sources.emptyPhoneLines')
+  if (capabilityId === 'context.mail.read_scoped') return t('sources.emptyLabels')
   if (capabilityId === 'context.github.issue.read') return t('sources.emptyRepositories')
   return t('sources.emptyResources')
 }
@@ -719,14 +740,10 @@ async function toggleCapability(
   capabilityId: SourceCapabilityId,
   enabled: boolean,
 ) {
-  if (!['context.calendar.read', 'context.document.read'].includes(capabilityId)) return
+  if (!isWorkspaceCapability(capabilityId)) return
   error.value = ''
   try {
-    await setSourceCapabilityStatus(
-      connection.id,
-      capabilityId as 'context.calendar.read' | 'context.document.read',
-      enabled,
-    )
+    await setSourceCapabilityStatus(connection.id, capabilityId, enabled)
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -755,24 +772,20 @@ function openWorkspaceAuthorization(
   connection: SourceConnection | null = null,
   capabilityId?: SourceCapabilityId,
 ) {
-  if (capabilityId && !['context.calendar.read', 'context.document.read'].includes(capabilityId)) return
+  if (capabilityId && !isWorkspaceCapability(capabilityId)) return
   workspaceConnection.value = connection
   selectedWorkspaceCapabilities.value = capabilityId
-    ? [capabilityId as 'context.calendar.read' | 'context.document.read']
+    ? [capabilityId]
     : connection
       ? connection.capabilities
         .filter((capability) => capability.status !== 'disabled')
         .map((capability) => capability.capabilityId)
-        .filter((id): id is 'context.calendar.read' | 'context.document.read' => (
-          id === 'context.calendar.read' || id === 'context.document.read'
-        ))
-      : ['context.calendar.read', 'context.document.read']
+        .filter(isWorkspaceCapability)
+      : [...workspaceCapabilityIds]
   workspaceDialogVisible.value = true
 }
 
-function toggleWorkspaceCapability(
-  capabilityId: 'context.calendar.read' | 'context.document.read',
-) {
+function toggleWorkspaceCapability(capabilityId: WorkspaceCapabilityId) {
   selectedWorkspaceCapabilities.value = selectedWorkspaceCapabilities.value.includes(capabilityId)
     ? selectedWorkspaceCapabilities.value.filter((id) => id !== capabilityId)
     : [...selectedWorkspaceCapabilities.value, capabilityId]
@@ -847,6 +860,59 @@ async function synchronizeCalendar(connection: SourceConnection) {
   }
 }
 
+async function openMailPicker(connection: SourceConnection) {
+  loadingLabels.value = true
+  error.value = ''
+  mailConnection.value = connection
+  mailLabels.value = []
+  selectedLabelIds.value = []
+  try {
+    mailLabels.value = await getGmailLabels(connection.id)
+    selectedLabelIds.value = mailLabels.value
+      .filter((label) => label.selected)
+      .map((label) => label.id)
+  } catch (cause) {
+    mailConnection.value = null
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingLabels.value = false
+  }
+}
+
+function toggleLabel(labelId: string) {
+  selectedLabelIds.value = selectedLabelIds.value.includes(labelId)
+    ? selectedLabelIds.value.filter((id) => id !== labelId)
+    : [...selectedLabelIds.value, labelId]
+}
+
+async function saveLabelSelection() {
+  if (!mailConnection.value) return
+  saving.value = true
+  error.value = ''
+  try {
+    await selectGmailLabels(mailConnection.value.id, selectedLabelIds.value)
+    mailConnection.value = null
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function synchronizeMail(connection: SourceConnection) {
+  synchronizingId.value = `${connection.id}:mail`
+  error.value = ''
+  try {
+    await syncGmailLabels(connection.id)
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    synchronizingId.value = ''
+  }
+}
+
 async function replaySync(
   connection: SourceConnection,
   descriptor: SourceCapabilityDescriptor,
@@ -889,6 +955,13 @@ function closeCalendarPicker() {
   calendarConnection.value = null
   calendars.value = []
   selectedCalendarIds.value = []
+}
+
+function closeMailPicker() {
+  if (saving.value) return
+  mailConnection.value = null
+  mailLabels.value = []
+  selectedLabelIds.value = []
 }
 
 function closeDrivePicker() {
@@ -1226,7 +1299,7 @@ onUnmounted(() => {
             {{ workspaceConnection.accountLabel }}
           </p>
           <label
-            v-for="capabilityId in (['context.calendar.read', 'context.document.read'] as const)"
+            v-for="capabilityId in workspaceCapabilityIds"
             :key="capabilityId"
             class="flex cursor-pointer items-start gap-3 rounded-2xl border border-surface-200 bg-surface-50 p-4"
           >
@@ -1242,6 +1315,13 @@ onUnmounted(() => {
               <span class="mt-1 block text-sm leading-relaxed text-surface-500">{{ capabilityDescription(capabilityId) }}</span>
             </span>
           </label>
+          <Message
+            v-if="selectedWorkspaceCapabilities.includes('context.mail.read_scoped')"
+            severity="warn"
+            :closable="false"
+          >
+            {{ t('sources.mailFullMailboxNotice') }}
+          </Message>
           <Message severity="info" :closable="false">{{ t('sources.workspace.permissionHint') }}</Message>
         </div>
         <div class="flex flex-col-reverse gap-2 border-t border-surface-200 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
@@ -1321,6 +1401,73 @@ onUnmounted(() => {
           />
           <Button
             :label="t('sources.calendarPicker.submit')"
+            icon="pi pi-check"
+            type="submit"
+            :loading="saving"
+          />
+        </div>
+      </form>
+    </Dialog>
+
+    <Dialog
+      v-model:visible="mailPickerVisible"
+      modal
+      blockScroll
+      dismissableMask
+      :draggable="false"
+      :header="t('sources.mailPicker.title')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(40rem,calc(100vw-4rem))] max-h-[calc(100dvh-4rem)] my-auto"
+      contentClass="!p-0 flex flex-col min-h-0 min-w-0 overflow-hidden"
+    >
+      <div v-if="loadingLabels" class="flex flex-col items-center justify-center gap-3 px-4 py-14">
+        <ProgressSpinner />
+      </div>
+
+      <form v-else class="flex flex-col min-h-0 min-w-0 overflow-hidden" @submit.prevent="saveLabelSelection">
+        <div class="flex-1 min-h-0 grid content-start gap-3 overflow-y-auto px-4 py-4 sm:px-6">
+          <div>
+            <p class="m-0 text-sm leading-relaxed text-surface-500">{{ t('sources.mailPicker.description') }}</p>
+            <p v-if="mailConnection?.accountLabel" class="m-0 mt-1 text-sm font-medium text-surface-700 break-all">
+              {{ mailConnection.accountLabel }}
+            </p>
+          </div>
+          <label
+            v-for="label in mailLabels"
+            :key="label.id"
+            class="min-w-0 flex items-start gap-3 rounded-2xl border border-surface-200 bg-surface-50 p-3.5 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              class="mt-1 w-4 h-4 accent-emerald-700 shrink-0"
+              :checked="selectedLabelIds.includes(label.id)"
+              @change="toggleLabel(label.id)"
+            />
+            <span class="min-w-0 grow">
+              <span class="flex items-center gap-2 flex-wrap font-semibold">
+                {{ label.displayName }}
+                <Tag v-if="label.type === 'system'" :value="t('sources.mailPicker.system')" severity="secondary" rounded />
+              </span>
+              <span v-if="label.messageCount !== null" class="block text-xs text-surface-400 mt-1">
+                {{ t('sources.mailPicker.messageCount', { count: label.messageCount }) }}
+              </span>
+            </span>
+          </label>
+          <p v-if="mailLabels.length === 0" class="text-sm text-surface-500">{{ t('sources.mailPicker.none') }}</p>
+          <Message severity="warn" :closable="false">{{ t('sources.mailFullMailboxNotice') }}</Message>
+          <Message severity="info" :closable="false">{{ t('sources.mailPicker.privacy') }}</Message>
+        </div>
+
+        <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+          <Button
+            :label="t('common.cancel')"
+            severity="secondary"
+            text
+            type="button"
+            :disabled="saving"
+            @click="closeMailPicker"
+          />
+          <Button
+            :label="t('sources.mailPicker.submit')"
             icon="pi pi-check"
             type="submit"
             :loading="saving"
@@ -2119,6 +2266,25 @@ onUnmounted(() => {
                         size="small"
                         :loading="synchronizingId === `${connection.id}:drive`"
                         @click="synchronizeDrive(connection)"
+                      />
+                      <Button
+                        v-if="descriptor.id === 'context.mail.read_scoped' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="t('sources.chooseLabels')"
+                        icon="pi pi-list-check"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="openMailPicker(connection)"
+                      />
+                      <Button
+                        v-if="descriptor.id === 'context.mail.read_scoped' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        :label="synchronizingId === `${connection.id}:mail` ? t('sources.syncing') : t('sources.syncNow')"
+                        icon="pi pi-refresh"
+                        severity="secondary"
+                        text
+                        size="small"
+                        :loading="synchronizingId === `${connection.id}:mail`"
+                        @click="synchronizeMail(connection)"
                       />
                       <Button
                         v-if="descriptor.id === 'context.github.issue.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"

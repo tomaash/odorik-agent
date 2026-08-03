@@ -32,9 +32,15 @@ import {
 } from "../connectors/repository.js";
 import {
   capabilityGrantState,
+  createGoogleWorkspaceAuthorization,
   googleWorkspaceConnectionId,
   scopesForCapabilities,
 } from "../connectors/google-oauth.js";
+import {
+  capabilityDescriptor,
+  connectorCatalog,
+  googleWorkspaceCapabilityIds,
+} from "../connectors/registry.js";
 import { MemoryFirestore } from "./firestore-harness.js";
 
 test("source public views retain operational state and exclude credentials", async () => {
@@ -196,7 +202,11 @@ test("source public views retain operational state and exclude credentials", asy
       {
         id: "google_workspace",
         availability: "available",
-        capabilities: ["context.calendar.read", "context.document.read"],
+        capabilities: [
+          "context.calendar.read",
+          "context.document.read",
+          "context.mail.read_scoped",
+        ],
       },
       {
         id: "github",
@@ -771,6 +781,127 @@ test("Workspace scope planning enables only explicitly requested complete grants
     googleWorkspaceConnectionId("google-sub-1"),
     googleWorkspaceConnectionId("google-sub-2"),
   );
+});
+
+test("scoped mail planning reuses the generic Workspace grant machinery", () => {
+  // Registering the descriptor is the whole of G1.1: scope planning, partial-consent
+  // fail-closed behavior, and per-capability grant state derive from the registry, so
+  // mail must work through them without a mail-specific branch anywhere.
+  assert.deepEqual(
+    scopesForCapabilities(["context.mail.read_scoped"]),
+    ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
+  );
+  assert.deepEqual(
+    scopesForCapabilities([
+      "context.calendar.read",
+      "context.document.read",
+      "context.mail.read_scoped",
+    ]),
+    [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
+      "https://www.googleapis.com/auth/gmail.readonly",
+    ],
+  );
+
+  // A Workspace grant that omits the mail scope enables the siblings and fails mail
+  // closed rather than importing a mailbox on a partial consent.
+  assert.deepEqual(capabilityGrantState(
+    ["context.calendar.read", "context.document.read", "context.mail.read_scoped"],
+    [
+      "openid",
+      "email",
+      "https://www.googleapis.com/auth/calendar.calendarlist.readonly",
+      "https://www.googleapis.com/auth/calendar.events.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+  ), {
+    enabledCapabilityIds: ["context.calendar.read", "context.document.read"],
+    missingCapabilityIds: ["context.mail.read_scoped"],
+  });
+
+  const mail = capabilityDescriptor("context.mail.read_scoped");
+  assert.equal(mail.serviceId, "mail");
+  assert.equal(mail.resourceType, "label");
+  assert.equal(mail.direction, "observe");
+  assert.equal(mail.requiresApproval, false);
+});
+
+test("reconnecting re-requests every service still enabled on the connection", async () => {
+  // Google issues one credential per connection, and an External app in Testing status
+  // expires refresh tokens after seven days, so this reconnect runs weekly. Consenting
+  // to only the service being added would replace the envelope without the others'
+  // scopes and silently downgrade them.
+  const memory = new MemoryFirestore();
+  const database = memory.asFirestore();
+  const connectionPath = "companies/explorers/connections/google-a";
+  memory.seed(connectionPath, {
+    companyId: "explorers",
+    connectorId: "google_workspace",
+    providerId: "google",
+    accountLabel: "owner@example.com",
+    status: "attention",
+    reauthorizationRequired: true,
+  });
+  memory.seed(`${connectionPath}/capabilities/calendar`, {
+    capabilityId: "context.calendar.read",
+    status: "reauthorization_required",
+  });
+  memory.seed(`${connectionPath}/capabilities/drive`, {
+    capabilityId: "context.document.read",
+    status: "reauthorization_required",
+  });
+  memory.seed(`${connectionPath}/capabilities/mail`, {
+    capabilityId: "context.mail.read_scoped",
+    status: "disabled",
+  });
+
+  const { authorizationUrl } = await createGoogleWorkspaceAuthorization({
+    companyId: "explorers",
+    uid: "member-1",
+    email: "owner@example.com",
+    displayName: "Owner",
+    clientId: "client-1",
+    // The member is only reconnecting Calendar from the expired-connection banner.
+    capabilityIds: ["context.calendar.read"],
+    connectionId: "google-a",
+    database,
+  });
+  const requestedScopes = new Set(
+    (new URL(authorizationUrl).searchParams.get("scope") || "").split(" "),
+  );
+
+  // Drive was enabled, so it must come back in the same consent.
+  assert.ok(requestedScopes.has("https://www.googleapis.com/auth/calendar.events.readonly"));
+  assert.ok(requestedScopes.has("https://www.googleapis.com/auth/drive.readonly"));
+  // Mail was explicitly disabled: reconnecting must not quietly re-acquire its grant.
+  assert.ok(!requestedScopes.has("https://www.googleapis.com/auth/gmail.readonly"));
+  assert.equal(new URL(authorizationUrl).searchParams.get("login_hint"), "owner@example.com");
+});
+
+test("the Workspace catalog offers every capability with a complete observe loop", () => {
+  // Invariant 10 gates a capability on its operating loop. For an observe capability
+  // that loop is select, ingest, cite — not the G2/G3 external-write loop, which would
+  // be circular: the loop cannot be exercised without the configuration UI that shows
+  // it. Mail is listed because its adapter, cursor recovery, and failure behavior exist.
+  const workspace = connectorCatalog().find((entry) => entry.id === "google_workspace");
+  assert.ok(workspace);
+  assert.deepEqual(
+    workspace.capabilities.map((capability) => capability.id),
+    ["context.calendar.read", "context.document.read", "context.mail.read_scoped"],
+  );
+  // Grantable is deliberately wider than offered: the OAuth callback validates against
+  // this set, so mail must be accepted in authorization state even while the card does
+  // not offer it. Before G1 that validation was a hand-maintained literal of two IDs,
+  // which silently dropped any third capability.
+  assert.deepEqual([...googleWorkspaceCapabilityIds], [
+    "context.calendar.read",
+    "context.document.read",
+    "context.mail.read_scoped",
+  ]);
 });
 
 test("Workspace capability lifecycle is isolated from the account and sibling service", async () => {

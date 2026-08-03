@@ -18,6 +18,7 @@ frontend/.env.*
 functions/node_modules/
 functions/lib/
 .emulator-data/
+uploads/
 
 # web (Nuxt static site)
 web/node_modules/

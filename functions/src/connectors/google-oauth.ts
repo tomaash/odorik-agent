@@ -4,7 +4,7 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
-import { capabilityDescriptor } from "./registry.js";
+import { capabilityDescriptor, googleWorkspaceCapabilityIds } from "./registry.js";
 import type { CapabilityServiceId, SourceCapabilityId } from "./types.js";
 import {
   defaultGoogleRedirectUri,
@@ -228,9 +228,11 @@ export async function createGoogleWorkspaceAuthorization(input: {
   capabilityIds: SourceCapabilityId[];
   connectionId?: string;
   returnOrigin?: string;
+  database?: FirebaseFirestore.Firestore;
 }): Promise<{ authorizationUrl: string }> {
-  const capabilityIds = [...new Set(input.capabilityIds)];
-  if (capabilityIds.length === 0) {
+  const database = input.database || db;
+  const requested = new Set(input.capabilityIds);
+  if (requested.size === 0) {
     throw new Error("Choose at least one Google Workspace service");
   }
   const state = randomBytes(32).toString("base64url");
@@ -238,13 +240,35 @@ export async function createGoogleWorkspaceAuthorization(input: {
   const redirectUri = googleOAuthRedirectUri(input.returnOrigin);
   let loginHint = "";
   if (input.connectionId) {
-    const existing = await connectionRef(input.companyId, input.connectionId).get();
+    const existing = await connectionRef(
+      input.companyId,
+      input.connectionId,
+      database,
+    ).get();
     if (!existing.exists || existing.data()?.connectorId !== "google_workspace") {
       throw new Error("Google Workspace connection not found");
     }
     loginHint = String(existing.data()?.accountLabel || "");
+    // Google issues one credential per connection, so a consent that omits an already
+    // enabled service silently downgrades it: the new envelope replaces the old one
+    // without that service's scopes. Re-request everything still enabled alongside
+    // whatever is being added. This matters most when the credential itself expired —
+    // an External app in Testing status expires refresh tokens every seven days — where
+    // reconnecting must restore every service in one pass rather than one at a time.
+    const capabilities = await existing.ref.collection("capabilities").get();
+    for (const capability of capabilities.docs) {
+      const capabilityId = capability.data()?.capabilityId as SourceCapabilityId | undefined;
+      if (
+        capabilityId
+        && capability.data()?.status !== "disabled"
+        && googleWorkspaceCapabilityIds.includes(capabilityId)
+      ) {
+        requested.add(capabilityId);
+      }
+    }
   }
-  await db.doc(`oauthStates/${sha256Hex(state)}`).set({
+  const capabilityIds = [...requested];
+  await database.doc(`oauthStates/${sha256Hex(state)}`).set({
     companyId: input.companyId,
     provider: "google_workspace",
     requestedCapabilityIds: capabilityIds,
@@ -289,7 +313,7 @@ export async function completeGoogleWorkspaceAuthorization(input: {
   const requestedCapabilityIds = Array.isArray(stateData?.requestedCapabilityIds)
     ? stateData.requestedCapabilityIds.filter(
       (value): value is SourceCapabilityId =>
-        value === "context.calendar.read" || value === "context.document.read",
+        googleWorkspaceCapabilityIds.includes(value as SourceCapabilityId),
     )
     : [];
   if (
