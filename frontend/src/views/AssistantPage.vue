@@ -7,6 +7,7 @@ import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
 import Textarea from 'primevue/textarea'
+import MarkdownContent from '../components/MarkdownContent.vue'
 import SourceCard from '../components/SourceCard.vue'
 import {
   askAssistant,
@@ -210,7 +211,7 @@ onMounted(load)
               </div>
             </template>
             <template #content>
-              <p class="m-0 whitespace-pre-wrap break-words leading-relaxed">{{ message.text }}</p>
+              <MarkdownContent :source="message.text" />
 
               <details v-if="message.citations?.length" class="mt-5 border-t border-surface-100 pt-4">
                 <summary class="cursor-pointer font-semibold text-sm text-indigo-700">{{ t('assistant.sources') }} · {{ message.citations.length }}</summary>
