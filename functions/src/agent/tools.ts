@@ -1,11 +1,12 @@
 import { z } from "zod";
-import type { CompanyDataRepository, CompanyRecord } from "./knowledge.js";
+import { presentRecordForAgent, type CompanyDataRepository, type CompanyRecord } from "./knowledge.js";
 import {
   SearchUnavailableError,
   searchUnavailableMessage,
   type KnowledgeSearch,
 } from "./search.js";
 import {
+  defaultSearchKnowledgeKinds,
   knowledgeKinds,
   type KnowledgeKind,
   type ToolCitation,
@@ -44,7 +45,7 @@ export const factToolDeclarations = [
   {
     name: "search_company_data",
     description:
-      "Hybrid semantic and full-text search across calls, transcripts, contacts, cases, tasks, context items, and audit events. Use this first for names, topics, phrases, and broad factual questions.",
+      "Hybrid semantic and full-text search across calls, transcripts, contacts, cases, tasks, context items, and coding run outcomes. Audit events are excluded by default; pass kinds including audit_event only for history questions. Use this first for names, topics, phrases, and broad factual questions.",
     parameters: {
       type: "OBJECT",
       properties: {
@@ -128,9 +129,10 @@ function excerpt(value: string, max = 900): string {
 }
 
 function compactRecord(record: CompanyRecord): Record<string, unknown> {
-  const json = JSON.stringify(record.data);
+  const presented = presentRecordForAgent(record);
+  const json = JSON.stringify(presented);
   const data = json.length <= 12_000
-    ? record.data
+    ? presented
     : { truncated: true, content: `${json.slice(0, 11_900)}…` };
   return {
     kind: record.kind,
@@ -234,6 +236,18 @@ function extractCitationInfo(record: CompanyRecord): {
     adapterId = "crm";
     if (record.kind === "task") internalRoute = "/tasks";
     if (record.kind === "case") internalRoute = `/cases/${record.recordId}`;
+  } else if (record.kind === "coding_run") {
+    adapterId = "github";
+    const github = (data.github && typeof data.github === "object" ? data.github : {}) as Record<string, unknown>;
+    const publication = (data.publicationResult && typeof data.publicationResult === "object"
+      ? data.publicationResult
+      : {}) as Record<string, unknown>;
+    externalUrl = typeof publication.pullRequestUrl === "string"
+      ? publication.pullRequestUrl
+      : typeof github.issueUrl === "string"
+        ? github.issueUrl
+        : undefined;
+    internalRoute = "/coding";
   }
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
@@ -312,9 +326,16 @@ export class CompanyFactTools implements AgentToolExecutor {
   async execute(name: string, args: unknown): Promise<ToolExecution> {
     if (name === "search_company_data") {
       const input = searchSchema.parse(args);
+      const searchInput = {
+        query: input.query,
+        limit: input.limit,
+        kinds: input.kinds && input.kinds.length > 0
+          ? input.kinds
+          : [...defaultSearchKnowledgeKinds],
+      };
       let hits;
       try {
-        hits = await this.search.search(input);
+        hits = await this.search.search(searchInput);
       } catch (error) {
         if (error instanceof SearchUnavailableError) {
           return {
@@ -363,6 +384,7 @@ export class CompanyFactTools implements AgentToolExecutor {
           else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) adapterId = "google_calendar";
           else if (hit.kind === "call") adapterId = "odorik";
           else if (hit.kind === "contact" || hit.kind === "case") adapterId = "crm";
+          else if (hit.kind === "coding_run") adapterId = "github";
         }
 
         const citation = this.citations.add({
