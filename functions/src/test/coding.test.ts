@@ -19,6 +19,7 @@ import {
   CodingRunError,
   getCodingRun,
   listCodingIssues,
+  updateCodingRunState,
 } from "../coding/repository.js";
 import {
   cancelCodingRun,
@@ -1235,4 +1236,32 @@ test("coding retries accept empty instructions and allocate unique attempt numbe
   const secondAction = second.action as CodingIssueImplementAction;
   assert.equal(secondAction.linkedAttempt?.attempt, 3);
   assert.notEqual(secondAction.runId, firstAction.runId);
+});
+
+
+test("coding lifecycle audit events are not search-indexed", async () => {
+  const memory = new MemoryFirestore();
+  const runId = `coding_${"e".repeat(32)}`;
+  const eventId = "phase-dispatcher-queued";
+  memory.seed(`companies/${companyId}/codingRuns/${runId}`, {
+    status: "queued",
+    phase: "queued",
+    access: { visibility: "company" },
+  });
+  await updateCodingRunState({
+    companyId,
+    runId,
+    status: "running",
+    phase: "dispatcher-queued",
+    message: "Dispatcher accepted the run",
+    eventId,
+    database: memory as never,
+    now: Timestamp.fromDate(new Date("2026-08-01T21:13:00.000Z")),
+  });
+  const auditPath = `companies/${companyId}/auditEvents/coding_${runId}_${eventId}`;
+  const lifecycle = memory.read(auditPath);
+  assert.ok(lifecycle);
+  assert.equal(lifecycle.indexingEnabled, false);
+  assert.equal(lifecycle.phase, "dispatcher-queued");
+  assert.equal(lifecycle.eventType, "coding.running");
 });

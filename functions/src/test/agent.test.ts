@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentModel, ModelTurn } from "../agent/gemini.js";
 import { parseAgentFinal, runFactAgent } from "../agent/loop.js";
-import { chunkRecord, extractRecordMetadata } from "../agent/knowledge.js";
+import { chunkRecord, extractRecordMetadata, presentRecordForAgent } from "../agent/knowledge.js";
 import {
   bm25Search,
   embeddingDimensions,
@@ -616,4 +616,162 @@ test("agent executes a tool and returns only citations seen in this run", async 
   assert.deepEqual(answer.citations.map((citation) => citation.citationId), ["C1"]);
   assert.match(answer.answer, /\[unverified citation\]/);
   assert.equal(answer.toolTrace.length, 1);
+});
+
+test("default search kinds exclude audit events and include coding runs", async () => {
+  let seenKinds: string[] | undefined;
+  const search: KnowledgeSearch = {
+    async search(input) {
+      seenKinds = input.kinds?.map(String);
+      return [];
+    },
+  };
+  const tools = new CompanyFactTools({
+    async allDocuments() { return []; },
+    async getRecord() { return null; },
+    async listRecords() { return []; },
+    async aggregateRecords() { return { total: 0 }; },
+  }, search);
+
+  await tools.execute("search_company_data", { query: "what did we code" });
+  assert.deepEqual(seenKinds, [
+    "call",
+    "contact",
+    "task",
+    "case",
+    "context_item",
+    "coding_run",
+  ]);
+  assert.ok(!seenKinds?.includes("audit_event"));
+
+  await tools.execute("search_company_data", {
+    query: "why stage changed",
+    kinds: ["audit_event"],
+  });
+  assert.deepEqual(seenKinds, ["audit_event"]);
+});
+
+test("metadata-only Drive context is not indexed as connector plumbing", () => {
+  const record = {
+    kind: "context_item" as const,
+    recordId: "drive_abc",
+    sourcePath: "companies/acme/contextItems/drive_abc",
+    title: "C5-DRIVE-SCHEDULED-FRESHNESS-20260802",
+    occurredAt: "2026-08-02T12:00:00.000Z",
+    data: {
+      kind: "drive.file",
+      text: [
+        "Type: application/vnd.google-apps.document",
+        "Size: 1024",
+        "Modified: 2026-08-02T12:00:00.000Z",
+      ].join("\n"),
+      metadata: {
+        mimeType: "application/vnd.google-apps.document",
+        size: "1024",
+        folderId: "0B98TTk9YjihyenJnOGFleEtreDA",
+        sourceUrl: "https://docs.google.com/document/d/example",
+      },
+      provenance: {
+        ingestionVersion: "google-drive-v2",
+        checksum: "deadbeef",
+      },
+    },
+  };
+  const [chunk] = chunkRecord(record, "acme");
+  assert.ok(chunk);
+  assert.match(chunk.text, /content was not extracted/i);
+  assert.doesNotMatch(chunk.text, /1024/);
+  assert.doesNotMatch(chunk.text, /google-drive-v2/);
+  assert.doesNotMatch(chunk.text, /0B98TTk9YjihyenJnOGFleEtreDA/);
+  assert.equal(chunk.metadata.contentQuality, "metadata_only");
+
+  const presented = presentRecordForAgent(record);
+  assert.equal(presented.contentQuality, "metadata_only");
+  assert.equal(presented.provenance, undefined);
+  assert.doesNotMatch(String(presented.text || ""), /1024/);
+  const meta = presented.metadata as Record<string, unknown>;
+  assert.equal(meta.size, undefined);
+  assert.equal(meta.folderId, undefined);
+  assert.equal(meta.sourceUrl, "https://docs.google.com/document/d/example");
+});
+
+test("coding run chunks expose shipped outcome substance for product questions", () => {
+  const record = {
+    kind: "coding_run" as const,
+    recordId: "coding_" + "a".repeat(32),
+    sourcePath: "companies/acme/codingRuns/coding_" + "a".repeat(32),
+    title: "Keep the parser total · succeeded",
+    occurredAt: "2026-08-01T21:13:00.000Z",
+    data: {
+      status: "succeeded",
+      phase: "succeeded",
+      github: {
+        owner: "tomaash",
+        repo: "elixir-play",
+        issueNumber: 17,
+        issueUrl: "https://github.com/tomaash/elixir-play/issues/17",
+      },
+      issueSnapshot: {
+        title: "[tomaash/elixir-play #17] Keep the parser total",
+        text: "Repository: tomaash/elixir-play\nIssue: #17\n\nThe parser throws on empty input.",
+      },
+      result: {
+        changedFiles: 2,
+        changedPaths: ["lib/parser.ex", "test/parser_test.exs"],
+      },
+      publicationResult: {
+        pullRequestNumber: 42,
+        pullRequestUrl: "https://github.com/tomaash/elixir-play/pull/42",
+      },
+      git: {
+        proposedBranch: "erik/issue-17-abcd1234",
+        resultSha: "b".repeat(40),
+      },
+    },
+  };
+  const [chunk] = chunkRecord(record, "acme");
+  assert.ok(chunk);
+  assert.match(chunk.text, /Changed paths/);
+  assert.match(chunk.text, /lib\/parser\.ex/);
+  assert.match(chunk.text, /pull\/42/);
+  assert.match(chunk.text, /parser throws on empty input/);
+  assert.doesNotMatch(chunk.text, /dispatcher-queued/);
+  assert.equal(extractRecordMetadata(record).adapterId, "github");
+  assert.equal(
+    extractRecordMetadata(record).externalUrl,
+    "https://github.com/tomaash/elixir-play/pull/42",
+  );
+
+  // Outcome text should rank for "what did we code" style queries over empty audit noise.
+  const auditNoise: KnowledgeDocument = {
+    id: "audit",
+    companyId: "acme",
+    kind: "audit_event",
+    recordId: "coding_phase",
+    sourcePath: "auditEvents/coding_phase",
+    title: "coding.running · dispatcher-queued",
+    text: "Audit event · coding_coding_78d_dispatcher-queued\neventType: coding.running\nphase: dispatcher-queued",
+    occurredAt: "2026-08-01T21:13:00.000Z",
+    metadata: {},
+  };
+  const hits = bm25Search("what code did we implement for the parser", [chunk!, auditNoise], 2);
+  assert.equal(hits[0]?.kind, "coding_run");
+  assert.equal(hits[0]?.recordId, record.recordId);
+});
+
+test("document body context remains searchable content", () => {
+  const record = {
+    kind: "context_item" as const,
+    recordId: "drive_doc",
+    sourcePath: "companies/acme/contextItems/drive_doc",
+    title: "Refund policy",
+    occurredAt: null,
+    data: {
+      text: "Customers may request a refund within 14 days of purchase.",
+      metadata: { mimeType: "application/vnd.google-apps.document", size: "2048" },
+    },
+  };
+  const [chunk] = chunkRecord(record, "acme");
+  assert.match(chunk!.text, /refund within 14 days/i);
+  assert.equal(chunk!.metadata.contentQuality, null);
 });

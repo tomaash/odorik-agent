@@ -5,9 +5,20 @@ export const knowledgeKinds = [
   "case",
   "audit_event",
   "context_item",
+  "coding_run",
 ] as const;
 
 export type KnowledgeKind = typeof knowledgeKinds[number];
+
+/** Kinds used for open-ended hybrid search when the agent does not pass an explicit filter. */
+export const defaultSearchKnowledgeKinds: readonly KnowledgeKind[] = [
+  "call",
+  "contact",
+  "task",
+  "case",
+  "context_item",
+  "coding_run",
+] as const;
 
 export type KnowledgeDocument = {
   id: string;

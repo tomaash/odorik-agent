@@ -188,6 +188,7 @@ export async function processCodingAuthRefreshCallback(input: {
       actorUid: "grok-auth-worker",
       occurredAt: now,
       createdAt: now,
+      indexingEnabled: false,
     });
     if (event.type === "completed") {
       transaction.set(runRef, {

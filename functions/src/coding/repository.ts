@@ -375,6 +375,8 @@ export async function updateCodingRunState(input: {
     phase: input.phase,
     occurredAt: now,
     createdAt: now,
+    // Lifecycle telemetry is retained for ops but excluded from hybrid search.
+    indexingEnabled: false,
   });
   await batch.commit();
 }
