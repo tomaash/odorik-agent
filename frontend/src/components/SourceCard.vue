@@ -13,6 +13,7 @@ const adapterId = computed(() => {
   const path = props.citation.sourcePath || ''
   if (url.includes('drive.google.com') || path.includes('drive')) return 'google_drive'
   if (url.includes('calendar.google.com') || path.includes('calendar')) return 'google_calendar'
+  if (url.includes('mail.google.com') || path.includes('gmail')) return 'gmail'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return 'odorik'
   if (props.citation.kind === 'contact' || props.citation.kind === 'case') return 'crm'
   return 'unknown'

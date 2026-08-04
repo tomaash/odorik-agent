@@ -62,6 +62,45 @@ test("case citations open the dedicated case workspace", () => {
   }).internalRoute, "/cases/case-1");
 });
 
+test("gmail context items cite as gmail with a deep link, not generic google", () => {
+  const mailUrl = "https://mail.google.com/mail/u/0/#all/msg-quote-1";
+  const record = {
+    kind: "context_item" as const,
+    recordId: "ctx_mail_msg-quote-1",
+    sourcePath: "companies/explorers/contextItems/ctx_mail_msg-quote-1",
+    title: "Quote for renewal",
+    occurredAt: "2026-08-03T09:30:00.000Z",
+    data: {
+      // G1 stores capability + provider only; no source.adapterId.
+      source: {
+        providerId: "google",
+        capabilityId: "context.mail.read_scoped",
+        connectionId: "google-1",
+        resourceId: "label:Label_7",
+        externalId: "msg-quote-1",
+        version: "8801",
+      },
+      text: "Label: Customers\nFrom: sender@example.com\nBody:\nPlease find the renewal quote.",
+      artifactRefs: [],
+      metadata: {
+        sourceUrl: mailUrl,
+        subject: "Quote for renewal",
+        threadId: "thread-msg-quote-1",
+      },
+    },
+  };
+  const meta = extractRecordMetadata(record);
+  assert.equal(meta.adapterId, "gmail");
+  assert.equal(meta.externalUrl, mailUrl);
+  assert.equal(meta.internalRoute, null);
+
+  // Indexed chunks must carry the same presentation so hybrid search citations stay typed.
+  const [chunk] = chunkRecord(record, "explorers");
+  assert.ok(chunk);
+  assert.equal(chunk.metadata?.adapterId, "gmail");
+  assert.equal(chunk.metadata?.externalUrl, mailUrl);
+});
+
 test("RRF combines rankings without comparing incompatible raw scores", () => {
   const result = reciprocalRankFusion(
     [

@@ -2,10 +2,10 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** G1 in progress — Gmail read implemented, awaiting
-real-account acceptance
+**Current implementation slice:** G2 pending — G1 Gmail read accepted; next is the
+exact non-executing email-draft proposal
 
-**Last plan revision:** 2026-08-03
+**Last plan revision:** 2026-08-04
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -145,13 +145,13 @@ The baseline was last accepted in the deployed test environment on 2026-08-02.
 
 | Area | Working now | Important limitation |
 | --- | --- | --- |
-| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources, durable sync runs/recovery, typed Google failure/reauthorization state, and separate durable search delivery | Gmail read and draft capabilities remain absent until their gated slices |
+| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources, durable sync runs/recovery, typed Google failure/reauthorization state, and separate durable search delivery | Gmail draft write remains absent until G3 |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
 | Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, deterministic recurrence/cancellation handling, bounded expired-token full rebuild, typed reauthorization state, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Google Auth Platform verification remains an operational release gate |
 | Google Drive | Workspace subsystem with least-privilege consent, recursive folder selection, deterministic overlapping-root ownership, canonical per-file identity, Google Docs/text/PDF extraction, honest metadata-only fallbacks, complete-snapshot stale cleanup, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Provider ACLs are deliberately not mirrored; administrators choose the Erik audience explicitly |
 | Context | Provider/capability/connection/resource identity, provenance, durable indexing, citations, enforced `company`/`restricted` envelopes, and provider-to-context/search freshness samples | Provider ACLs are deliberately not projected; the selected Erik resource remains the governing access boundary |
-| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; G1–G3 must prove the mail evidence and execution loop |
-| Connector catalog | Working Odorik, Google Workspace, GitHub, and isolated Grok subscription entries are shown | Gmail is offered as a Workspace service now that its read loop exists; mail *drafting* stays absent until G3 |
+| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; G2–G3 must prove the draft proposal and provider write loop |
+| Connector catalog | Working Odorik, Google Workspace (Calendar, Drive, Gmail read), GitHub, and isolated Grok subscription entries are shown | Mail *drafting* stays absent until G3 |
 
 The first slices protect and improve this baseline rather than immediately
 adding another provider.
@@ -256,7 +256,7 @@ Every action capability must define:
 | C3 | Add durable sync runs, leases, retries, replay, and useful health | Completed | Failures are recoverable and freshness is measurable |
 | C4 | Make resource audiences and retrieval access explicit | Completed | Accepted in test production |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
-| G1 | Add selected-label Gmail evidence to Google Workspace | In progress | Cross-source call + email answer succeeds |
+| G1 | Add selected-label Gmail evidence to Google Workspace | Completed | Accepted in test production (dogfood + unit suite) |
 | G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
 | M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
@@ -1150,18 +1150,22 @@ Build:
   above); and
 - message deletion/label-removal behavior consistent with the selected scope.
 
-**Implementation status (2026-08-03):** implemented and green locally; real-account
-acceptance is outstanding. The capability, scope planning, and grant state reuse the
-generic Workspace machinery unchanged. `functions/src/connectors/google-gmail.ts`
-carries label discovery and selection, the 90-day bounded import, `historyId`
-incremental sync, expired-cursor rebuild with complete-snapshot stale
-reconciliation, and label-removal cleanup. `syncMailSources` and
-`recoverMailSourceSyncs` join the C3 durable-run and replay contract, and Sources
-offers mail as a Workspace service with a label picker and the mailbox-wide
-disclosure. Reconnecting now re-requests every service still enabled on the
-connection, closing a latent defect where consenting to one service replaced the
-shared credential envelope without the others' scopes; the OAuth callback also
-validated capability IDs against a hardcoded pair, silently dropping any third.
+**Implementation status (2026-08-04):** implemented, unit-tested, and accepted in
+test production via real-account dogfood (selected-label ingest + agent answers).
+Citation presentation was corrected so `context.mail.read_scoped` maps to adapter
+`gmail` with the Gmail deep link (live Firestore re-derivation also covers stale
+index metadata that had `adapterId: "google"`). The capability, scope planning,
+and grant state reuse the generic Workspace machinery unchanged.
+`functions/src/connectors/google-gmail.ts` carries label discovery and selection,
+the 90-day bounded import, `historyId` incremental sync, expired-cursor rebuild
+with complete-snapshot stale reconciliation, and label-removal cleanup.
+`syncMailSources` and `recoverMailSourceSyncs` join the C3 durable-run and replay
+contract, and Sources offers mail as a Workspace service with a label picker and
+the mailbox-wide disclosure. Reconnecting now re-requests every service still
+enabled on the connection, closing a latent defect where consenting to one service
+replaced the shared credential envelope without the others' scopes; the OAuth
+callback also validated capability IDs against a hardcoded pair, silently dropping
+any third.
 
 Not included:
 
@@ -1787,3 +1791,27 @@ YYYY-MM-DD — Slice
 - **Decision:** C5 is accepted in test production. The Gmail decision gate may
   now be evaluated; no Gmail scope or provider write capability was added by
   C5.
+
+### 2026-08-04 — G1 test-production acceptance
+
+- **Scope:** selected-label Gmail evidence on the existing Google Workspace
+  connection (`context.mail.read_scoped`), plus citation presentation for mail.
+- **Dogfood:** a real Workspace account enabled mail, selected a label, completed
+  import, and the factual agent answered questions over the imported messages.
+  Cross-source call + email usefulness was exercised informally in the live app.
+- **Automated:** `gmail-sync` suite covers 90-day bound, restricted audience copy,
+  label-loss removal, expired-`historyId` rebuild, and attachment-name-only
+  extraction. Connector registry tests keep Gmail observe-only (`gmail.readonly`,
+  no compose/send). Agent tests assert mail context items present as
+  `adapterId: "gmail"` with `metadata.sourceUrl` as the deep link, including
+  chunks written into the knowledge index path.
+- **Citation fix shipped with acceptance:** capability
+  `context.mail.read_scoped` maps to adapter `gmail` (not provider `"google"`).
+  Search citations re-derive presentation from the authoritative Firestore
+  record so pre-fix Qdrant points still open in Gmail without a forced full
+  reindex.
+- **Explicitly not claimed:** multi-member restricted-audience rejection in live
+  prod was not re-run end-to-end for this log entry (unit/access contracts remain
+  the proof); push/watch remains deferred; no draft or send scope was added.
+- **Decision:** G1 is accepted. Proceed to G2 (exact non-executing
+  `mail.draft.create` proposal only).

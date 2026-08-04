@@ -1,5 +1,10 @@
 import { z } from "zod";
-import { presentRecordForAgent, type CompanyDataRepository, type CompanyRecord } from "./knowledge.js";
+import {
+  extractRecordMetadata,
+  presentRecordForAgent,
+  type CompanyDataRepository,
+  type CompanyRecord,
+} from "./knowledge.js";
 import {
   SearchUnavailableError,
   searchUnavailableMessage,
@@ -194,61 +199,14 @@ function extractCitationInfo(record: CompanyRecord): {
   artifactRefs?: string[];
 } {
   const data = record.data || {};
-  let adapterId: string | undefined;
-  let externalUrl: string | undefined;
-  let internalRoute: string | undefined;
-
   const artifactRefs = Array.isArray(data.artifactRefs) ? (data.artifactRefs as string[]) : undefined;
   const metadata = (data.metadata && typeof data.metadata === "object" ? data.metadata : {}) as Record<string, unknown>;
 
-  if (record.kind === "context_item") {
-    const sourceObj = (data.source && typeof data.source === "object" ? data.source : {}) as Record<string, unknown>;
-    const capabilityId = typeof sourceObj.capabilityId === "string"
-      ? sourceObj.capabilityId
-      : undefined;
-    adapterId = capabilityId === "context.document.read"
-      ? "google_drive"
-      : capabilityId === "context.calendar.read"
-        ? "google_calendar"
-        : capabilityId === "context.call.read"
-          ? "odorik"
-          : typeof sourceObj.adapterId === "string"
-            ? sourceObj.adapterId
-            : undefined;
-    if (adapterId === "google_drive") {
-      externalUrl = artifactRefs?.[0];
-    } else if (adapterId === "google_calendar") {
-      externalUrl = (typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : undefined) || artifactRefs?.[0];
-    } else if (adapterId === "gmail" || adapterId === "github") {
-      externalUrl = (typeof metadata.sourceUrl === "string" ? metadata.sourceUrl : undefined) || artifactRefs?.[0];
-    } else if (adapterId === "odorik") {
-      internalRoute = "/contacts";
-    }
-  } else if (record.kind === "call") {
-    adapterId = "odorik";
-    internalRoute = typeof data.contactId === "string"
-      ? `/contacts/${data.contactId}`
-      : "/contacts";
-  } else if (record.kind === "contact") {
-    adapterId = "crm";
-    internalRoute = `/contacts/${record.recordId}`;
-  } else if (record.kind === "task" || record.kind === "case" || record.kind === "audit_event") {
-    adapterId = "crm";
-    if (record.kind === "task") internalRoute = "/tasks";
-    if (record.kind === "case") internalRoute = `/cases/${record.recordId}`;
-  } else if (record.kind === "coding_run") {
-    adapterId = "github";
-    const github = (data.github && typeof data.github === "object" ? data.github : {}) as Record<string, unknown>;
-    const publication = (data.publicationResult && typeof data.publicationResult === "object"
-      ? data.publicationResult
-      : {}) as Record<string, unknown>;
-    externalUrl = typeof publication.pullRequestUrl === "string"
-      ? publication.pullRequestUrl
-      : typeof github.issueUrl === "string"
-        ? github.issueUrl
-        : undefined;
-    internalRoute = "/coding";
-  }
+  // Keep adapter/url/route in lockstep with index metadata (extractRecordMetadata).
+  const presentation = extractRecordMetadata(record);
+  let adapterId = presentation.adapterId || undefined;
+  let externalUrl = presentation.externalUrl || undefined;
+  const internalRoute = presentation.internalRoute || undefined;
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
     externalUrl = artifactRefs[0];
@@ -360,31 +318,45 @@ export class CompanyFactTools implements AgentToolExecutor {
 
       // Qdrant is an eventually consistent projection. Re-check every hit against
       // the authoritative Firestore record so an audience reduction or resource
-      // disable takes effect before the vector update has been delivered.
-      const authorizedHits = (await Promise.all(sortedHits.map(async (hit) => (
-        await this.repository.getRecord(hit.kind, hit.recordId) ? hit : null
-      )))).filter((hit): hit is (typeof sortedHits)[number] => hit !== null);
+      // disable takes effect before the vector update has been delivered. Also
+      // re-derive citation presentation from that record so stale index metadata
+      // (e.g. pre-G1 mail adapterId "google") cannot hide the Gmail deep link.
+      const authorizedHits = (await Promise.all(sortedHits.map(async (hit) => {
+        const record = await this.repository.getRecord(hit.kind, hit.recordId);
+        return record ? { hit, record } : null;
+      }))).filter((entry): entry is { hit: (typeof sortedHits)[number]; record: CompanyRecord } => entry !== null);
 
       const seenKeys = new Set<string>();
       const deduplicatedHits = [];
-      for (const hit of authorizedHits) {
-        const externalId = typeof hit.metadata?.externalId === "string" ? hit.metadata.externalId : null;
-        const key = externalId ? `${hit.kind}:${externalId}` : `${hit.kind}:${hit.title}`;
+      for (const entry of authorizedHits) {
+        const externalId = typeof entry.hit.metadata?.externalId === "string"
+          ? entry.hit.metadata.externalId
+          : null;
+        const key = externalId
+          ? `${entry.hit.kind}:${externalId}`
+          : `${entry.hit.kind}:${entry.hit.title}`;
         if (seenKeys.has(key)) continue;
         seenKeys.add(key);
-        deduplicatedHits.push(hit);
+        deduplicatedHits.push(entry);
       }
 
-      const matches = deduplicatedHits.map((hit) => {
-        const externalUrl = (typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined)
+      const matches = deduplicatedHits.map(({ hit, record }) => {
+        const info = extractCitationInfo(record);
+        const externalUrl = info.externalUrl
+          || (typeof hit.metadata?.externalUrl === "string" ? hit.metadata.externalUrl : undefined)
           || extractUrlFromText(hit.text);
-        let adapterId = typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined;
-        if (!adapterId) {
+        let adapterId = info.adapterId
+          || (typeof hit.metadata?.adapterId === "string" ? hit.metadata.adapterId : undefined);
+        if (!adapterId || adapterId === "google") {
           if (externalUrl?.includes("drive.google.com") || hit.sourcePath.includes("drive")) adapterId = "google_drive";
-          else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) adapterId = "google_calendar";
-          else if (hit.kind === "call") adapterId = "odorik";
+          else if (externalUrl?.includes("calendar.google.com") || hit.sourcePath.includes("calendar")) {
+            adapterId = "google_calendar";
+          } else if (externalUrl?.includes("mail.google.com") || hit.sourcePath.includes("gmail")) {
+            adapterId = "gmail";
+          } else if (hit.kind === "call") adapterId = "odorik";
           else if (hit.kind === "contact" || hit.kind === "case") adapterId = "crm";
           else if (hit.kind === "coding_run") adapterId = "github";
+          else if (adapterId === "google") adapterId = undefined;
         }
 
         const citation = this.citations.add({
@@ -396,7 +368,8 @@ export class CompanyFactTools implements AgentToolExecutor {
           occurredAt: hit.occurredAt,
           adapterId,
           externalUrl,
-          internalRoute: typeof hit.metadata?.internalRoute === "string" ? hit.metadata.internalRoute : undefined,
+          internalRoute: info.internalRoute
+            || (typeof hit.metadata?.internalRoute === "string" ? hit.metadata.internalRoute : undefined),
         }, hit.id);
         return {
           citationId: citation.citationId,

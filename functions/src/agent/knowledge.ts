@@ -392,17 +392,21 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
     const capabilityId = typeof sourceObj.capabilityId === "string"
       ? sourceObj.capabilityId
       : null;
+    // Map capability IDs first. Mail stores providerId "google" without adapterId;
+    // without this branch citations become generic "google" with no Gmail deep link.
     adapterId = capabilityId === "context.document.read"
       ? "google_drive"
       : capabilityId === "context.calendar.read"
         ? "google_calendar"
         : capabilityId === "context.call.read"
           ? "odorik"
-          : typeof sourceObj.adapterId === "string"
-            ? sourceObj.adapterId
-            : typeof sourceObj.providerId === "string"
-              ? sourceObj.providerId
-              : null;
+          : capabilityId === "context.mail.read_scoped"
+            ? "gmail"
+            : typeof sourceObj.adapterId === "string"
+              ? sourceObj.adapterId
+              : typeof sourceObj.providerId === "string"
+                ? sourceObj.providerId
+                : null;
     if (adapterId === "google_drive") {
       externalUrl = artifactRefs[0] || null;
     } else if (adapterId === "google_calendar") {
