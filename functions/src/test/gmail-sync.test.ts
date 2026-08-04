@@ -4,7 +4,10 @@ import { Timestamp } from "firebase-admin/firestore";
 import {
   mailContextItemId,
   mailMessageBody,
+  mailMessageContextItem,
+  mailMessageSourceUrl,
   mailResourceId,
+  normalizeRfc822MessageId,
   syncGoogleGmailConnection,
 } from "../connectors/google-gmail.js";
 import { encryptCredentials } from "../connectors/credentials.js";
@@ -28,22 +31,32 @@ function gmailMessage(input: {
   body: string;
   historyId: string;
   labelIds?: string[];
+  messageIdHeader?: string | null;
+  threadId?: string;
 }) {
+  const headers = [
+    { name: "Subject", value: input.subject },
+    { name: "From", value: `Sender One <sender@example.com>` },
+    { name: "To", value: `Owner <owner@example.com>` },
+    { name: "Date", value: "Mon, 3 Aug 2026 09:30:00 +0000" },
+  ];
+  if (input.messageIdHeader !== null) {
+    headers.push({
+      name: "Message-ID",
+      value: input.messageIdHeader
+        ?? `<quote-${input.id}@mail.example.com>`,
+    });
+  }
   return {
     id: input.id,
-    threadId: `thread-${input.id}`,
+    threadId: input.threadId ?? `thread-${input.id}`,
     historyId: input.historyId,
     internalDate: String(Date.parse("2026-08-03T09:30:00.000Z")),
     labelIds: input.labelIds ?? [labelId, "INBOX"],
     snippet: input.body.slice(0, 20),
     payload: {
       mimeType: "multipart/mixed",
-      headers: [
-        { name: "Subject", value: input.subject },
-        { name: "From", value: `Sender One <sender@example.com>` },
-        { name: "To", value: `Owner <owner@example.com>` },
-        { name: "Date", value: "Mon, 3 Aug 2026 09:30:00 +0000" },
-      ],
+      headers,
       parts: [
         {
           mimeType: "text/plain",
@@ -204,6 +217,13 @@ test("Gmail initial import is bounded, cursored from the profile, and keeps the 
     assert.deepEqual(metadata.attachmentNames, ["quote.pdf"]);
     assert.equal(metadata.hasAttachments, true);
     assert.equal(metadata.threadId, "thread-msg-1");
+    assert.equal(metadata.rfc822MessageId, "quote-msg-1@mail.example.com");
+    // Prefer rfc822msgid search — #all/{api message id} does not open current Gmail UI.
+    assert.equal(
+      metadata.sourceUrl,
+      "https://mail.google.com/mail/u/0/#search/"
+        + encodeURIComponent("rfc822msgid:quote-msg-1@mail.example.com"),
+    );
     assert.deepEqual(item.participantRefs, ["sender@example.com", "owner@example.com"]);
 
     // The next incremental run resumes from mailbox state as of this enumeration.
@@ -390,4 +410,73 @@ test("Gmail body extraction prefers text/plain and records attachments by name o
   });
   assert.equal(fallback.text, "Hello there");
   assert.deepEqual(fallback.attachmentNames, []);
+});
+
+test("Gmail deep links prefer rfc822msgid search over API message ids", () => {
+  assert.equal(normalizeRfc822MessageId("<a.b@mail.gmail.com>"), "a.b@mail.gmail.com");
+  assert.equal(normalizeRfc822MessageId("  bare@example.com  "), "bare@example.com");
+  assert.equal(normalizeRfc822MessageId(""), null);
+
+  assert.equal(
+    mailMessageSourceUrl({ rfc822MessageId: "<CA+x@mail.gmail.com>" }),
+    "https://mail.google.com/mail/u/0/#search/"
+      + encodeURIComponent("rfc822msgid:CA+x@mail.gmail.com"),
+  );
+  // Without a Message-ID header, use the thread id — not the message id — in #all/.
+  assert.equal(
+    mailMessageSourceUrl({
+      threadId: "19f3d5a687db2022",
+      messageId: "different-msg-id",
+    }),
+    "https://mail.google.com/mail/u/0/#all/19f3d5a687db2022",
+  );
+  assert.equal(
+    mailMessageSourceUrl({ messageId: "only-msg" }),
+    "https://mail.google.com/mail/u/0/#all/only-msg",
+  );
+
+  const withHeader = mailMessageContextItem({
+    companyId,
+    connectionId: "c1",
+    resourceId,
+    labelId,
+    labelName: "Customers",
+    message: gmailMessage({
+      id: "msg-link",
+      subject: "Link check",
+      body: "Body",
+      historyId: "1",
+      messageIdHeader: "<id-1@mail.example.com>",
+      threadId: "thread-link",
+    }),
+    audience: { visibility: "restricted", memberIds: ["member-1"] },
+  });
+  assert.equal(
+    (withHeader?.metadata as Record<string, unknown>).sourceUrl,
+    "https://mail.google.com/mail/u/0/#search/"
+      + encodeURIComponent("rfc822msgid:id-1@mail.example.com"),
+  );
+  assert.equal((withHeader?.metadata as Record<string, unknown>).rfc822MessageId, "id-1@mail.example.com");
+
+  const withoutHeader = mailMessageContextItem({
+    companyId,
+    connectionId: "c1",
+    resourceId,
+    labelId,
+    labelName: "Customers",
+    message: gmailMessage({
+      id: "msg-no-mid",
+      subject: "No Message-ID",
+      body: "Body",
+      historyId: "1",
+      messageIdHeader: null,
+      threadId: "thread-no-mid",
+    }),
+    audience: { visibility: "restricted", memberIds: ["member-1"] },
+  });
+  assert.equal(
+    (withoutHeader?.metadata as Record<string, unknown>).sourceUrl,
+    "https://mail.google.com/mail/u/0/#all/thread-no-mid",
+  );
+  assert.equal((withoutHeader?.metadata as Record<string, unknown>).rfc822MessageId, null);
 });

@@ -183,6 +183,40 @@ function addressList(value: string): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Strip angle brackets and whitespace from a Message-ID header for Gmail search.
+ * Gmail's `rfc822msgid:` operator accepts the id with or without `<>`; we store
+ * the bare form and encode it into the URL.
+ */
+export function normalizeRfc822MessageId(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  const bare = trimmed.replace(/^<|>$/g, "").trim();
+  return bare || null;
+}
+
+/**
+ * Build a usable Gmail web link. Google does not publish a stable deep link for
+ * API message ids (`#all/{messageId}` does not open the message in current UI).
+ * Prefer the supported `rfc822msgid:` search; fall back to the classic hash path
+ * with the **thread** id (best-effort on older UI).
+ */
+export function mailMessageSourceUrl(input: {
+  rfc822MessageId?: string | null;
+  threadId?: string | null;
+  messageId?: string | null;
+}): string | null {
+  const rfc = input.rfc822MessageId
+    ? normalizeRfc822MessageId(input.rfc822MessageId)
+    : null;
+  if (rfc) {
+    return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
+  }
+  const threadOrMessage = (input.threadId || input.messageId || "").trim();
+  if (!threadOrMessage) return null;
+  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(threadOrMessage)}`;
+}
+
 export function mailMessageContextItem(input: {
   companyId: string;
   connectionId: string;
@@ -208,6 +242,12 @@ export function mailMessageContextItem(input: {
   const to = headerValue(payload, "To");
   const cc = headerValue(payload, "Cc");
   const dateHeader = headerValue(payload, "Date");
+  const rfc822MessageId = normalizeRfc822MessageId(headerValue(payload, "Message-ID"));
+  const sourceUrl = mailMessageSourceUrl({
+    rfc822MessageId,
+    threadId: input.message.threadId || null,
+    messageId: input.message.id,
+  });
   const { text, attachmentNames } = mailMessageBody(payload);
   const participantRefs = [
     ...addressList(from),
@@ -235,6 +275,8 @@ export function mailMessageContextItem(input: {
     text,
     attachmentNames,
     labelIds: input.message.labelIds || [],
+    rfc822MessageId,
+    sourceUrl,
   }));
   return {
     companyId: input.companyId,
@@ -260,6 +302,7 @@ export function mailMessageContextItem(input: {
       labelName: input.labelName,
       threadId: input.message.threadId || null,
       messageId: input.message.id,
+      rfc822MessageId,
       from: from || null,
       to: addressList(to),
       cc: addressList(cc),
@@ -270,12 +313,12 @@ export function mailMessageContextItem(input: {
       // content, so nothing here implies the bytes were read.
       attachmentNames,
       hasAttachments: attachmentNames.length > 0,
-      sourceUrl: `https://mail.google.com/mail/u/0/#all/${input.message.id}`,
+      sourceUrl,
     },
     provenance: {
       rawRef: `google-gmail/${input.labelId}/messages/${input.message.id}`,
       checksum,
-      ingestionVersion: "google-gmail-v1",
+      ingestionVersion: "google-gmail-v2",
     },
     observation: input.observation ? {
       ...input.observation,
@@ -307,11 +350,17 @@ export function mailContextMatches(
   const nextSource = nestedRecord(next.source);
   const existingProvenance = nestedRecord(existing?.provenance);
   const nextProvenance = nestedRecord(next.provenance);
+  const existingMeta = nestedRecord(existing?.metadata);
+  const nextMeta = nestedRecord(next.metadata);
   return existingSource.version === nextSource.version
     && existingSource.resourceId === nextSource.resourceId
     && existingProvenance.checksum === nextProvenance.checksum
     && existing?.title === next.title
     && existing?.text === next.text
+    // sourceUrl / rfc822 id are presentation, not body, but must rewrite on re-sync
+    // when we improve deep links (v1 used a non-working #all/messageId path).
+    && existingMeta.sourceUrl === nextMeta.sourceUrl
+    && existingMeta.rfc822MessageId === nextMeta.rfc822MessageId
     && audienceEquals(existing?.access, next.access)
     && Number(existing?.accessRevision || 1) === Number(next.accessRevision || 1)
     && existing?.indexingEnabled !== false;
