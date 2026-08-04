@@ -8,7 +8,7 @@ import { canMemberAccessSourceData } from "./access.js";
 import { adminProcedure, enabledProcedure, router, signedInProcedure } from "./trpc.js";
 import { GeminiRestAgentModel } from "./agent/gemini.js";
 import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
-import { FirestoreCompanyData } from "./agent/knowledge.js";
+import { FirestoreCompanyData, rehydrateCitationPresentation } from "./agent/knowledge.js";
 import {
   embeddingDimensions,
   embeddingModel,
@@ -1084,7 +1084,20 @@ export const appRouter = router({
           .orderBy("createdAt", "desc")
           .limit(40)
           .get();
-        return jsonSafe(snapshot.docs.reverse().map((document) => ({ id: document.id, ...document.data() })));
+        // Rehydrate citation deep links from live context items so older answers
+        // pick up improved source URLs (e.g. Gmail rfc822msgid) without a new ask.
+        const messages = await Promise.all(snapshot.docs.reverse().map(async (document) => {
+          const data = document.data();
+          if (data.role !== "assistant" || !Array.isArray(data.citations)) {
+            return { id: document.id, ...data };
+          }
+          return {
+            id: document.id,
+            ...data,
+            citations: await rehydrateCitationPresentation(db, ctx.companyId, data.citations),
+          };
+        }));
+        return jsonSafe(messages);
       }),
     ask: enabledProcedure
       .input(z.object({

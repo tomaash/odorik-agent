@@ -1,5 +1,6 @@
 import type { Firestore } from "firebase-admin/firestore";
 import { jsonSafe } from "../firestore.js";
+import { companyDocumentPath } from "../tenancy.js";
 import {
   knowledgeKinds,
   type KnowledgeDocument,
@@ -375,6 +376,59 @@ export function presentRecordForAgent(record: CompanyRecord): Record<string, unk
   }
 
   return presented;
+}
+
+/**
+ * Refresh stored assistant citation presentation from the live context item.
+ * Chat messages snapshot citations at answer time; source deep links can improve
+ * later (e.g. Gmail #all/{apiId} → rfc822msgid search) without rewriting history
+ * on every connector fix when history load rehydrates.
+ */
+export async function rehydrateCitationPresentation(
+  database: Firestore,
+  companyId: string,
+  citations: unknown,
+): Promise<unknown> {
+  if (!Array.isArray(citations) || citations.length === 0) return citations;
+  const next: unknown[] = [];
+  for (const raw of citations) {
+    if (!raw || typeof raw !== "object") {
+      next.push(raw);
+      continue;
+    }
+    const citation = raw as Record<string, unknown>;
+    const kind = citation.kind;
+    const recordId = typeof citation.recordId === "string" ? citation.recordId : null;
+    if (kind !== "context_item" || !recordId) {
+      next.push(citation);
+      continue;
+    }
+    const snapshot = await database
+      .doc(companyDocumentPath(companyId, "contextItems", recordId))
+      .get();
+    if (!snapshot.exists) {
+      next.push(citation);
+      continue;
+    }
+    const data = snapshot.data() || {};
+    const meta = extractRecordMetadata({
+      kind: "context_item",
+      recordId,
+      sourcePath: typeof citation.sourcePath === "string"
+        ? citation.sourcePath
+        : `companies/${companyId}/contextItems/${recordId}`,
+      title: typeof citation.title === "string" ? citation.title : recordId,
+      occurredAt: typeof citation.occurredAt === "string" ? citation.occurredAt : null,
+      data,
+    });
+    next.push({
+      ...citation,
+      ...(typeof meta.adapterId === "string" ? { adapterId: meta.adapterId } : {}),
+      ...(typeof meta.externalUrl === "string" ? { externalUrl: meta.externalUrl } : {}),
+      ...(typeof meta.internalRoute === "string" ? { internalRoute: meta.internalRoute } : {}),
+    });
+  }
+  return next;
 }
 
 export function extractRecordMetadata(record: CompanyRecord): Record<string, string | number | boolean | null> {
