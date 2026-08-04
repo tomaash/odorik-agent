@@ -432,6 +432,7 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/calendar.events.readonly': t('sources.scopes.calendarEvents'),
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
     'https://www.googleapis.com/auth/gmail.readonly': t('sources.scopes.gmail'),
+    'https://www.googleapis.com/auth/gmail.compose': t('sources.scopes.gmailCompose'),
     'contents:read': t('sources.scopes.githubContents'),
     'contents:write': t('sources.scopes.githubContentsWrite'),
     'issues:read': t('sources.scopes.githubIssues'),
@@ -447,6 +448,7 @@ function emptyResourceMessage(capabilityId: string) {
   if (capabilityId === 'context.call.read') return t('sources.emptyPhoneLines')
   if (capabilityId === 'context.mail.read_scoped') return t('sources.emptyLabels')
   if (capabilityId === 'context.github.issue.read') return t('sources.emptyRepositories')
+  if (capabilityId === 'action.mail.draft.create') return t('sources.emptyMailDraft')
   return t('sources.emptyResources')
 }
 

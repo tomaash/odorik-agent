@@ -17,6 +17,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   approve: [approval: ActionApprovalItem]
   reject: [approval: ActionApprovalItem, note?: string]
+  reconcile: [approval: ActionApprovalItem]
 }>()
 
 const { t } = useI18n()
@@ -33,6 +34,25 @@ const canAct = computed(() => (
     )
   )
 ))
+
+const canReconcileMailDraft = computed(() => (
+  props.approval.approverUid === props.currentUid
+  && props.approval.action.kind === 'mail.draft.create'
+  && props.approval.status === 'execution_failed'
+  && props.approval.executionStatus === 'outcome_unknown'
+))
+
+const mailDraftResult = computed(() => {
+  const result = props.approval.executionResult
+  if (!result || typeof result !== 'object') return null
+  const draft = result as {
+    draftId?: string
+    messageId?: string
+    deepLink?: string
+  }
+  if (!draft.draftId && !draft.deepLink) return null
+  return draft
+})
 
 const relatedCaseId = computed(() => {
   if (props.approval.scope?.caseId) return props.approval.scope.caseId
@@ -257,9 +277,32 @@ function confirmReject() {
       </details>
 
       <p v-if="approval.executionError" class="text-xs text-amber-800 mt-2 mb-0">{{ approval.executionError }}</p>
+      <p
+        v-if="canReconcileMailDraft"
+        class="text-xs text-amber-900 mt-2 mb-0"
+      >
+        {{ t('approvals.mailDraftOutcomeUnknown') }}
+      </p>
       <p v-if="approval.rejectionNote" class="text-xs text-rose-800 mt-2 mb-0">
         {{ t('approvals.rejectionReason', { reason: approval.rejectionNote }) }}
       </p>
+
+      <div
+        v-if="mailDraftResult && approval.status === 'approved'"
+        class="mt-3 rounded-md border border-emerald-200 bg-emerald-50/80 p-3 grid gap-1.5 text-xs"
+      >
+        <strong class="text-emerald-950">{{ t('approvals.mailDraftCreated') }}</strong>
+        <span v-if="mailDraftResult.draftId" class="font-mono break-all">{{ mailDraftResult.draftId }}</span>
+        <a
+          v-if="mailDraftResult.deepLink"
+          :href="mailDraftResult.deepLink"
+          target="_blank"
+          rel="noopener noreferrer"
+          class="inline-flex items-center gap-1 font-semibold text-emerald-800 no-underline"
+        >
+          {{ t('approvals.openGmailDraft') }} <i class="pi pi-external-link text-[.65rem]" />
+        </a>
+      </div>
 
       <router-link
         v-if="resultCaseId"
@@ -277,7 +320,7 @@ function confirmReject() {
       </router-link>
 
       <div
-        v-if="canAct"
+        v-if="canAct || canReconcileMailDraft"
         class="mt-3 pt-3 border-t border-violet-200/80 flex flex-col-reverse sm:flex-row sm:items-center sm:justify-end gap-2"
       >
         <Button
@@ -292,6 +335,17 @@ function confirmReject() {
           @click="requestReject"
         />
         <Button
+          v-if="canReconcileMailDraft"
+          :label="t('approvals.reconcileMailDraft')"
+          icon="pi pi-refresh"
+          size="small"
+          severity="help"
+          class="w-full sm:w-auto"
+          :loading="processing"
+          @click="emit('reconcile', approval)"
+        />
+        <Button
+          v-if="canAct"
           :label="approval.status === 'execution_failed' ? t('approvals.retry') : t('approvals.approve')"
           icon="pi pi-check"
           size="small"

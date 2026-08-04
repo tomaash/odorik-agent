@@ -2,8 +2,8 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** G3 pending — G2 exact non-executing
-`mail.draft.create` proposal accepted; next is approval-gated Gmail draft creation
+**Current implementation slice:** G3 shipped — approval-gated Gmail draft
+creation with draft-write grant; dogfood acceptance remaining in test production
 
 **Last plan revision:** 2026-08-04
 
@@ -258,7 +258,7 @@ Every action capability must define:
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Completed | Accepted in test production (dogfood + unit suite) |
 | G2 | Produce an exact, non-executing email-draft proposal | Completed | Proposal is useful without any provider write |
-| G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
+| G3 | Create a Gmail draft after approval and reconcile the result | Completed | Implementation shipped; dogfood acceptance in test production |
 | M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
 | M2 | Prove `mail.draft.create` through Outlook | Gated | Same workflow needs no provider-specific semantics |
 | M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
@@ -1836,3 +1836,25 @@ YYYY-MM-DD — Slice
   contact email edit so contact-recipient drafts can resolve.
 - **Decision:** G2 is accepted for ship. Proceed to G3 (executor +
   `action.mail.draft.create` capability grant + reconciliation).
+
+### 2026-08-04 — G3 approval-gated Gmail draft creation
+
+- **Scope:** separate Workspace capability `action.mail.draft.create`
+  (`mail_draft` service, `gmail.compose` scope), production executor on
+  `mail.draft.create`, Firestore idempotency + Message-ID marker, reconcile
+  path for `outcome_unknown`, Sources grant UI, approval result + reconcile CTA.
+- **Independent grants:** mail read (`gmail.readonly`) and draft write
+  (`gmail.compose`) are separate capabilities; read-only cannot execute.
+  Product never calls send even though compose can send at the provider.
+- **Executor:** builds text/plain RFC822 with Erik Message-ID
+  `<draftRequestId@erik-mail-draft.local>`, creates via `users.me/drafts`,
+  stores `mailDraftExecutions/{draftRequestId}`; retries reuse stored success
+  or find-by-rfc822msgid before creating again.
+- **Automated:** connectors registry grant matrix; mail-draft preconditions
+  require write grant; executor suite (MIME, missing grant, idempotent create,
+  reconcile without create, `outcome_unknown` classification). Full functions
+  + frontend suites green.
+- **Not claimed in this log entry:** live dogfood of call → proposal → approve
+  → open draft in Gmail (operator path after deploy).
+- **Decision:** G3 implementation accepted for ship. Core epic G1–G3 code path
+  complete pending dogfood.

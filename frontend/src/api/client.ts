@@ -493,15 +493,16 @@ export type SourceCapabilityId =
   | 'context.document.read'
   | 'context.mail.read_scoped'
   | 'context.github.issue.read'
+  | 'action.mail.draft.create'
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId
-  serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'issues'
-  direction: 'observe'
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
+  serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'mail_draft' | 'issues'
+  direction: 'observe' | 'act'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox'
   requiredScopes: string[]
   syncMode: 'webhook' | 'incremental' | 'reconcile' | 'manual'
-  requiresApproval: false
+  requiresApproval: boolean
 }
 
 export type SourceConnector = {
@@ -896,6 +897,10 @@ export async function rejectAction(approvalId: string, note?: string) {
   })
 }
 
+export async function reconcileMailDraftApproval(approvalId: string) {
+  return trpc.approvals.reconcileMailDraft.mutate({ approvalId })
+}
+
 export async function getPipeline(): Promise<Pipeline> {
   return trpc.pipeline.get.query() as Promise<Pipeline>
 }
@@ -1085,11 +1090,13 @@ export type WorkspaceCapabilityId =
   | 'context.calendar.read'
   | 'context.document.read'
   | 'context.mail.read_scoped'
+  | 'action.mail.draft.create'
 
 export const workspaceCapabilityIds: WorkspaceCapabilityId[] = [
   'context.calendar.read',
   'context.document.read',
   'context.mail.read_scoped',
+  'action.mail.draft.create',
 ]
 
 export type SelectableMailLabel = {

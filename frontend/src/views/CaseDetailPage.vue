@@ -23,6 +23,7 @@ import {
   getCaseDetails,
   getTeamOverview,
   moveCase,
+  reconcileMailDraftApproval,
   rejectAction,
   transitionTask,
   type ActionApprovalItem,
@@ -303,6 +304,19 @@ async function reject(approval: ActionApprovalItem, note?: string) {
   }
 }
 
+async function reconcile(approval: ActionApprovalItem) {
+  processingApprovalId.value = approval.id
+  error.value = ''
+  try {
+    await reconcileMailDraftApproval(approval.id)
+    await load(false)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    processingApprovalId.value = ''
+  }
+}
+
 async function confirmArchive() {
   if (!details.value) return
   saving.value = true
@@ -497,6 +511,7 @@ onMounted(load)
                 :processing="processingApprovalId === approval.id"
                 @approve="approve"
                 @reject="reject"
+                @reconcile="reconcile"
               />
             </div>
             <p v-else class="text-sm text-surface-500 text-center py-8 px-4 m-0">{{ t('caseDetails.noAttention') }}</p>

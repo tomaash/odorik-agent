@@ -23,6 +23,14 @@ export const mailScopes = [
   "https://www.googleapis.com/auth/gmail.readonly",
 ] as const;
 
+/**
+ * Google does not publish a draft-only scope. `gmail.compose` can also send;
+ * Erik never calls send — product policy, not a provider boundary.
+ */
+export const mailDraftScopes = [
+  "https://www.googleapis.com/auth/gmail.compose",
+] as const;
+
 export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDescriptor> = {
   "context.call.read": {
     id: "context.call.read",
@@ -60,6 +68,15 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     syncMode: "incremental",
     requiresApproval: false,
   },
+  "action.mail.draft.create": {
+    id: "action.mail.draft.create",
+    serviceId: "mail_draft",
+    direction: "act",
+    resourceType: "mailbox",
+    requiredScopes: [...mailDraftScopes],
+    syncMode: "manual",
+    requiresApproval: true,
+  },
   "context.github.issue.read": {
     id: "context.github.issue.read",
     serviceId: "issues",
@@ -89,6 +106,7 @@ export const googleWorkspaceCapabilityIds: readonly SourceCapabilityId[] = [
   "context.calendar.read",
   "context.document.read",
   "context.mail.read_scoped",
+  "action.mail.draft.create",
 ] as const;
 
 const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
@@ -114,6 +132,7 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
       sourceCapabilities["context.calendar.read"],
       sourceCapabilities["context.document.read"],
       sourceCapabilities["context.mail.read_scoped"],
+      sourceCapabilities["action.mail.draft.create"],
     ],
   },
   github: {

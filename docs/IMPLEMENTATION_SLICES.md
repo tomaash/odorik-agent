@@ -180,9 +180,9 @@ evaluation contracts before introducing a more general workflow abstraction.
 
 ## Slice 6: first approved external action
 
-Current execution is specified by G3 in `CONNECTOR_EPIC.md`: G2 shipped the
-exact non-executing `mail.draft.create` proposal; G3 approval-gates creation of
-the Gmail draft. Sending email remains deferred.
+G2–G3 in `CONNECTOR_EPIC.md` shipped the exact `mail.draft.create` proposal and
+approval-gated Gmail draft creation (separate write grant, reconcile). Sending
+email remains deferred.
 
 Add one connector write capability with a real business result—for example,
 creating a calendar hold or sending a follow-up through a chosen call-centre

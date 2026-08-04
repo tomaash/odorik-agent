@@ -21,6 +21,7 @@ import {
   listCases,
   listContacts,
   listTasks,
+  reconcileMailDraftApproval,
   rejectAction,
   transitionTask,
   type ActionApprovalItem,
@@ -210,6 +211,20 @@ async function reject(approval: ActionApprovalItem, note?: string) {
   }
 }
 
+async function reconcile(approval: ActionApprovalItem) {
+  processingApprovalId.value = approval.id
+  error.value = ''
+  try {
+    await reconcileMailDraftApproval(approval.id)
+    await load()
+    view.value = 'approvals'
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    processingApprovalId.value = ''
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -368,6 +383,7 @@ onMounted(load)
         :processing="processingApprovalId === approval.id"
         @approve="approve"
         @reject="reject"
+        @reconcile="reconcile"
       />
     </div>
 

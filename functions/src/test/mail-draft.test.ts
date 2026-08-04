@@ -38,6 +38,7 @@ const draftAction = mailDraftCreateActionSchema.parse({
 function seedMailbox(memory: MemoryFirestore, overrides: {
   connectionStatus?: string;
   capabilityStatus?: string;
+  draftWriteStatus?: string | null;
   accountLabel?: string;
 } = {}) {
   const path = `companies/${companyId}/connections/${connectionId}`;
@@ -52,6 +53,13 @@ function seedMailbox(memory: MemoryFirestore, overrides: {
     serviceId: "mail",
     status: overrides.capabilityStatus || "active",
   });
+  if (overrides.draftWriteStatus !== null) {
+    memory.seed(`${path}/capabilities/mail_draft`, {
+      capabilityId: "action.mail.draft.create",
+      serviceId: "mail_draft",
+      status: overrides.draftWriteStatus || "active",
+    });
+  }
   return path;
 }
 
@@ -165,9 +173,13 @@ test("the draft is refused when the mailbox is no longer usable", async () => {
   seedMailbox(disconnected, { connectionStatus: "disconnected" });
   await assert.rejects(() => assertPreconditions(disconnected), /connection for this mailbox/);
 
-  const mailOff = new MemoryFirestore();
-  seedMailbox(mailOff, { capabilityStatus: "disabled" });
-  await assert.rejects(() => assertPreconditions(mailOff), /Mail is not enabled/);
+  const draftWriteOff = new MemoryFirestore();
+  seedMailbox(draftWriteOff, { draftWriteStatus: "disabled" });
+  await assert.rejects(() => assertPreconditions(draftWriteOff), /draft creation is not enabled/);
+
+  const draftWriteMissing = new MemoryFirestore();
+  seedMailbox(draftWriteMissing, { draftWriteStatus: null });
+  await assert.rejects(() => assertPreconditions(draftWriteMissing), /draft creation is not enabled/);
 
   const renamed = new MemoryFirestore();
   seedMailbox(renamed, { accountLabel: "someone-else@acme.cz" });

@@ -2,11 +2,17 @@ import { z } from "zod";
 
 import type {
   ActionDescriptor,
-  ApprovedActionExecutionContext,
 } from "../actions/registry.js";
 import { mailDraftCreateActionSchema } from "../actions/contracts.js";
+import {
+  MailDraftOutcomeUnknownError,
+  MailDraftWriteGrantMissingError,
+  type MailDraftCreateAction,
+  type MailDraftCreatedResult,
+  type MailDraftExecutor,
+} from "./executor.js";
 
-export type MailDraftCreateAction = z.infer<typeof mailDraftCreateActionSchema>;
+export type { MailDraftCreateAction, MailDraftCreatedResult, MailDraftExecutor };
 
 const mailDraftCreatedResultSchema = z.object({
   draftId: z.string().min(1),
@@ -15,17 +21,9 @@ const mailDraftCreatedResultSchema = z.object({
   deepLink: z.string().min(1),
 }).strict();
 
-export type MailDraftCreatedResult = z.infer<typeof mailDraftCreatedResultSchema>;
-
-export type MailDraftExecutor = (
-  context: ApprovedActionExecutionContext,
-  action: MailDraftCreateAction,
-) => Promise<MailDraftCreatedResult>;
-
 /**
- * Thrown by the default executor for as long as the product holds no Gmail
- * write scope. It is a deliberate dead end, not a bug: G2 proves the proposal
- * is exact, and G3 supplies the executor that makes it real.
+ * Kept for tests that still assert the G2 closed-executor shape. Production
+ * wires `createGmailDraftExecutor`.
  */
 export class MailDraftExecutionUnavailableError extends Error {
   constructor() {
@@ -38,22 +36,17 @@ export class MailDraftExecutionUnavailableError extends Error {
 }
 
 /**
- * The `mail.draft.create` proposal.
+ * The `mail.draft.create` proposal and G3 executor.
  *
- * Registered, and therefore approvable, because `requestWorkflowActionApproval`
- * resolves every action through the registry — an unregistered kind cannot
- * produce an approval record, a digest, or a decision card. What keeps this
- * slice non-executing is the executor: the default one refuses, so approving
- * lands the approval in `execution_failed` / `failed_safe_to_retry` having
- * touched no provider. G3 injects a real executor and nothing else about the
- * record shape changes.
- *
- * The registry requires `external.write` actions to declare a provider
- * capability, provider-aware idempotency and reconciliation before retry. Those
- * are declared honestly here for the effect this action *names*, even though no
- * scope is granted yet — `draftRequestId` is the idempotency key G3 will send.
+ * Registered so `requestWorkflowActionApproval` can produce a digest and card.
+ * Execution creates one Gmail draft when `action.mail.draft.create` is granted
+ * on the Workspace connection (`gmail.compose` scope). Sending is never called.
  */
 export function createMailDraftCreateDescriptor(
+  /**
+   * Production wires `createGmailDraftExecutor()` from the action registry.
+   * The default refuses so unit tests never touch Google by accident.
+   */
   executeAction: MailDraftExecutor = async () => {
     throw new MailDraftExecutionUnavailableError();
   },
@@ -69,16 +62,10 @@ export function createMailDraftCreateDescriptor(
       requiresApproval: true,
       providerCapabilityId: "google.gmail.drafts.write",
     },
-    // A draft is deletable, so the effect can be compensated.
     reversibility: "compensatable",
     idempotency: "provider_aware",
     reconciliation: "required_before_retry",
 
-    /**
-     * Rewrite the mailbox from the connection rather than trusting what the
-     * workflow carried, so the digest binds the address Gmail would actually
-     * send from. Same reasoning as the task action rewriting the assignee name.
-     */
     async prepareForApproval(context, action) {
       const connection = await context.database
         .doc(`companies/${context.companyId}/connections/${action.connectionId}`)
@@ -93,17 +80,17 @@ export function createMailDraftCreateDescriptor(
     },
 
     /**
-     * Re-proved inside the approval transaction: the mailbox is still connected
-     * and mail is still enabled on it, and every cited source still reads
-     * exactly as it did when the draft was composed.
+     * Mailbox must still be connected; draft-write grant must be active; cited
+     * evidence must be unchanged. Mail *read* is not required to create a draft
+     * from a literal recipient — write grant is.
      */
     async assertRequestPreconditions(context, action) {
       const connectionRef = context.database.doc(
         `companies/${context.companyId}/connections/${action.connectionId}`,
       );
-      const [connection, capability, ...evidence] = await Promise.all([
+      const [connection, draftWrite, ...evidence] = await Promise.all([
         context.transaction.get(connectionRef),
-        context.transaction.get(connectionRef.collection("capabilities").doc("mail")),
+        context.transaction.get(connectionRef.collection("capabilities").doc("mail_draft")),
         ...action.evidence.map((reference) => context.transaction.get(
           context.database.doc(
             `companies/${context.companyId}/contextItems/${reference.contextItemId}`,
@@ -120,12 +107,17 @@ export function createMailDraftCreateDescriptor(
         || String(connectionData.providerAccountId || "") !== action.providerAccountId
       ) throw new Error("The Google Workspace connection for this mailbox is not active");
 
-      const capabilityData = capability.data() || {};
+      const draftWriteData = draftWrite.data() || {};
       if (
-        !capability.exists
-        || capabilityData.capabilityId !== "context.mail.read_scoped"
-        || !["active", "attention"].includes(String(capabilityData.status))
-      ) throw new Error("Mail is not enabled on this connection");
+        !draftWrite.exists
+        || draftWriteData.capabilityId !== "action.mail.draft.create"
+        || !["active", "attention"].includes(String(draftWriteData.status))
+      ) {
+        throw new Error(
+          "Gmail draft creation is not enabled on this connection. "
+          + "Grant “Create Gmail drafts” under Sources first.",
+        );
+      }
 
       action.evidence.forEach((reference, index) => {
         const snapshot = evidence[index];
@@ -147,8 +139,22 @@ export function createMailDraftCreateDescriptor(
     execute: executeAction,
     resultId: (_action, result) => result.draftId,
     resultReference: (_action, result) => ({ kind: "mail_draft", id: result.draftId }),
-    // Nothing has been sent, so a later attempt is always safe.
-    classifyFailure: () => "failed_safe_to_retry",
+    classifyFailure: (error) => {
+      if (
+        error instanceof MailDraftOutcomeUnknownError
+        || (error instanceof Error && error.name === "MailDraftOutcomeUnknownError")
+      ) {
+        return "outcome_unknown";
+      }
+      // Missing grant / validation: safe to fix grant and retry.
+      if (
+        error instanceof MailDraftWriteGrantMissingError
+        || error instanceof MailDraftExecutionUnavailableError
+      ) {
+        return "failed_safe_to_retry";
+      }
+      return "failed_safe_to_retry";
+    },
   };
 }
 

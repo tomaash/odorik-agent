@@ -42,20 +42,40 @@ export const sourceCapabilityIds = [
   "context.document.read",
   "context.mail.read_scoped",
   "context.github.issue.read",
+  // Write grant only: creates Gmail drafts after approval. No observe/sync resources.
+  "action.mail.draft.create",
 ] as const;
 
 export type SourceCapabilityId = typeof sourceCapabilityIds[number];
-export type CapabilityServiceId = "calls" | "calendar" | "drive" | "mail" | "issues";
-export type ResourceType = "phone_line" | "calendar" | "folder" | "label" | "repository";
+export type CapabilityServiceId =
+  | "calls"
+  | "calendar"
+  | "drive"
+  | "mail"
+  | "mail_draft"
+  | "issues";
+export type ResourceType =
+  | "phone_line"
+  | "calendar"
+  | "folder"
+  | "label"
+  | "repository"
+  | "mailbox";
+export type CapabilityDirection = "observe" | "act";
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId;
   serviceId: CapabilityServiceId;
-  direction: "observe";
+  direction: CapabilityDirection;
   resourceType: ResourceType;
   requiredScopes: string[];
   syncMode: "webhook" | "incremental" | "reconcile" | "manual";
-  requiresApproval: false;
+  /**
+   * Observe capabilities never require per-item approval. Act capabilities name
+   * an external effect that is still approval-gated through the action registry
+   * (this flag is informational for catalog UI).
+   */
+  requiresApproval: boolean;
 };
 
 export type CapabilityConfigurationPublicView = {

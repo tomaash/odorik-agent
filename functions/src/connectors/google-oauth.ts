@@ -194,6 +194,24 @@ export async function googleGet<T>(
   return requireGoogleSuccess(label, response, await response.json() as T & GoogleErrorBody);
 }
 
+export async function googlePostJson<T>(
+  label: string,
+  url: URL,
+  accessToken: string,
+  body: unknown,
+): Promise<T> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(60_000),
+  });
+  return requireGoogleSuccess(label, response, await response.json() as T & GoogleErrorBody);
+}
+
 export async function revokeGoogleToken(token: string): Promise<boolean> {
   const response = await fetch("https://oauth2.googleapis.com/revoke", {
     method: "POST",
@@ -430,7 +448,7 @@ export async function completeGoogleWorkspaceAuthorization(input: {
     batch.set(connection.collection("capabilities").doc(descriptor.serviceId), {
       capabilityId,
       serviceId: descriptor.serviceId,
-      direction: "observe",
+      direction: descriptor.direction,
       status: granted ? "active" : "attention",
       grantedScopes: descriptor.requiredScopes.filter((scope) => grantedScopes.includes(scope)),
       requiredScopes: descriptor.requiredScopes,

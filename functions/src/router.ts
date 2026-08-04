@@ -539,7 +539,8 @@ export const appRouter = router({
             "context.calendar.read",
             "context.document.read",
             "context.mail.read_scoped",
-          ])).min(1).max(3),
+            "action.mail.draft.create",
+          ])).min(1).max(4),
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
           returnOrigin: z.string().max(200).optional(),
         }))
@@ -862,6 +863,7 @@ export const appRouter = router({
           "context.calendar.read",
           "context.document.read",
           "context.mail.read_scoped",
+          "action.mail.draft.create",
         ]),
         enabled: z.boolean(),
       }))
@@ -1323,6 +1325,23 @@ export const appRouter = router({
         approvalId: input.approvalId,
         note: input.note,
       })),
+    /**
+     * Reconcile an outcome_unknown mail.draft.create attempt: look up the draft
+     * by Erik's Message-ID marker without creating a second one.
+     */
+    reconcileMailDraft: enabledProcedure
+      .input(z.object({ approvalId: z.string().min(1).max(200) }))
+      .mutation(async ({ ctx, input }) => {
+        const { reconcileMailDraftApproval } = await import("./mail/reconcile-approval.js");
+        return reconcileMailDraftApproval({
+          companyId: ctx.companyId,
+          actorUid: ctx.uid,
+          approvalId: input.approvalId,
+          clientId: googleConnectorClientId.value(),
+          clientSecret: googleConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        });
+      }),
   }),
 
   pipeline: router({

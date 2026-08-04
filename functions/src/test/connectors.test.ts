@@ -206,6 +206,7 @@ test("source public views retain operational state and exclude credentials", asy
           "context.calendar.read",
           "context.document.read",
           "context.mail.read_scoped",
+          "action.mail.draft.create",
         ],
       },
       {
@@ -792,6 +793,10 @@ test("scoped mail planning reuses the generic Workspace grant machinery", () => 
     ["openid", "email", "https://www.googleapis.com/auth/gmail.readonly"],
   );
   assert.deepEqual(
+    scopesForCapabilities(["action.mail.draft.create"]),
+    ["openid", "email", "https://www.googleapis.com/auth/gmail.compose"],
+  );
+  assert.deepEqual(
     scopesForCapabilities([
       "context.calendar.read",
       "context.document.read",
@@ -827,6 +832,21 @@ test("scoped mail planning reuses the generic Workspace grant machinery", () => 
   assert.equal(mail.serviceId, "mail");
   assert.equal(mail.resourceType, "label");
   assert.equal(mail.direction, "observe");
+  const draftWrite = capabilityDescriptor("action.mail.draft.create");
+  assert.equal(draftWrite.serviceId, "mail_draft");
+  assert.equal(draftWrite.direction, "act");
+  assert.equal(draftWrite.requiresApproval, true);
+  assert.deepEqual(draftWrite.requiredScopes, [
+    "https://www.googleapis.com/auth/gmail.compose",
+  ]);
+  // Read and write grants are independent: compose without readonly enables only write.
+  assert.deepEqual(capabilityGrantState(
+    ["context.mail.read_scoped", "action.mail.draft.create"],
+    ["openid", "email", "https://www.googleapis.com/auth/gmail.compose"],
+  ), {
+    enabledCapabilityIds: ["action.mail.draft.create"],
+    missingCapabilityIds: ["context.mail.read_scoped"],
+  });
   assert.equal(mail.requiresApproval, false);
 });
 
@@ -882,26 +902,30 @@ test("reconnecting re-requests every service still enabled on the connection", a
   assert.equal(new URL(authorizationUrl).searchParams.get("login_hint"), "owner@example.com");
 });
 
-test("the Workspace catalog offers every capability with a complete observe loop", () => {
-  // Invariant 10 gates a capability on its operating loop. For an observe capability
-  // that loop is select, ingest, cite — not the G2/G3 external-write loop, which would
-  // be circular: the loop cannot be exercised without the configuration UI that shows
-  // it. Mail is listed because its adapter, cursor recovery, and failure behavior exist.
+test("the Workspace catalog offers observe services and the G3 draft-write grant", () => {
+  // Observe capabilities need select/ingest/cite. The draft-write grant is an act
+  // capability: no resources to select, only OAuth + approval-gated execution.
   const workspace = connectorCatalog().find((entry) => entry.id === "google_workspace");
   assert.ok(workspace);
   assert.deepEqual(
     workspace.capabilities.map((capability) => capability.id),
-    ["context.calendar.read", "context.document.read", "context.mail.read_scoped"],
+    [
+      "context.calendar.read",
+      "context.document.read",
+      "context.mail.read_scoped",
+      "action.mail.draft.create",
+    ],
   );
-  // Grantable is deliberately wider than offered: the OAuth callback validates against
-  // this set, so mail must be accepted in authorization state even while the card does
-  // not offer it. Before G1 that validation was a hand-maintained literal of two IDs,
-  // which silently dropped any third capability.
   assert.deepEqual([...googleWorkspaceCapabilityIds], [
     "context.calendar.read",
     "context.document.read",
     "context.mail.read_scoped",
+    "action.mail.draft.create",
   ]);
+  const draftWrite = workspace.capabilities.find(
+    (capability) => capability.id === "action.mail.draft.create",
+  );
+  assert.equal(draftWrite?.direction, "act");
 });
 
 test("Workspace capability lifecycle is isolated from the account and sibling service", async () => {
