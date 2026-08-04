@@ -204,9 +204,11 @@ function extractCitationInfo(record: CompanyRecord): {
 
   // Keep adapter/url/route in lockstep with index metadata (extractRecordMetadata).
   const presentation = extractRecordMetadata(record);
-  let adapterId = presentation.adapterId || undefined;
-  let externalUrl = presentation.externalUrl || undefined;
-  const internalRoute = presentation.internalRoute || undefined;
+  let adapterId = typeof presentation.adapterId === "string" ? presentation.adapterId : undefined;
+  let externalUrl = typeof presentation.externalUrl === "string" ? presentation.externalUrl : undefined;
+  const internalRoute = typeof presentation.internalRoute === "string"
+    ? presentation.internalRoute
+    : undefined;
 
   if (!externalUrl && artifactRefs?.[0] && typeof artifactRefs[0] === "string" && artifactRefs[0].startsWith("http")) {
     externalUrl = artifactRefs[0];
