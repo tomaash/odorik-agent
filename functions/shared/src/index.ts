@@ -69,7 +69,34 @@ export type MoveCaseBlock = {
   approval: RequiredApproval;
 };
 
-export type ActionBlock = CreateTaskBlock | CreateCaseBlock | MoveCaseBlock;
+// Where the draft is addressed. A literal address is authored into the block and
+// always resolves; a contact address is only known once someone has recorded one
+// against the caller, so it fails closed rather than guessing.
+export type MailRecipientSource =
+  | { kind: "literal"; email: string }
+  | { kind: "contact" };
+
+export type MailDraftRecipe = {
+  connectionId: string;
+  recipient: MailRecipientSource;
+  // Rendered with the same token substitution as a task title. Deliberately not
+  // model-generated: the block language admits typed, executable recipes only.
+  subject: string;
+  body: string;
+};
+
+export type MailDraftCreateBlock = {
+  id: string;
+  kind: "action.mail.draft.create";
+  mail: MailDraftRecipe;
+  approval: RequiredApproval;
+};
+
+export type ActionBlock =
+  | CreateTaskBlock
+  | CreateCaseBlock
+  | MoveCaseBlock
+  | MailDraftCreateBlock;
 
 export type ConditionField =
   | "call.durationSeconds"
@@ -151,6 +178,17 @@ export type CallTaskContext = {
   callerHasContact?: boolean;
   transcriptText?: string | null;
   cases?: CaseContext[];
+  // Resolved by the caller (see resolveCall) so that preview stays pure and a
+  // history dry run reports the same skips a real run would produce.
+  contactEmail?: string | null;
+  mailConnections?: MailConnectionContext[];
+};
+
+export type MailConnectionContext = {
+  connectionId: string;
+  address: string;
+  providerAccountId: string;
+  active: boolean;
 };
 
 export type CaseContext = {
@@ -208,13 +246,34 @@ export type MoveCasePreview = {
   context: CallTaskContext;
 };
 
-export type ActionPreview = TaskRecipePreview | CreateCasePreview | MoveCasePreview;
+export type MailDraftPreview = {
+  kind: "mail.draft.create";
+  blockId: string;
+  connectionId: string;
+  mailboxAddress: string;
+  providerAccountId: string;
+  to: string[];
+  subject: string;
+  body: string;
+  approverUid: string;
+  approverName: string;
+  context: CallTaskContext;
+};
+
+export type ActionPreview =
+  | TaskRecipePreview
+  | CreateCasePreview
+  | MoveCasePreview
+  | MailDraftPreview;
 
 export type ActionSkipReason =
   | "contact_required"
   | "no_matching_case"
   | "ambiguous_case"
-  | "target_unavailable";
+  | "target_unavailable"
+  | "recipient_missing"
+  | "mailbox_unavailable"
+  | "insufficient_context";
 
 export type ActionSkip = {
   blockId: string;
@@ -315,6 +374,32 @@ export function createMoveCaseBlock(input: {
       fromStageName: input.fromStageName,
       toStageId: input.toStageId,
       toStageName: input.toStageName,
+    },
+    approval: {
+      kind: "required",
+      approverUid: input.approverUid,
+      approverName: input.approverName,
+    },
+  };
+}
+
+export function createMailDraftBlock(input: {
+  approverUid: string;
+  approverName: string;
+  connectionId: string;
+  recipient?: MailRecipientSource;
+  id?: string;
+  subject?: string;
+  body?: string;
+}): MailDraftCreateBlock {
+  return {
+    id: input.id || nextBlockId("mail_draft"),
+    kind: "action.mail.draft.create",
+    mail: {
+      connectionId: input.connectionId,
+      recipient: input.recipient || { kind: "contact" },
+      subject: input.subject || "Following up on your call",
+      body: input.body || "Hello {caller.name},\n\n{call.summary}\n",
     },
     approval: {
       kind: "required",
@@ -691,6 +776,67 @@ function validateMoveCaseRecipe(
   }
 }
 
+// Deliberately conservative: one address, no display names, no comma lists. A
+// draft that could reach more than one person is a different, larger effect.
+const emailPattern = /^[^\s@,<>]+@[^\s@,<>]+\.[^\s@,<>]+$/;
+
+function validateMailDraftRecipe(
+  recipe: Partial<MailDraftRecipe> | undefined,
+  path: string,
+  errors: SpecIssue[],
+  holes: SpecIssue[],
+) {
+  if (!recipe || typeof recipe !== "object") {
+    errors.push(issue("mail_draft.invalid", path, "Draft settings are required."));
+    return;
+  }
+  if (typeof recipe.connectionId !== "string" || !recipe.connectionId.trim()) {
+    holes.push(issue(
+      "mail_draft.connection_empty",
+      `${path}.connectionId`,
+      "Choose the mailbox this draft is written from.",
+    ));
+  }
+  const recipient = recipe.recipient;
+  if (!recipient || typeof recipient !== "object") {
+    holes.push(issue("mail_draft.recipient_empty", `${path}.recipient`, "Choose a recipient."));
+  } else if (recipient.kind === "literal") {
+    if (typeof recipient.email !== "string" || !recipient.email.trim()) {
+      holes.push(issue(
+        "mail_draft.recipient_email_empty",
+        `${path}.recipient.email`,
+        "Enter the recipient address.",
+      ));
+    } else if (!emailPattern.test(recipient.email.trim()) || recipient.email.trim().length > 320) {
+      errors.push(issue(
+        "mail_draft.recipient_email_invalid",
+        `${path}.recipient.email`,
+        "Enter one valid email address.",
+      ));
+    }
+  } else if (recipient.kind !== "contact") {
+    errors.push(issue(
+      "mail_draft.recipient_unsupported",
+      `${path}.recipient.kind`,
+      "This recipient type is not supported.",
+    ));
+  }
+  if (typeof recipe.subject !== "string" || !recipe.subject.trim()) {
+    holes.push(issue("mail_draft.subject_empty", `${path}.subject`, "Subject is required."));
+  } else if (recipe.subject.trim().length > 500) {
+    errors.push(issue("mail_draft.subject_long", `${path}.subject`, "Subject is too long."));
+  }
+  if (typeof recipe.body !== "string" || !recipe.body.trim()) {
+    holes.push(issue("mail_draft.body_empty", `${path}.body`, "Message is required."));
+  } else if (recipe.body.length > 50_000) {
+    errors.push(issue(
+      "mail_draft.body_long",
+      `${path}.body`,
+      "Message must be at most 50,000 characters.",
+    ));
+  }
+}
+
 function validateActionBlock(
   block: unknown,
   path: string,
@@ -722,6 +868,11 @@ function validateActionBlock(
   }
   if (candidate.kind === "action.case.move") {
     validateMoveCaseRecipe(candidate.case, `${path}.case`, errors, holes);
+    validateApproval(candidate.approval, `${path}.approval`, errors, holes);
+    return;
+  }
+  if (candidate.kind === "action.mail.draft.create") {
+    validateMailDraftRecipe(candidate.mail, `${path}.mail`, errors, holes);
     validateApproval(candidate.approval, `${path}.approval`, errors, holes);
     return;
   }
@@ -809,13 +960,16 @@ export function validateWorkflow(untrusted: unknown): ValidationResult {
       block.kind === "action.task.create"
       || block.kind === "action.case.create"
       || block.kind === "action.case.move"
+      || block.kind === "action.mail.draft.create"
     ) {
       if (block.kind === "action.task.create") {
         validateTask(block.task, `${path}.task`, errors, holes);
       } else if (block.kind === "action.case.create") {
         validateCaseRecipe(block.case, `${path}.case`, errors, holes);
-      } else {
+      } else if (block.kind === "action.case.move") {
         validateMoveCaseRecipe(block.case, `${path}.case`, errors, holes);
+      } else {
+        validateMailDraftRecipe(block.mail, `${path}.mail`, errors, holes);
       }
       validateApproval(block.approval, `${path}.approval`, errors, holes);
       return;
@@ -866,6 +1020,11 @@ function tokenValue(token: string, context: CallTaskContext): string {
   if (token === "caller.phone") {
     return context.callerPhone?.trim() || context.callerName?.trim() || "unknown caller";
   }
+  // Evidence tokens have no invented fallback. An absent summary renders as
+  // nothing, so a message built only from evidence collapses to empty and is
+  // skipped as `insufficient_context` rather than proposed half-written.
+  if (token === "call.summary") return context.callSummary?.trim() || "";
+  if (token === "call.transcriptExcerpt") return context.transcriptExcerpt?.trim() || "";
   return `{${token}}`;
 }
 
@@ -965,6 +1124,49 @@ function compactContext(context: CallTaskContext): CallTaskContext {
   };
 }
 
+function previewMailDraftBlock(
+  block: MailDraftCreateBlock,
+  context: CallTaskContext,
+): { action?: ActionPreview; skipped?: ActionSkip } {
+  const skip = (reason: ActionSkipReason): { skipped: ActionSkip } => ({
+    skipped: { blockId: block.id, kind: block.kind, reason, matches: 0 },
+  });
+
+  // The mailbox is proven before the recipient so an operator sees the cause
+  // they can actually fix first: a disconnected account, not a missing address.
+  const mailbox = (context.mailConnections || []).find(
+    (candidate) => candidate.connectionId === block.mail.connectionId,
+  );
+  if (!mailbox || !mailbox.active) return skip("mailbox_unavailable");
+
+  const recipient = block.mail.recipient.kind === "literal"
+    ? block.mail.recipient.email.trim().toLocaleLowerCase()
+    : (context.contactEmail || "").trim().toLocaleLowerCase();
+  if (!recipient) return skip("recipient_missing");
+
+  const subject = renderTaskText(block.mail.subject, context).trim();
+  const body = renderTaskText(block.mail.body, context).trim();
+  // A template whose evidence tokens all resolved to nothing would propose an
+  // empty message. Refuse rather than send a shell of an email for approval.
+  if (!subject || !body) return skip("insufficient_context");
+
+  return {
+    action: {
+      kind: "mail.draft.create",
+      blockId: block.id,
+      connectionId: block.mail.connectionId,
+      mailboxAddress: mailbox.address,
+      providerAccountId: mailbox.providerAccountId,
+      to: [recipient],
+      subject,
+      body,
+      approverUid: block.approval.approverUid,
+      approverName: block.approval.approverName,
+      context: compactContext(context),
+    },
+  };
+}
+
 function previewActionBlock(
   block: ActionBlock,
   context: CallTaskContext,
@@ -1005,6 +1207,11 @@ function previewActionBlock(
       };
     }
     return { action: previewTaskBlock(block, context, now, matches[0]!) };
+  }
+  // Mail is resolved before the contact gate below: a draft addressed to a
+  // literal address is a complete instruction without a resolved caller.
+  if (block.kind === "action.mail.draft.create") {
+    return previewMailDraftBlock(block, context);
   }
   if (!context.callerHasContact) {
     return {

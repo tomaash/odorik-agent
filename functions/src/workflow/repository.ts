@@ -42,8 +42,9 @@ async function validateActionReferences(
 ) {
   const blocks = actionBlocks(spec);
   const needsPipeline = blocks.some((block) => (
-    block.kind !== "action.task.create"
-    || block.task.subject?.kind === "matching_case"
+    block.kind === "action.case.create"
+    || block.kind === "action.case.move"
+    || (block.kind === "action.task.create" && block.task.subject?.kind === "matching_case")
   ));
   const pipeline = needsPipeline ? await getPipeline(companyId) : null;
   const stages = new Map(pipeline?.stages.map((stage) => [stage.id, stage]));
@@ -68,6 +69,28 @@ async function validateActionReferences(
           });
         }
         if (refreshNames) block.task.subject.stageName = stage.name;
+      }
+      return;
+    }
+    if (block.kind === "action.mail.draft.create") {
+      // The mailbox must be a Google Workspace connection with mail enabled.
+      // Proved again inside the approval transaction; checked here so an
+      // operator cannot turn on a workflow that could never draft anything.
+      const connection = await db
+        .doc(companyDocumentPath(companyId, "connections", block.mail.connectionId))
+        .get();
+      const capability = await connection.ref.collection("capabilities").doc("mail").get();
+      if (
+        !connection.exists
+        || connection.data()?.connectorId !== "google_workspace"
+        || connection.data()?.status === "disconnected"
+        || !capability.exists
+        || capability.data()?.status === "disabled"
+      ) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Choose a connected Google Workspace mailbox with mail turned on.",
+        });
       }
       return;
     }
@@ -383,6 +406,7 @@ export async function enableWorkflow(input: {
             "case.create",
             "case.move_exact",
             "condition.evaluate",
+            "mail.draft.create",
           ],
         },
         createdAt: now,

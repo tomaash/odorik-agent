@@ -7,14 +7,19 @@ import Card from 'primevue/card'
 import Message from 'primevue/message'
 import ProgressSpinner from 'primevue/progressspinner'
 import Tag from 'primevue/tag'
+import InputText from 'primevue/inputtext'
 import { useContactsStore } from '../stores/contacts'
-import { getPipeline, type Pipeline } from '../api/client'
+import { getPipeline, updateContact, type Pipeline } from '../api/client'
 
 const route = useRoute()
 const router = useRouter()
 const { t, locale } = useI18n()
 const store = useContactsStore()
 const pipeline = ref<Pipeline | null>(null)
+const editingEmail = ref(false)
+const emailDraft = ref('')
+const emailSaving = ref(false)
+const emailError = ref('')
 const details = computed(() => store.current)
 const calls = computed(() => [...(details.value?.calls || [])].sort((a, b) => {
   const aTime = new Date(String(a.odorikTime || a.uploadedAt || 0)).getTime()
@@ -26,6 +31,31 @@ const tasks = computed(() => [...(details.value?.tasks || [])].sort((a, b) => {
   if (b.status === 'open' && a.status !== 'open') return 1
   return new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()
 }))
+
+function startEmailEdit() {
+  emailDraft.value = store.current?.contact.email || ''
+  emailError.value = ''
+  editingEmail.value = true
+}
+
+// A contact's address is the only way a workflow can address a draft to the
+// person who called, so it is edited here rather than inferred anywhere.
+async function saveEmail() {
+  const contactId = store.current?.contact.id
+  if (!contactId) return
+  emailSaving.value = true
+  emailError.value = ''
+  try {
+    const next = emailDraft.value.trim()
+    await updateContact(contactId, next ? next : null)
+    await store.load(contactId)
+    editingEmail.value = false
+  } catch (error) {
+    emailError.value = error instanceof Error ? error.message : String(error)
+  } finally {
+    emailSaving.value = false
+  }
+}
 
 function formatDate(value?: string | null) {
   if (!value) return '—'
@@ -73,7 +103,35 @@ void Promise.all([
           <div class="eyebrow mb-1">{{ t('contacts.customer') }}</div>
           <h1 class="text-2xl sm:text-3xl font-semibold tracking-[-.03em] leading-tight m-0 break-words">{{ details.contact.displayName || t('contacts.unknown') }}</h1>
           <p class="text-surface-500 mt-2 mb-0 break-all">{{ details.contact.phoneE164 || details.contact.phoneRaw || '—' }}</p>
-          <p v-if="details.contact.email" class="text-surface-500 mt-1 mb-0 break-all">{{ details.contact.email }}</p>
+          <div v-if="!editingEmail" class="flex items-center gap-2 mt-1">
+            <p class="text-surface-500 m-0 break-all">{{ details.contact.email || t('contacts.noEmail') }}</p>
+            <Button
+              :label="details.contact.email ? t('contacts.changeEmail') : t('contacts.addEmail')"
+              severity="secondary"
+              text
+              size="small"
+              @click="startEmailEdit"
+            />
+          </div>
+          <form v-else class="flex flex-wrap items-center gap-2 mt-2" @submit.prevent="saveEmail">
+            <InputText
+              v-model="emailDraft"
+              type="email"
+              :placeholder="t('contacts.emailPlaceholder')"
+              class="w-64 max-w-full"
+              autofocus
+            />
+            <Button type="submit" :label="t('common.save')" size="small" :loading="emailSaving" />
+            <Button
+              type="button"
+              :label="t('common.cancel')"
+              severity="secondary"
+              text
+              size="small"
+              @click="editingEmail = false"
+            />
+          </form>
+          <p v-if="emailError" class="text-xs text-rose-700 mt-1 mb-0">{{ emailError }}</p>
         </div>
       </div>
 

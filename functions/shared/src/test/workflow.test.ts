@@ -4,6 +4,7 @@ import {
   createCallTaskWorkflow,
   createCaseBlock,
   createIfBlock,
+  createMailDraftBlock,
   createMoveCaseBlock,
   createTaskBlock,
   normalizeWorkflowSpec,
@@ -418,4 +419,133 @@ test("schema 3 blocks inherit the assignee as their required approver", () => {
     });
   }
   assert.equal(validateWorkflow(upgraded).valid, true);
+});
+
+const mailbox = {
+  connectionId: "google_1",
+  address: "ops@acme.cz",
+  providerAccountId: "google-sub-1",
+  active: true,
+};
+
+function mailSpec(overrides: Parameters<typeof createMailDraftBlock>[0]) {
+  const spec = createCallTaskWorkflow({ assigneeUid: "user-1", assigneeName: "Tomáš" });
+  spec.blocks = [createMailDraftBlock(overrides)];
+  return spec;
+}
+
+test("a draft to a literal address needs no resolved contact", () => {
+  const spec = mailSpec({
+    approverUid: "user-1",
+    approverName: "Tomáš",
+    connectionId: "google_1",
+    recipient: { kind: "literal", email: "Ops@Acme.cz" },
+  });
+  assert.deepEqual(validateWorkflow(spec), { valid: true, errors: [], holes: [] });
+
+  // Every other non-task block skips without a contact; a literal recipient is
+  // a complete instruction on its own and must not.
+  const preview = previewWorkflow(spec, {
+    callerHasContact: false,
+    callSummary: "Asked for a quote.",
+    mailConnections: [mailbox],
+  });
+  assert.deepEqual(preview.skippedActions, []);
+  assert.equal(preview.actions.length, 1);
+  const action = preview.actions[0]!;
+  assert.equal(action.kind, "mail.draft.create");
+  if (action.kind !== "mail.draft.create") return;
+  assert.deepEqual(action.to, ["ops@acme.cz"]);
+  assert.equal(action.mailboxAddress, "ops@acme.cz");
+  assert.equal(action.approverUid, "user-1");
+});
+
+test("a draft fails closed on recipient, mailbox and evidence", () => {
+  const contactSpec = mailSpec({
+    approverUid: "user-1",
+    approverName: "Tomáš",
+    connectionId: "google_1",
+    recipient: { kind: "contact" },
+  });
+  const blockId = contactSpec.blocks[0]!.id;
+
+  const noEmail = previewWorkflow(contactSpec, {
+    callerHasContact: true,
+    callSummary: "Asked for a quote.",
+    contactEmail: null,
+    mailConnections: [mailbox],
+  });
+  assert.deepEqual(noEmail.skippedActions, [{
+    blockId,
+    kind: "action.mail.draft.create",
+    reason: "recipient_missing",
+    matches: 0,
+  }]);
+
+  const noMailbox = previewWorkflow(contactSpec, {
+    callerHasContact: true,
+    callSummary: "Asked for a quote.",
+    contactEmail: "buyer@acme.cz",
+    mailConnections: [{ ...mailbox, active: false }],
+  });
+  assert.deepEqual(noMailbox.skippedActions.map((item) => item.reason), ["mailbox_unavailable"]);
+
+  // The body template resolves entirely from call evidence, so a call with no
+  // summary leaves nothing to say.
+  const empty = previewWorkflow(mailSpec({
+    approverUid: "user-1",
+    approverName: "Tomáš",
+    connectionId: "google_1",
+    recipient: { kind: "literal", email: "ops@acme.cz" },
+    body: "{call.summary}",
+  }), {
+    callerHasContact: true,
+    callSummary: null,
+    mailConnections: [mailbox],
+  });
+  assert.deepEqual(empty.skippedActions.map((item) => item.reason), ["insufficient_context"]);
+});
+
+test("a draft block is rejected without an approver, a mailbox or a valid address", () => {
+  const spec = mailSpec({
+    approverUid: "user-1",
+    approverName: "Tomáš",
+    connectionId: "",
+    recipient: { kind: "literal", email: "not-an-address" },
+  });
+  const block = spec.blocks[0]!;
+  if (block.kind !== "action.mail.draft.create") return;
+  block.approval.approverUid = "";
+
+  const validation = validateWorkflow(spec);
+  assert.equal(validation.valid, false);
+  const paths = [...validation.errors, ...validation.holes].map((entry) => entry.path);
+  assert.ok(paths.includes("blocks[0].approval.approverUid"));
+  assert.ok(paths.includes("blocks[0].mail.connectionId"));
+  assert.ok(paths.includes("blocks[0].mail.recipient.email"));
+});
+
+test("a draft block is validated the same way inside an if branch", () => {
+  const spec = createCallTaskWorkflow({ assigneeUid: "user-1", assigneeName: "Tomáš" });
+  const branchBlock = createMailDraftBlock({
+    approverUid: "user-1",
+    approverName: "Tomáš",
+    connectionId: "google_1",
+    recipient: { kind: "literal", email: "broken" },
+  });
+  spec.blocks = [{
+    id: "if_1",
+    kind: "control.if",
+    condition: { field: "call.durationSeconds", operator: "gt", value: 30 },
+    then: [branchBlock],
+    else: [],
+  }];
+
+  // The validator has two dispatches; a kind wired into only one would pass at
+  // the top level and be rejected here, or the reverse.
+  const validation = validateWorkflow(spec);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.errors.some((entry) => (
+    entry.path === "blocks[0].then[0].mail.recipient.email"
+  )));
 });

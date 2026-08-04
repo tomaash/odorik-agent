@@ -113,8 +113,18 @@ test("production action registry is closed, approval-only, and digest compatible
         idempotency: "provider_aware",
         reconciliation: "required_before_retry",
       },
+      {
+        kind: "mail.draft.create",
+        capabilityId: "action.mail.draft.create",
+        category: "external.write",
+        approval: true,
+        idempotency: "provider_aware",
+        reconciliation: "required_before_retry",
+      },
     ],
   );
+  // Drafting is registered; sending is not, and adding a draft action must not
+  // quietly widen the registry into one that can send mail.
   assert.throws(
     () => actionRegistry.resolve({ kind: "mail.send", recipient: "x@example.com" }),
     /Unregistered action kind/,

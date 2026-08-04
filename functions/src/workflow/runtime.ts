@@ -13,7 +13,7 @@ import { normalizePhone } from "../phone.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { requestWorkflowActionApproval } from "../approvals/repository.js";
 import { getPipeline } from "../pipeline/repository.js";
-import type { WorkflowAction } from "../actions/contracts.js";
+import { actionEffectDigest, type WorkflowAction } from "../actions/contracts.js";
 import { enabledWorkflows, workflowVersion } from "./repository.js";
 import {
   canMemberAccessSourceData,
@@ -44,6 +44,7 @@ type ResolvedCall = {
     displayName?: string;
     phoneE164?: string;
     phoneRaw?: string;
+    email?: string | null;
   } | null;
   context: CallTaskContext;
 };
@@ -52,7 +53,50 @@ function deterministicId(prefix: string, value: string): string {
   return `${prefix}_${createHash("sha256").update(value).digest("hex").slice(0, 28)}`;
 }
 
-async function resolveCall(companyId: string, callId: string): Promise<ResolvedCall> {
+/**
+ * Mailbox health, read once per run and handed to the pure preview.
+ *
+ * Doing this here rather than at approval time is what lets a history dry run
+ * report `mailbox_unavailable` instead of silently proposing a draft that would
+ * fail later. It reads the plaintext capability doc only — never
+ * `authorizedGoogleCapability`, which refreshes tokens and writes.
+ */
+async function resolveMailConnections(companyId: string) {
+  const connections = await db
+    .collection(companyCollectionPath(companyId, "connections"))
+    .where("connectorId", "==", "google_workspace")
+    .limit(25)
+    .get();
+  return Promise.all(connections.docs.map(async (connection) => {
+    const capability = await connection.ref.collection("capabilities").doc("mail").get();
+    return {
+      connectionId: connection.id,
+      address: String(connection.data().accountLabel || ""),
+      providerAccountId: String(connection.data().providerAccountId || ""),
+      active: ["active", "attention"].includes(String(connection.data().status))
+        && capability.exists
+        && capability.data()?.status === "active",
+    };
+  }));
+}
+
+/** Does this spec contain a block that needs to know about mailboxes? */
+function usesMailboxes(spec: WorkflowSpec): boolean {
+  return spec.blocks.some((block) => (
+    block.kind === "action.mail.draft.create"
+    || (block.kind === "control.if" && [...block.then, ...block.else].some(
+      (nested) => nested.kind === "action.mail.draft.create",
+    ))
+  ));
+}
+
+async function resolveCall(
+  companyId: string,
+  callId: string,
+  // Reading mailbox health costs a query plus a read per connection, and most
+  // workflows never draft. Only the specs that need it pay for it.
+  options: { mailboxes?: boolean } = {},
+): Promise<ResolvedCall> {
   const callSnapshot = await db.doc(companyDocumentPath(companyId, "calls", callId)).get();
   if (!callSnapshot.exists) throw new Error(`Call ${callId} not found.`);
   const call = callSnapshot.data() as CallRecord;
@@ -78,6 +122,7 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
           displayName?: string;
           phoneE164?: string;
           phoneRaw?: string;
+          email?: string | null;
         }),
       }
     : null;
@@ -93,15 +138,20 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
       .filter((text): text is string => Boolean(text))
       .join("\n")
     || null;
-  const [pipeline, relatedCases] = contact
-    ? await Promise.all([
-        getPipeline(companyId),
-        db.collection(companyCollectionPath(companyId, "cases"))
-          .where("contactId", "==", contact.id)
-          .limit(50)
-          .get(),
-      ])
-    : [null, null];
+  const [[pipeline, relatedCases], mailConnections] = await Promise.all([
+    contact
+      ? Promise.all([
+          getPipeline(companyId),
+          db.collection(companyCollectionPath(companyId, "cases"))
+            .where("contactId", "==", contact.id)
+            .limit(50)
+            .get(),
+        ])
+      : Promise.resolve([null, null] as const),
+    options.mailboxes === true
+      ? resolveMailConnections(companyId)
+      : Promise.resolve([]),
+  ]);
   const stageNames = new Map(pipeline?.stages.map((stage) => [stage.id, stage.name]));
   return {
     callId,
@@ -117,6 +167,8 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
         : null,
       callerHasContact: Boolean(contact),
       transcriptText,
+      contactEmail: contact?.email?.trim() || null,
+      mailConnections,
       cases: relatedCases?.docs
         .filter((document) => document.data().archived !== true)
         .map((document) => ({
@@ -129,6 +181,66 @@ async function resolveCall(companyId: string, callId: string): Promise<ResolvedC
         })) || [],
     },
   };
+}
+
+// Kept as lookups rather than growing ternary chains: every action kind has to
+// appear in all three, and a map makes a missing one obvious.
+const objectPrefixes = {
+  "task.create": "task",
+  "case.create": "case",
+  "case.move": "movement",
+  "mail.draft.create": "maildraft",
+} as const satisfies Record<ActionPreview["kind"], string>;
+
+const blockKindForAction = {
+  "task.create": "action.task.create",
+  "case.create": "action.case.create",
+  "case.move": "action.case.move",
+  "mail.draft.create": "action.mail.draft.create",
+} as const satisfies Record<ActionPreview["kind"], ActionSkip["kind"]>;
+
+function previewTitle(preview: ActionPreview): string {
+  if (preview.kind === "case.move") {
+    return `${preview.caseTitle}: ${preview.fromStageName} → ${preview.toStageName}`;
+  }
+  if (preview.kind === "mail.draft.create") return preview.subject;
+  return preview.title;
+}
+
+/**
+ * Turn previewed actions into the exact payloads that would be approved.
+ *
+ * Both a real run and a history dry run go through here, which is what makes
+ * "the preview shows what would actually be proposed" true rather than merely
+ * intended — the previous dry run reported raw previews and never built a
+ * payload at all. The deterministic ids fold in the workflow version, so a dry
+ * run over an unsaved draft (version 0) will not match a saved run's ids; that
+ * is the one honest difference, and it is why the editor labels drafts.
+ */
+export function proposedPayloads(input: {
+  companyId: string;
+  workflow: { id: string; version: number };
+  callId: string;
+  contactId: string | null;
+  actions: ActionPreview[];
+}) {
+  const key = `${input.companyId}:${input.workflow.id}:${input.workflow.version}:${input.callId}`;
+  return input.actions.map((preview) => {
+    const objectId = deterministicId(objectPrefixes[preview.kind], `${key}:${preview.blockId}`);
+    const action = actionPayload({
+      preview,
+      objectId,
+      contactId: input.contactId,
+      callId: input.callId,
+    });
+    return {
+      preview,
+      objectId,
+      approvalId: deterministicId("approval", `${key}:${preview.blockId}`),
+      action,
+      effectDigest: actionEffectDigest(action),
+    };
+  });
 }
 
 function actionPayload(input: {
@@ -152,6 +264,28 @@ function actionPayload(input: {
       caseTitle: input.preview.caseTitle,
       callId: input.callId,
       subject: input.preview.subject,
+      context: input.preview.context,
+    };
+  }
+  // Mail is handled before the contact gate: a draft addressed to a literal
+  // address is complete without a resolved caller.
+  if (input.preview.kind === "mail.draft.create") {
+    return {
+      kind: "mail.draft.create",
+      draftRequestId: input.objectId,
+      connectionId: input.preview.connectionId,
+      mailboxAddress: input.preview.mailboxAddress,
+      providerAccountId: input.preview.providerAccountId,
+      to: input.preview.to,
+      subject: input.preview.subject,
+      body: input.preview.body,
+      // A call-triggered draft starts a new thread. Replying into an existing
+      // Gmail thread needs a mail trigger, which this slice does not add.
+      threadId: null,
+      inReplyToRfc822MessageId: null,
+      evidence: [],
+      contactId: input.contactId,
+      callId: input.callId,
       context: input.preview.context,
     };
   }
@@ -196,7 +330,9 @@ export async function runWorkflowOnCall(input: {
   workflow: { id: string; name: string; version: number; spec: WorkflowSpec };
   now?: Date;
 }) {
-  const resolved = await resolveCall(input.companyId, input.callId);
+  const resolved = await resolveCall(input.companyId, input.callId, {
+    mailboxes: usesMailboxes(input.workflow.spec),
+  });
   const access = normalizeResourceAudience(resolved.call.access);
   const now = input.now || new Date();
   const preview = previewWorkflow(input.workflow.spec, resolved.context, now);
@@ -209,20 +345,14 @@ export async function runWorkflowOnCall(input: {
   }
   const approvalResults = [];
   const runtimeSkips: ActionSkip[] = [...preview.skippedActions];
-  for (const actionPreview of preview.actions) {
-    const objectPrefix = actionPreview.kind === "task.create"
-      ? "task"
-      : actionPreview.kind === "case.create"
-        ? "case"
-        : "movement";
-    const objectId = deterministicId(objectPrefix, `${key}:${actionPreview.blockId}`);
-    const approvalId = deterministicId("approval", `${key}:${actionPreview.blockId}`);
-    const action = actionPayload({
-      preview: actionPreview,
-      objectId,
-      contactId: resolved.contact?.id || null,
-      callId: input.callId,
-    });
+  const proposals = proposedPayloads({
+    companyId: input.companyId,
+    workflow: input.workflow,
+    callId: input.callId,
+    contactId: resolved.contact?.id || null,
+    actions: preview.actions,
+  });
+  for (const { preview: actionPreview, objectId, approvalId, action } of proposals) {
     try {
       const approval = await requestWorkflowActionApproval({
         companyId: input.companyId,
@@ -246,9 +376,7 @@ export async function runWorkflowOnCall(input: {
         actionKind: action.kind,
         resultId: objectId,
         blockId: actionPreview.blockId,
-        title: actionPreview.kind === "case.move"
-          ? `${actionPreview.caseTitle}: ${actionPreview.fromStageName} → ${actionPreview.toStageName}`
-          : actionPreview.title,
+        title: previewTitle(actionPreview),
         approverUid: actionPreview.approverUid,
         approverName: actionPreview.approverName,
         duplicate: approval.duplicate === true,
@@ -262,11 +390,7 @@ export async function runWorkflowOnCall(input: {
       }
       runtimeSkips.push({
         blockId: actionPreview.blockId,
-        kind: action.kind === "task.create"
-          ? "action.task.create"
-          : action.kind === "case.create"
-            ? "action.case.create"
-            : "action.case.move",
+        kind: blockKindForAction[actionPreview.kind],
         reason: "target_unavailable",
         matches: 0,
       });
@@ -348,14 +472,31 @@ export async function dryRunHistory(input: {
   for (const call of calls.docs) {
     if (input.memberUid && !canMemberAccessSourceData(call.data(), input.memberUid)) continue;
     try {
-      const resolved = await resolveCall(input.companyId, call.id);
+      const resolved = await resolveCall(input.companyId, call.id, {
+        mailboxes: usesMailboxes(workflow.spec),
+      });
       const preview = previewWorkflow(workflow.spec, resolved.context);
       const status = preview.actions.length > 0 ? "would_request" : "would_skip";
+      // The proposed payload and its digest, built by the same code the real
+      // run uses, so a preview can be compared against what was approved.
+      const proposals = proposedPayloads({
+        companyId: input.companyId,
+        workflow: { id: workflow.id, version: workflow.version },
+        callId: call.id,
+        contactId: resolved.contact?.id || null,
+        actions: preview.actions,
+      });
       results.push({
         callId: call.id,
         occurredAt: call.data().odorikTime || timestampToIso(call.data().processedAt),
         status,
         actions: preview.actions,
+        proposals: proposals.map((proposal) => ({
+          blockId: proposal.preview.blockId,
+          approvalId: proposal.approvalId,
+          action: proposal.action,
+          effectDigest: proposal.effectDigest,
+        })),
         skippedActions: preview.skippedActions,
         conditions: preview.conditions,
       });

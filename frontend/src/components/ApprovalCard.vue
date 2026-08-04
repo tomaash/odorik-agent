@@ -68,9 +68,9 @@ function severity(status: ActionApprovalItem['status']) {
 }
 
 function title() {
-  return props.approval.action.kind === 'case.move'
-    ? props.approval.action.caseTitle
-    : props.approval.action.title
+  if (props.approval.action.kind === 'case.move') return props.approval.action.caseTitle
+  if (props.approval.action.kind === 'mail.draft.create') return props.approval.action.subject
+  return props.approval.action.title
 }
 
 function actionLabel() {
@@ -84,6 +84,7 @@ function actionLabel() {
   if (props.approval.action.kind === 'task.create') return t('approvals.taskAction')
   if (props.approval.action.kind === 'case.create') return t('approvals.createCaseAction')
   if (props.approval.action.kind === 'case.move') return t('approvals.moveCaseAction')
+  if (props.approval.action.kind === 'mail.draft.create') return t('approvals.mailDraftAction')
   return t('approvals.title')
 }
 
@@ -118,6 +119,12 @@ function effect() {
     from: props.approval.action.fromStageName,
     to: props.approval.action.toStageName,
   })
+  if (props.approval.action.kind === 'mail.draft.create') {
+    return t('approvals.mailDraftFor', {
+      recipient: props.approval.action.to.join(', '),
+      mailbox: props.approval.action.mailboxAddress,
+    })
+  }
   return ''
 }
 
@@ -204,6 +211,12 @@ function confirmReject() {
           }) }}</span>
           <span><i class="pi pi-ban mr-1" />{{ t('approvals.noMergeDeploy') }}</span>
         </template>
+        <template v-if="approval.action.kind === 'mail.draft.create'">
+          <span><i class="pi pi-inbox mr-1" />{{ t('approvals.mailFrom', { mailbox: approval.action.mailboxAddress }) }}</span>
+          <span><i class="pi pi-send mr-1" />{{ t('approvals.mailTo', { recipient: approval.action.to.join(', ') }) }}</span>
+          <span><i class="pi pi-tag mr-1" />{{ approval.action.subject }}</span>
+          <span><i class="pi pi-ban mr-1" />{{ t('approvals.mailNoSend') }}</span>
+        </template>
         <span v-if="approval.action.kind === 'task.create'">{{ taskSubject() }}</span>
         <span v-if="approval.action.kind === 'task.create'">
           <i class="pi pi-calendar mr-1" />{{ approval.action.dueAt ? new Date(approval.action.dueAt).toLocaleDateString() : t('tasks.noDueDate') }}
@@ -219,6 +232,16 @@ function confirmReject() {
         <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('tasks.callContext') }}</summary>
         <p v-if="approval.action.context.callSummary" class="text-sm leading-relaxed mt-2 mb-1">{{ approval.action.context.callSummary }}</p>
         <p v-if="approval.action.context.transcriptExcerpt" class="text-xs leading-relaxed text-surface-500 mt-1 mb-0">“{{ approval.action.context.transcriptExcerpt }}”</p>
+      </details>
+      <details v-if="approval.action.kind === 'mail.draft.create'" class="mt-3" open>
+        <summary class="cursor-pointer text-xs font-medium" style="color: var(--missing)">
+          <i class="pi pi-pencil mr-1" />{{ t('approvals.mailBodyGenerated') }}
+        </summary>
+        <p
+          class="text-sm whitespace-pre-wrap leading-relaxed mt-2 mb-0 rounded-md p-3"
+          style="background: var(--missing-soft)"
+        >{{ approval.action.body }}</p>
+        <p class="text-xs text-surface-500 mt-2 mb-0">{{ t('approvals.mailBodyNotInGmail') }}</p>
       </details>
       <details v-if="approval.action.kind === 'coding.issue.implement'" class="mt-3">
         <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('approvals.issueSnapshot') }}</summary>

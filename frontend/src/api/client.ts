@@ -350,7 +350,7 @@ export type ActionApprovalItem = {
     caseId?: string | null
   } | null
   result?: {
-    kind: 'task' | 'case' | 'case_movement' | 'coding_run'
+    kind: 'task' | 'case' | 'case_movement' | 'coding_run' | 'mail_draft'
     id: string
   } | null
   action: ({
@@ -441,6 +441,20 @@ export type ActionApprovalItem = {
       prBody: string
       existingPullRequestNumber?: number
     }
+  } | {
+    kind: 'mail.draft.create'
+    draftRequestId: string
+    connectionId: string
+    mailboxAddress: string
+    providerAccountId: string
+    to: string[]
+    subject: string
+    body: string
+    threadId?: string | null
+    inReplyToRfc822MessageId?: string | null
+    evidence: Array<{ contextItemId: string; version: string; checksum: string }>
+    contactId?: string | null
+    callId: string
   }) & {
     context?: {
       callerName?: string | null
@@ -817,6 +831,10 @@ export async function listContacts(): Promise<ContactListItem[]> {
 
 export async function getContact(contactId: string): Promise<ContactDetails> {
   return trpc.contacts.get.query({ contactId }) as Promise<ContactDetails>
+}
+
+export async function updateContact(contactId: string, email: string | null) {
+  return trpc.contacts.update.mutate({ contactId, email })
 }
 
 export async function listTasks(input?: {

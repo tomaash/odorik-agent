@@ -2,8 +2,8 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** G2 pending — G1 Gmail read accepted; next is the
-exact non-executing email-draft proposal
+**Current implementation slice:** G3 pending — G2 exact non-executing
+`mail.draft.create` proposal accepted; next is approval-gated Gmail draft creation
 
 **Last plan revision:** 2026-08-04
 
@@ -257,7 +257,7 @@ Every action capability must define:
 | C4 | Make resource audiences and retrieval access explicit | Completed | Accepted in test production |
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Completed | Accepted in test production (dogfood + unit suite) |
-| G2 | Produce an exact, non-executing email-draft proposal | Pending | Proposal is useful without any provider write |
+| G2 | Produce an exact, non-executing email-draft proposal | Completed | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Pending | Core epic acceptance scenario succeeds |
 | M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
 | M2 | Prove `mail.draft.create` through Outlook | Gated | Same workflow needs no provider-specific semantics |
@@ -1815,3 +1815,24 @@ YYYY-MM-DD — Slice
   the proof); push/watch remains deferred; no draft or send scope was added.
 - **Decision:** G1 is accepted. Proceed to G2 (exact non-executing
   `mail.draft.create` proposal only).
+
+### 2026-08-04 — G2 non-executing mail draft proposal
+
+- **Scope:** typed `mail.draft.create` proposal only — registry descriptor,
+  workflow block, history/run parity via `proposedPayloads`, approval card and
+  editor UI, contact email for recipient resolution. No Gmail write scope and
+  no provider write call.
+- **Contract:** `mailDraftCreateActionSchema` is the disclosed effect; digest
+  covers every field that could reach Gmail. Default executor throws
+  `MailDraftExecutionUnavailableError` so approval never reaches Google.
+- **Skip reasons:** `recipient_missing`, `mailbox_unavailable`,
+  `insufficient_context` (plus existing contact/target skips).
+- **Automated:** `mail-draft` suite (descriptor, preconditions, evidence pin,
+  digest sensitivity, preview/run payload identity); shared workflow suite
+  (literal recipient, fail-closed, validation); action-registry includes
+  `mail.draft.create` and still rejects `mail.send`. Scopes remain
+  `gmail.readonly` only.
+- **UI:** workflow mail block, approval card preview of subject/body/to/mailbox,
+  contact email edit so contact-recipient drafts can resolve.
+- **Decision:** G2 is accepted for ship. Proceed to G3 (executor +
+  `action.mail.draft.create` capability grant + reconciliation).

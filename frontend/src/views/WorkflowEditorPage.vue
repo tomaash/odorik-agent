@@ -14,6 +14,7 @@ import {
   cloneWorkflow,
   createCaseBlock,
   createIfBlock,
+  createMailDraftBlock,
   createMoveCaseBlock,
   createTaskBlock,
   validateWorkflow,
@@ -25,12 +26,14 @@ import {
   type WorkflowSpec,
 } from '@agent-erik/workflow'
 import WorkflowCaseBlock from '../components/WorkflowCaseBlock.vue'
+import WorkflowMailBlock from '../components/WorkflowMailBlock.vue'
 import WorkflowTaskBlock from '../components/WorkflowTaskBlock.vue'
 import {
   dryRunWorkflow,
   enableWorkflow,
   getPipeline,
   getTeamOverview,
+  listSources,
   getWorkflow,
   pauseWorkflow,
   saveWorkflow,
@@ -54,6 +57,7 @@ const saving = ref(false)
 const testing = ref(false)
 const error = ref('')
 const preview = ref<DryRunResult | null>(null)
+const mailboxes = ref<Array<{ label: string; value: string }>>([])
 
 const validation = computed(() => validateWorkflow(spec.value))
 const missingTaskSubjects = computed(() => {
@@ -153,11 +157,25 @@ function newMoveCase(): ActionBlock {
   })
 }
 
-function addRootAction(kind: 'task' | 'case.create' | 'case.move') {
+function newMailDraft(): ActionBlock {
+  const approver = defaultAssignee()
+  return createMailDraftBlock({
+    approverUid: approver.uid,
+    approverName: approver.name,
+    connectionId: mailboxes.value[0]?.value || '',
+  })
+}
+
+function addRootAction(kind: 'task' | 'case.create' | 'case.move' | 'mail.draft') {
   if (!spec.value) return
-  spec.value.blocks.push(
-    kind === 'task' ? newTask() : kind === 'case.create' ? newCreateCase() : newMoveCase(),
-  )
+  const block = kind === 'task'
+    ? newTask()
+    : kind === 'case.create'
+      ? newCreateCase()
+      : kind === 'case.move'
+        ? newMoveCase()
+        : newMailDraft()
+  spec.value.blocks.push(block)
 }
 
 function addIf() {
@@ -242,6 +260,7 @@ function conditionSummary(item: NonNullable<DryRunResult['results'][number]['con
 
 function actionTitle(action: NonNullable<DryRunResult['results'][number]['actions']>[number]) {
   if (action.kind === 'case.move') return action.caseTitle
+  if (action.kind === 'mail.draft.create') return action.subject
   return action.title
 }
 
@@ -253,6 +272,9 @@ function actionDetail(action: NonNullable<DryRunResult['results'][number]['actio
     return `${action.assigneeName} · ${subject} · ${formatDate(action.dueAt)}`
   }
   if (action.kind === 'case.create') return `${action.ownerName} · ${action.stageName}`
+  if (action.kind === 'mail.draft.create') {
+    return `${action.mailboxAddress} → ${action.to.join(', ')}`
+  }
   return `${action.fromStageName} → ${action.toStageName}`
 }
 
@@ -264,14 +286,30 @@ async function load() {
   loading.value = true
   error.value = ''
   try {
-    const [details, team, pipelineData] = await Promise.all([
+    const [details, team, pipelineData, sources] = await Promise.all([
       getWorkflow(workflowId),
       getTeamOverview(),
       getPipeline(),
+      listSources(),
     ])
     workflow.value = details
     members.value = team.members
     pipeline.value = pipelineData
+    // Only mailboxes that could actually draft today are offered, so a workflow
+    // cannot be authored against a connection that would always skip.
+    mailboxes.value = sources.connections
+      .filter((connection) => (
+        connection.connectorId === 'google_workspace'
+        && connection.status !== 'disconnected'
+        && connection.capabilities.some((capability) => (
+          capability.capabilityId === 'context.mail.read_scoped'
+          && capability.status === 'active'
+        ))
+      ))
+      .map((connection) => ({
+        label: connection.accountLabel || connection.displayName,
+        value: connection.id,
+      }))
     spec.value = details.draft ? cloneWorkflow(details.draft) : null
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -431,6 +469,18 @@ onMounted(load)
                 @remove="removeRoot(index)"
               />
 
+              <WorkflowMailBlock
+                v-else-if="block.kind === 'action.mail.draft.create'"
+                :block="block"
+                :members="members"
+                :mailboxes="mailboxes"
+                :canMoveUp="index > 0"
+                :canMoveDown="index < spec.blocks.length - 1"
+                @moveUp="moveItem(spec.blocks, index, -1)"
+                @moveDown="moveItem(spec.blocks, index, 1)"
+                @remove="removeRoot(index)"
+              />
+
               <section v-else-if="block.kind === 'control.if'" class="rounded-lg border-2 border-amber-300 bg-amber-50/80 shadow-sm overflow-hidden">
                 <header class="px-3 py-2.5 flex items-center gap-2 border-b border-amber-300 bg-amber-100/60">
                   <span class="w-8 h-8 shrink-0 rounded-md bg-amber-700 text-white flex items-center justify-center"><i class="pi pi-code" /></span>
@@ -580,6 +630,7 @@ onMounted(load)
                 <Button :label="t('workflows.addTaskBlock')" icon="pi pi-check-square" severity="success" outlined @click="addRootAction('task')" />
                 <Button :label="t('workflows.addCaseBlock')" icon="pi pi-folder-plus" severity="success" outlined :disabled="!pipeline" @click="addRootAction('case.create')" />
                 <Button :label="t('workflows.addMoveCaseBlock')" icon="pi pi-arrow-right-arrow-left" severity="success" outlined :disabled="!pipeline || activeStages?.length < 2" @click="addRootAction('case.move')" />
+                <Button :label="t('workflows.addMailDraftBlock')" icon="pi pi-envelope" severity="success" outlined :disabled="!mailboxes.length" @click="addRootAction('mail.draft')" />
                 <Button :label="t('workflows.addIfBlock')" icon="pi pi-code" severity="warn" outlined @click="addIf" />
               </div>
             </section>

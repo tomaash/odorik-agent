@@ -44,6 +44,7 @@ import {
   rejectAction,
 } from "./approvals/repository.js";
 import { encryptCredentials } from "./connectors/credentials.js";
+import { normalizeInvitationEmail } from "./invitation-token.js";
 import {
   createOdorikConnection,
   deleteSourceConnection,
@@ -1502,6 +1503,54 @@ export const appRouter = router({
           cases,
           tasks,
         });
+      }),
+
+    /**
+     * Record an email address against a contact.
+     *
+     * Calls only ever supply a phone number, so this is the sole way an address
+     * reaches a contact — and therefore the only way a workflow can address a
+     * draft to the person who rang. Storing it is not consent to write to it:
+     * every draft still names an approver and stops at a proposal.
+     */
+    update: enabledProcedure
+      .input(z.object({
+        contactId: z.string().min(1).max(200),
+        email: z.string().trim().email().max(320).nullable(),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const ref = db.doc(companyDocumentPath(ctx.companyId, "contacts", input.contactId));
+        const snapshot = await ref.get();
+        if (
+          !snapshot.exists
+          || !canMemberAccessSourceData(snapshot.data() || {}, ctx.uid)
+        ) throw new TRPCError({ code: "NOT_FOUND", message: "Contact not found" });
+
+        const now = Timestamp.now();
+        const email = input.email ? normalizeInvitationEmail(input.email) : null;
+        const previous = snapshot.data()?.email || null;
+        if (email === previous) return jsonSafe({ id: snapshot.id, email });
+
+        await ref.set({
+          email,
+          emailUpdatedBy: ctx.uid,
+          emailUpdatedAt: now,
+          updatedAt: now,
+        }, { merge: true });
+
+        await db.collection(companyCollectionPath(ctx.companyId, "auditEvents")).add({
+          objectType: "audit_event",
+          type: "contact_email_updated",
+          contactId: input.contactId,
+          // The addresses themselves stay on the contact; the trail records that
+          // someone set or cleared one, not a second copy of the value.
+          hadEmail: Boolean(previous),
+          hasEmail: Boolean(email),
+          actorUid: ctx.uid,
+          createdAt: now,
+        });
+
+        return jsonSafe({ id: snapshot.id, email });
       }),
   }),
 

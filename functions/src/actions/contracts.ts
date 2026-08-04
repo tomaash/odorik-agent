@@ -88,10 +88,45 @@ export const caseMoveActionSchema = z.object({
   context: compactContextSchema,
 }).strict();
 
+/**
+ * A cited source the draft was derived from. Version and checksum are pinned so
+ * the approval transaction can prove the evidence has not moved underneath the
+ * proposal, exactly as the coding action pins its issue.
+ */
+export const mailEvidenceReferenceSchema = z.object({
+  contextItemId: z.string().min(1),
+  version: z.string().min(1),
+  checksum: z.string().min(1),
+}).strict();
+
+/**
+ * Every field here can reach Gmail, and `actionEffectDigest` hashes the whole
+ * object — so this schema *is* the disclosed effect. Nothing that would change
+ * what the provider receives may live outside it.
+ */
+export const mailDraftCreateActionSchema = z.object({
+  kind: z.literal("mail.draft.create"),
+  draftRequestId: z.string().min(1),
+  connectionId: z.string().min(1),
+  mailboxAddress: z.string().min(3).max(320),
+  providerAccountId: z.string().min(1),
+  // One recipient. A draft that could reach a list is a different, larger effect.
+  to: z.array(z.string().min(3).max(320)).length(1),
+  subject: z.string().min(1).max(500),
+  body: z.string().min(1).max(50_000),
+  threadId: z.string().nullable(),
+  inReplyToRfc822MessageId: z.string().nullable(),
+  evidence: z.array(mailEvidenceReferenceSchema).max(20),
+  contactId: z.string().nullable(),
+  callId: z.string().min(1),
+  context: compactContextSchema,
+}).strict();
+
 export const workflowActionSchema = z.union([
   taskCreateActionSchema,
   caseCreateActionSchema,
   caseMoveActionSchema,
+  mailDraftCreateActionSchema,
 ]);
 
 export type WorkflowAction = z.infer<typeof workflowActionSchema>;

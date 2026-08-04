@@ -78,8 +78,9 @@ export function projectedCallContactAccess(input: {
 /**
  * Upsert the caller of a completed call as a contact.
  *
- * Only connection facts are written. A `displayName` a person has edited is
- * never overwritten by a later call from the same number.
+ * Only connection facts are written, and the merge below names every field it
+ * touches — so anything a person has edited, a `displayName` or an `email`,
+ * survives a later call from the same number untouched.
  */
 export async function projectCallContact(input: {
   companyId: string;

@@ -3,6 +3,7 @@ import type { WorkflowActionSource } from "./contracts.js";
 import type { ResourceAudience } from "../access.js";
 import { internalActionDescriptors } from "./internal-actions.js";
 import { codingActionDescriptors } from "../coding/action.js";
+import { mailActionDescriptors } from "../mail/action.js";
 
 export type RegisteredAction = {
   kind: string;
@@ -216,5 +217,5 @@ export async function executeRegisteredAction(input: {
 }
 
 export const actionRegistry = createActionRegistry(
-  [...internalActionDescriptors, ...codingActionDescriptors],
+  [...internalActionDescriptors, ...codingActionDescriptors, ...mailActionDescriptors],
 );
