@@ -196,25 +196,21 @@ export function normalizeRfc822MessageId(raw: string): string | null {
 }
 
 /**
- * Build a usable Gmail web link. Google does not publish a stable deep link for
- * API message ids (`#all/{messageId}` does not open the message in current UI).
- * Prefer the supported `rfc822msgid:` search; fall back to the classic hash path
- * with the **thread** id (best-effort on older UI).
+ * Gmail has no reliable public deep link for a specific message.
+ *
+ * - `#all/{apiMessageId}` does not open the current Gmail UI.
+ * - `#search/rfc822msgid:…` often fails for real Message-IDs: Gmail treats `-` as a
+ *   token separator in search (UUID-style ids like `9d57e3eb-af74-…@host` degrade to
+ *   unrelated results), and `/u/0` may not be the connected mailbox.
+ *
+ * We still store `rfc822MessageId` for identity/debug; do not emit an Open URL.
  */
-export function mailMessageSourceUrl(input: {
+export function mailMessageSourceUrl(_input: {
   rfc822MessageId?: string | null;
   threadId?: string | null;
   messageId?: string | null;
 }): string | null {
-  const rfc = input.rfc822MessageId
-    ? normalizeRfc822MessageId(input.rfc822MessageId)
-    : null;
-  if (rfc) {
-    return `https://mail.google.com/mail/u/0/#search/${encodeURIComponent(`rfc822msgid:${rfc}`)}`;
-  }
-  const threadOrMessage = (input.threadId || input.messageId || "").trim();
-  if (!threadOrMessage) return null;
-  return `https://mail.google.com/mail/u/0/#all/${encodeURIComponent(threadOrMessage)}`;
+  return null;
 }
 
 export function mailMessageContextItem(input: {

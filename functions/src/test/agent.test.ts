@@ -62,8 +62,8 @@ test("case citations open the dedicated case workspace", () => {
   }).internalRoute, "/cases/case-1");
 });
 
-test("gmail context items cite as gmail with a deep link, not generic google", () => {
-  const mailUrl = "https://mail.google.com/mail/u/0/#all/msg-quote-1";
+test("gmail context items cite as gmail without a deep link, not generic google", () => {
+  const mailUrl = "https://mail.google.com/mail/u/0/#search/rfc822msgid%3Aid%40example.com";
   const record = {
     kind: "context_item" as const,
     recordId: "ctx_mail_msg-quote-1",
@@ -83,6 +83,7 @@ test("gmail context items cite as gmail with a deep link, not generic google", (
       text: "Label: Customers\nFrom: sender@example.com\nBody:\nPlease find the renewal quote.",
       artifactRefs: [],
       metadata: {
+        // Stale stored URL must not surface — Gmail deep links are unreliable.
         sourceUrl: mailUrl,
         subject: "Quote for renewal",
         threadId: "thread-msg-quote-1",
@@ -91,14 +92,14 @@ test("gmail context items cite as gmail with a deep link, not generic google", (
   };
   const meta = extractRecordMetadata(record);
   assert.equal(meta.adapterId, "gmail");
-  assert.equal(meta.externalUrl, mailUrl);
+  assert.equal(meta.externalUrl, null);
   assert.equal(meta.internalRoute, null);
 
   // Indexed chunks must carry the same presentation so hybrid search citations stay typed.
   const [chunk] = chunkRecord(record, "explorers");
   assert.ok(chunk);
   assert.equal(chunk.metadata?.adapterId, "gmail");
-  assert.equal(chunk.metadata?.externalUrl, mailUrl);
+  assert.equal(chunk.metadata?.externalUrl, null);
 });
 
 test("RRF combines rankings without comparing incompatible raw scores", () => {

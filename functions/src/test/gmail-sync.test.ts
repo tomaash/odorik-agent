@@ -218,12 +218,8 @@ test("Gmail initial import is bounded, cursored from the profile, and keeps the 
     assert.equal(metadata.hasAttachments, true);
     assert.equal(metadata.threadId, "thread-msg-1");
     assert.equal(metadata.rfc822MessageId, "quote-msg-1@mail.example.com");
-    // Prefer rfc822msgid search — #all/{api message id} does not open current Gmail UI.
-    assert.equal(
-      metadata.sourceUrl,
-      "https://mail.google.com/mail/u/0/#search/"
-        + encodeURIComponent("rfc822msgid:quote-msg-1@mail.example.com"),
-    );
+    // No reliable Gmail deep link — do not emit Open in Gmail URLs.
+    assert.equal(metadata.sourceUrl, null);
     assert.deepEqual(item.participantRefs, ["sender@example.com", "owner@example.com"]);
 
     // The next incremental run resumes from mailbox state as of this enumeration.
@@ -412,28 +408,21 @@ test("Gmail body extraction prefers text/plain and records attachments by name o
   assert.deepEqual(fallback.attachmentNames, []);
 });
 
-test("Gmail deep links prefer rfc822msgid search over API message ids", () => {
+test("Gmail stores Message-ID but does not emit a web deep link", () => {
   assert.equal(normalizeRfc822MessageId("<a.b@mail.gmail.com>"), "a.b@mail.gmail.com");
   assert.equal(normalizeRfc822MessageId("  bare@example.com  "), "bare@example.com");
   assert.equal(normalizeRfc822MessageId(""), null);
 
-  assert.equal(
-    mailMessageSourceUrl({ rfc822MessageId: "<CA+x@mail.gmail.com>" }),
-    "https://mail.google.com/mail/u/0/#search/"
-      + encodeURIComponent("rfc822msgid:CA+x@mail.gmail.com"),
-  );
-  // Without a Message-ID header, use the thread id — not the message id — in #all/.
+  // Hyphenated Message-IDs break rfc822msgid search; #all/ does not open either.
   assert.equal(
     mailMessageSourceUrl({
+      rfc822MessageId: "9d57e3eb-af74-4ad7-91c5-a2a58151e0d2@headstart.cz",
       threadId: "19f3d5a687db2022",
-      messageId: "different-msg-id",
+      messageId: "19f3d5a687db2022",
     }),
-    "https://mail.google.com/mail/u/0/#all/19f3d5a687db2022",
+    null,
   );
-  assert.equal(
-    mailMessageSourceUrl({ messageId: "only-msg" }),
-    "https://mail.google.com/mail/u/0/#all/only-msg",
-  );
+  assert.equal(mailMessageSourceUrl({ messageId: "only-msg" }), null);
 
   const withHeader = mailMessageContextItem({
     companyId,
@@ -451,11 +440,7 @@ test("Gmail deep links prefer rfc822msgid search over API message ids", () => {
     }),
     audience: { visibility: "restricted", memberIds: ["member-1"] },
   });
-  assert.equal(
-    (withHeader?.metadata as Record<string, unknown>).sourceUrl,
-    "https://mail.google.com/mail/u/0/#search/"
-      + encodeURIComponent("rfc822msgid:id-1@mail.example.com"),
-  );
+  assert.equal((withHeader?.metadata as Record<string, unknown>).sourceUrl, null);
   assert.equal((withHeader?.metadata as Record<string, unknown>).rfc822MessageId, "id-1@mail.example.com");
 
   const withoutHeader = mailMessageContextItem({
@@ -474,9 +459,6 @@ test("Gmail deep links prefer rfc822msgid search over API message ids", () => {
     }),
     audience: { visibility: "restricted", memberIds: ["member-1"] },
   });
-  assert.equal(
-    (withoutHeader?.metadata as Record<string, unknown>).sourceUrl,
-    "https://mail.google.com/mail/u/0/#all/thread-no-mid",
-  );
+  assert.equal((withoutHeader?.metadata as Record<string, unknown>).sourceUrl, null);
   assert.equal((withoutHeader?.metadata as Record<string, unknown>).rfc822MessageId, null);
 });

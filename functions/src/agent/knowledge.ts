@@ -424,7 +424,9 @@ export async function rehydrateCitationPresentation(
     next.push({
       ...citation,
       ...(typeof meta.adapterId === "string" ? { adapterId: meta.adapterId } : {}),
-      ...(typeof meta.externalUrl === "string" ? { externalUrl: meta.externalUrl } : {}),
+      // Always re-apply externalUrl so cleared links (e.g. unreliable Gmail deep
+      // links) replace stale snapshot URLs instead of only filling when present.
+      externalUrl: typeof meta.externalUrl === "string" ? meta.externalUrl : null,
       ...(typeof meta.internalRoute === "string" ? { internalRoute: meta.internalRoute } : {}),
     });
   }
@@ -465,7 +467,11 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
       externalUrl = artifactRefs[0] || null;
     } else if (adapterId === "google_calendar") {
       externalUrl = (typeof metaObj.sourceUrl === "string" ? metaObj.sourceUrl : null) || artifactRefs[0] || null;
-    } else if (adapterId === "gmail" || adapterId === "github" || sourceObj.providerId === "github") {
+    } else if (adapterId === "gmail") {
+      // No reliable Gmail web deep link (rfc822msgid search and #all/ both fail
+      // often enough to mislead). Keep adapter typing; omit Open in Gmail.
+      externalUrl = null;
+    } else if (adapterId === "github" || sourceObj.providerId === "github") {
       externalUrl = (typeof metaObj.sourceUrl === "string" ? metaObj.sourceUrl : null) || artifactRefs[0] || null;
       if (sourceObj.providerId === "github") adapterId = "github";
     } else if (adapterId === "odorik") {
