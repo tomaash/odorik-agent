@@ -215,6 +215,11 @@ test("source public views retain operational state and exclude credentials", asy
         capabilities: ["context.github.issue.read"],
       },
       {
+        id: "slack",
+        availability: "available",
+        capabilities: ["action.chat.notify"],
+      },
+      {
         id: "grok_subscription",
         availability: "available",
         capabilities: [],

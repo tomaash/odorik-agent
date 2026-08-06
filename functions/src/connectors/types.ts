@@ -3,10 +3,11 @@ export const connectorIds = [
   "google_workspace",
   "github",
   "grok_subscription",
+  "slack",
 ] as const;
 
 export type ConnectorId = typeof connectorIds[number];
-export type ProviderId = "odorik" | "google" | "github" | "grok";
+export type ProviderId = "odorik" | "google" | "github" | "grok" | "slack";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
 export type ResourceAudience =
@@ -44,6 +45,9 @@ export const sourceCapabilityIds = [
   "context.github.issue.read",
   // Write grant only: creates Gmail drafts after approval. No observe/sync resources.
   "action.mail.draft.create",
+  // Write grant only: posts pending-approval notices to selected channels. Erik
+  // never reads chat, so this grants no view of any conversation.
+  "action.chat.notify",
 ] as const;
 
 export type SourceCapabilityId = typeof sourceCapabilityIds[number];
@@ -53,6 +57,7 @@ export type CapabilityServiceId =
   | "drive"
   | "mail"
   | "mail_draft"
+  | "chat_notify"
   | "issues";
 export type ResourceType =
   | "phone_line"
@@ -60,7 +65,8 @@ export type ResourceType =
   | "folder"
   | "label"
   | "repository"
-  | "mailbox";
+  | "mailbox"
+  | "channel";
 export type CapabilityDirection = "observe" | "act";
 
 export type SourceCapabilityDescriptor = {

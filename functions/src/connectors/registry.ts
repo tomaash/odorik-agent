@@ -31,6 +31,15 @@ export const mailDraftScopes = [
   "https://www.googleapis.com/auth/gmail.compose",
 ] as const;
 
+/**
+ * `chat:write` posts as the bot; `channels:read` lists channels so an administrator
+ * can choose one. Neither grants any view of a conversation — H1 writes only.
+ */
+export const chatNotifyScopes = [
+  "chat:write",
+  "channels:read",
+] as const;
+
 export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDescriptor> = {
   "context.call.read": {
     id: "context.call.read",
@@ -76,6 +85,17 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     requiredScopes: [...mailDraftScopes],
     syncMode: "manual",
     requiresApproval: true,
+  },
+  "action.chat.notify": {
+    id: "action.chat.notify",
+    serviceId: "chat_notify",
+    direction: "act",
+    resourceType: "channel",
+    requiredScopes: [...chatNotifyScopes],
+    syncMode: "manual",
+    // Delivery is authorized once, when the destination is configured. Approving
+    // each notice about a pending approval would be circular.
+    requiresApproval: false,
   },
   "context.github.issue.read": {
     id: "context.github.issue.read",
@@ -141,6 +161,14 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
     description: "Issues and comments from explicitly selected repositories.",
     availability: "available",
     capabilities: [sourceCapabilities["context.github.issue.read"]],
+  },
+  slack: {
+    id: "slack",
+    name: "Slack",
+    description:
+      "Posts a pending-approval notice to explicitly selected channels. Erik never reads chat.",
+    availability: "available",
+    capabilities: [sourceCapabilities["action.chat.notify"]],
   },
   grok_subscription: {
     id: "grok_subscription",
