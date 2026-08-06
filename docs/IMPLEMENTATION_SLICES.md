@@ -180,13 +180,15 @@ evaluation contracts before introducing a more general workflow abstraction.
 
 ## Slice 6: first approved external action
 
-G2–G3 in `CONNECTOR_EPIC.md` shipped the exact `mail.draft.create` proposal and
-approval-gated Gmail draft creation (separate write grant, reconcile). Sending
-email remains deferred.
+Delivered by G2–G3 in `CONNECTOR_EPIC.md` and accepted in test production on
+2026-08-06: the exact `mail.draft.create` proposal and approval-gated Gmail draft
+creation behind a separate write grant, with reconciliation. Sending email
+remains deferred by design — the human sends from the mailbox that owns the
+draft.
 
-Add one connector write capability with a real business result—for example,
-creating a calendar hold or sending a follow-up through a chosen call-centre
-channel.
+A second write capability with a different business result — a calendar hold, or
+a follow-up through a chosen call-centre channel — is no longer needed to prove
+this slice. Add one only when a real workflow demands it.
 
 - separate read and write grants;
 - disclose the exact external effect on the proposal card;

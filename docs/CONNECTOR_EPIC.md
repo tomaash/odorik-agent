@@ -2,10 +2,10 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** G3 shipped — approval-gated Gmail draft
-creation with draft-write grant; dogfood acceptance remaining in test production
+**Current implementation slice:** none. The core epic (C0–C5, G1–G3) is complete
+and accepted. Every remaining slice is behind an expansion decision gate.
 
-**Last plan revision:** 2026-08-04
+**Last plan revision:** 2026-08-06
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -145,13 +145,13 @@ The baseline was last accepted in the deployed test environment on 2026-08-02.
 
 | Area | Working now | Important limitation |
 | --- | --- | --- |
-| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources, durable sync runs/recovery, typed Google failure/reauthorization state, and separate durable search delivery | Gmail draft write remains absent until G3 |
+| Connection kernel | One Google Workspace connection per stable Google identity, one encrypted credential envelope, nested capability configurations and selected resources, durable sync runs/recovery, typed Google failure/reauthorization state, and separate durable search delivery | Draft write is a separately granted capability on the same connection; enabling it needs a second consent pass |
 | Odorik | Authenticated call upload, phone-line resources, normalized context | Compatibility path and generic connection path coexist |
 | Google Calendar | Workspace subsystem with least-privilege consent, explicit calendar selection, incremental sync tokens, deterministic recurrence/cancellation handling, bounded expired-token full rebuild, typed reauthorization state, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Google Auth Platform verification remains an operational release gate |
 | Google Drive | Workspace subsystem with least-privilege consent, recursive folder selection, deterministic overlapping-root ownership, canonical per-file identity, Google Docs/text/PDF extraction, honest metadata-only fallbacks, complete-snapshot stale cleanup, durable runs/recovery, 30-minute reconciliation, freshness observations, and per-resource audiences | Provider ACLs are deliberately not mirrored; administrators choose the Erik audience explicitly |
 | Context | Provider/capability/connection/resource identity, provenance, durable indexing, citations, enforced `company`/`restricted` envelopes, and provider-to-context/search freshness samples | Provider ACLs are deliberately not projected; the selected Erik resource remains the governing access boundary |
-| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, and `case.move` | No external executor exists yet; G2–G3 must prove the draft proposal and provider write loop |
-| Connector catalog | Working Odorik, Google Workspace (Calendar, Drive, Gmail read), GitHub, and isolated Grok subscription entries are shown | Mail *drafting* stays absent until G3 |
+| Approval | Named approver, effect digest, execution lease, audit, retry and unknown-outcome states; immutable typed registry for `task.create`, `case.create`, `case.move`, and `mail.draft.create` | `mail.draft.create` is the only external executor; every other effect stays internal |
+| Connector catalog | Working Odorik, Google Workspace (Calendar, Drive, Gmail read, Gmail draft write), GitHub, and isolated Grok subscription entries are shown | Sending mail is deliberately absent; the human sends from the mailbox that owns the draft |
 
 The first slices protect and improve this baseline rather than immediately
 adding another provider.
@@ -258,7 +258,7 @@ Every action capability must define:
 | C5 | Harden the Calendar and Drive subsystems of Google Workspace | Completed | Accepted in test production |
 | G1 | Add selected-label Gmail evidence to Google Workspace | Completed | Accepted in test production (dogfood + unit suite) |
 | G2 | Produce an exact, non-executing email-draft proposal | Completed | Proposal is useful without any provider write |
-| G3 | Create a Gmail draft after approval and reconcile the result | Completed | Implementation shipped; dogfood acceptance in test production |
+| G3 | Create a Gmail draft after approval and reconcile the result | Completed | Accepted in test production (dogfood create + unit suite) |
 | M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
 | M2 | Prove `mail.draft.create` through Outlook | Gated | Same workflow needs no provider-specific semantics |
 | M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
@@ -1858,3 +1858,42 @@ YYYY-MM-DD — Slice
   → open draft in Gmail (operator path after deploy).
 - **Decision:** G3 implementation accepted for ship. Core epic G1–G3 code path
   complete pending dogfood.
+
+### 2026-08-06 — G3 test-production acceptance and post-acceptance fixes
+
+- **Dogfood:** a real Workspace account with mail read but no draft-write grant
+  attempted an approval and was refused with the grant-missing message — the
+  read/write independence exit criterion, observed live. The administrator then
+  granted “Create Gmail drafts” (`gmail.compose`) from Sources, re-approved, and
+  one draft was created in the connected mailbox.
+- **Decision:** G3 is accepted. The core epic (C0–C5, G1–G3) is complete.
+- **Explicitly not claimed:** rejection-makes-no-provider-call, non-approver
+  rejection, live double-approve idempotency, and live `outcome_unknown`
+  reconciliation were not re-exercised by hand for this entry. Their proofs are
+  the unit contracts below, not production observation.
+- **Three defects found reviewing the shipped path, now fixed:**
+  1. **The idempotency lookup needed a scope the write grant does not include.**
+     It searched `users.messages.list`, which requires a *read* scope; a
+     connection holding only `gmail.compose` would get 403, and the caller read
+     that as “no draft exists” and created a second one. The dogfood account has
+     both grants, so this could not appear there. Now uses
+     `users.drafts.list?q=rfc822msgid:`, which `gmail.compose` covers — and which
+     returns the real draft id instead of substituting the message id.
+  2. **A failed lookup was treated as a confirmed absence.** The lookup swallowed
+     every error and returned `null`, so a transient Gmail failure during
+     `outcome_unknown` recovery led straight to a second create, and the operator
+     reconcile path told the user “safe to approve again” on the strength of a
+     question Gmail never answered. Both now keep the outcome unknown. A failed
+     lookup on a first attempt is still advisory, since nothing exists yet to
+     duplicate.
+  3. **The draft deep link used a fragment shape already withdrawn.** G3 emitted
+     `#drafts/{apiMessageId}`, the same class of link `c06cde8` removed for
+     citations because the Gmail web UI does not address messages by API id. The
+     link now opens the Drafts list of the owning mailbox via `authuser`, which
+     also fixes `/u/0` pointing at whichever account signed in first. Draft,
+     message, and thread ids remain stored for operators.
+- **Automated:** seven added cases cover the drafts-endpoint/scope contract, real
+  draft id versus message id, empty list as absence versus failed list as error,
+  no-second-draft after an unanswered lookup, create after a *confirmed* absence,
+  first-attempt tolerance of a flaky pre-check, and the withdrawn link shape.
+  Full functions suite green at 162.

@@ -48,6 +48,8 @@ export type MailDraftExecutionRecord = {
   approvalId: string;
   attemptId: string;
   status: "creating" | "succeeded" | "outcome_unknown" | "failed";
+  /** Retained so reconciliation can link to the mailbox that owns the draft. */
+  mailboxAddress?: string | null;
   draftId?: string | null;
   messageId?: string | null;
   threadId?: string | null;
@@ -66,14 +68,19 @@ export function erikDraftRfc822MessageId(draftRequestId: string): string {
   return `${draftRequestId}@${erikDraftMessageIdDomain}`;
 }
 
-export function mailDraftDeepLink(input: {
-  draftId?: string | null;
-  messageId?: string | null;
-}): string {
-  // Gmail has no stable public deep-link contract for a draft. Land in Drafts;
-  // IDs are stored on the execution/approval for operators.
-  if (input.messageId) {
-    return `https://mail.google.com/mail/u/0/#drafts/${encodeURIComponent(input.messageId)}`;
+/**
+ * Gmail has no stable public deep link to one draft.
+ *
+ * `#drafts/{apiMessageId}` is the same shape as the `#all/{apiMessageId}` link this
+ * codebase already removed for citations: the web UI does not address messages by
+ * API id, so it silently lands somewhere else. Link to the Drafts list of the
+ * mailbox that owns the draft and let the stored ids identify it instead.
+ * `authuser` beats `/u/0`, which is whichever account signed in first.
+ */
+export function mailDraftDeepLink(input: { mailboxAddress?: string | null }): string {
+  const mailbox = (input.mailboxAddress || "").trim();
+  if (mailbox) {
+    return `https://mail.google.com/mail/?authuser=${encodeURIComponent(mailbox)}#drafts`;
   }
   return "https://mail.google.com/mail/u/0/#drafts";
 }
@@ -120,8 +127,8 @@ type GmailDraftResponse = {
   };
 };
 
-type GmailMessageListResponse = {
-  messages?: Array<{ id?: string; threadId?: string }>;
+type GmailDraftListResponse = {
+  drafts?: Array<{ id?: string; message?: { id?: string; threadId?: string } }>;
 };
 
 export class MailDraftOutcomeUnknownError extends Error {
@@ -159,40 +166,39 @@ function resultFromRecord(data: MailDraftExecutionRecord): MailDraftCreatedResul
   return null;
 }
 
-async function findDraftByRequestId(
+/**
+ * Look the draft up by the Message-ID we minted for it.
+ *
+ * Uses `users.drafts.list`, not `users.messages.list`: the draft-write grant is
+ * `gmail.compose`, which covers the drafts collection but *not* message search. A
+ * connection holding only the write grant would get 403 from a message search — and
+ * the caller would read that as "no draft exists" and create a second one. Listing
+ * drafts also returns the real draft id rather than substituting a message id.
+ *
+ * Throws when the lookup itself fails. "We could not ask" is not "there is none",
+ * and only the caller knows whether it is safe to create after an unanswered
+ * question.
+ */
+export async function findDraftByRequestId(
   accessToken: string,
   draftRequestId: string,
+  mailboxAddress?: string | null,
 ): Promise<MailDraftCreatedResult | null> {
   const rfc = erikDraftRfc822MessageId(draftRequestId);
-  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/messages");
-  url.searchParams.set("q", `in:drafts rfc822msgid:${rfc}`);
+  const url = new URL("https://gmail.googleapis.com/gmail/v1/users/me/drafts");
+  url.searchParams.set("q", `rfc822msgid:${rfc}`);
   url.searchParams.set("maxResults", "5");
-  try {
-    const listed = await googleGet<GmailMessageListResponse>("Gmail draft lookup", url, accessToken);
-    const messageId = listed.messages?.[0]?.id;
-    if (!messageId) return null;
-    const messageUrl = new URL(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}`,
-    );
-    messageUrl.searchParams.set("format", "minimal");
-    const message = await googleGet<{ id?: string; threadId?: string }>(
-      "Gmail draft message",
-      messageUrl,
-      accessToken,
-    );
-    // Draft id may differ from message id; list drafts is heavier. Prefer message id
-    // for deep link and use message id as draftId fallback when draft list is unknown.
-    const draftId = message.id || messageId;
-    const threadId = message.threadId || listed.messages?.[0]?.threadId || messageId;
-    return {
-      draftId,
-      messageId: message.id || messageId,
-      threadId,
-      deepLink: mailDraftDeepLink({ messageId: message.id || messageId, draftId }),
-    };
-  } catch {
-    return null;
-  }
+  const listed = await googleGet<GmailDraftListResponse>("Gmail draft lookup", url, accessToken);
+  const match = listed.drafts?.[0];
+  const draftId = String(match?.id || "").trim();
+  const messageId = String(match?.message?.id || "").trim();
+  if (!draftId || !messageId) return null;
+  return {
+    draftId,
+    messageId,
+    threadId: String(match?.message?.threadId || "").trim() || messageId,
+    deepLink: mailDraftDeepLink({ mailboxAddress }),
+  };
 }
 
 export async function createGmailDraftViaApi(input: {
@@ -225,7 +231,7 @@ export async function createGmailDraftViaApi(input: {
     draftId,
     messageId,
     threadId: threadId || messageId,
-    deepLink: mailDraftDeepLink({ draftId, messageId }),
+    deepLink: mailDraftDeepLink({ mailboxAddress: input.action.mailboxAddress }),
   };
 }
 
@@ -291,49 +297,59 @@ export function createGmailDraftExecutor(
     );
     const existing = await ref.get();
     const existingData = existing.data() as MailDraftExecutionRecord | undefined;
-    if (existingData) {
-      const prior = resultFromRecord(existingData);
-      if (prior) return prior;
-      if (existingData.status === "outcome_unknown") {
-        // Reconcile before a second create.
-        try {
-          const accessToken = await resolveAccessToken({
-            companyId: context.companyId,
-            connectionId: action.connectionId,
-          });
-          const found = await findDraft(accessToken, action.draftRequestId);
-          if (found) {
-            const now = Timestamp.now();
-            await ref.set({
-              status: "succeeded",
-              draftId: found.draftId,
-              messageId: found.messageId,
-              threadId: found.threadId,
-              deepLink: found.deepLink,
-              error: null,
-              updatedAt: now,
-              reconciledAt: now,
-              reconciledBy: context.actorUid,
-            }, { merge: true });
-            return found;
-          }
-        } catch (error) {
-          if (error instanceof MailDraftWriteGrantMissingError) throw error;
-          // Fall through to create if grant is present and lookup failed cleanly.
-        }
-      }
-    }
+    const prior = existingData ? resultFromRecord(existingData) : null;
+    if (prior) return prior;
 
     const accessToken = await resolveAccessToken({
       companyId: context.companyId,
       connectionId: action.connectionId,
     });
 
+    /** Set once the provider has confirmed no draft exists for this request. */
+    let confirmedAbsent = false;
+    if (existingData?.status === "outcome_unknown") {
+      // A draft may already exist. Confirm one way or the other before creating.
+      let found: MailDraftCreatedResult | null;
+      try {
+        found = await findDraft(accessToken, action.draftRequestId, action.mailboxAddress);
+      } catch (error) {
+        // The lookup failed, so the earlier outcome is still unknown. Creating now
+        // could hand the user a second draft of the same mail.
+        const detail = error instanceof Error ? error.message : String(error);
+        await ref.set({
+          status: "outcome_unknown",
+          error: `Gmail could not be asked whether this draft exists: ${detail}`,
+          updatedAt: Timestamp.now(),
+        }, { merge: true });
+        throw new MailDraftOutcomeUnknownError(
+          "Gmail could not confirm whether this draft already exists. "
+          + "Reconcile before approving again.",
+        );
+      }
+      if (found) {
+        const now = Timestamp.now();
+        await ref.set({
+          status: "succeeded",
+          draftId: found.draftId,
+          messageId: found.messageId,
+          threadId: found.threadId,
+          deepLink: found.deepLink,
+          error: null,
+          updatedAt: now,
+          reconciledAt: now,
+          reconciledBy: context.actorUid,
+        }, { merge: true });
+        return found;
+      }
+      confirmedAbsent = true;
+    }
+
     const now = Timestamp.now();
     await ref.set({
       companyId: context.companyId,
       draftRequestId: action.draftRequestId,
       connectionId: action.connectionId,
+      mailboxAddress: action.mailboxAddress,
       approvalId: context.approvalId,
       attemptId: context.attemptId,
       status: "creating",
@@ -343,19 +359,35 @@ export function createGmailDraftExecutor(
     } satisfies Partial<MailDraftExecutionRecord>, { merge: true });
 
     try {
-      // Another attempt may have finished while we claimed creating.
-      const again = await findDraft(accessToken, action.draftRequestId);
-      if (again) {
-        await ref.set({
-          status: "succeeded",
-          draftId: again.draftId,
-          messageId: again.messageId,
-          threadId: again.threadId,
-          deepLink: again.deepLink,
-          error: null,
-          updatedAt: Timestamp.now(),
-        }, { merge: true });
-        return again;
+      if (!confirmedAbsent) {
+        // Another attempt may have finished while we claimed creating.
+        let again: MailDraftCreatedResult | null = null;
+        try {
+          again = await findDraft(accessToken, action.draftRequestId, action.mailboxAddress);
+        } catch (error) {
+          // On a retry the lookup is the only thing standing between us and a
+          // duplicate, so an unanswered lookup leaves the outcome unknown. On a
+          // first attempt nothing has been created for this request yet, so the
+          // check is only an optimization and its failure is not interesting.
+          if (existingData) {
+            const detail = error instanceof Error ? error.message : String(error);
+            throw new MailDraftOutcomeUnknownError(
+              `Gmail could not confirm whether an earlier attempt already created this draft: ${detail}`,
+            );
+          }
+        }
+        if (again) {
+          await ref.set({
+            status: "succeeded",
+            draftId: again.draftId,
+            messageId: again.messageId,
+            threadId: again.threadId,
+            deepLink: again.deepLink,
+            error: null,
+            updatedAt: Timestamp.now(),
+          }, { merge: true });
+          return again;
+        }
       }
 
       const result = await createDraft({ accessToken, action });
@@ -434,7 +466,21 @@ export async function reconcileMailDraftExecution(input: {
     ...auth,
     database,
   });
-  const found = await findDraftByRequestId(credentials.accessToken, input.draftRequestId);
+  let found: MailDraftCreatedResult | null;
+  try {
+    found = await findDraftByRequestId(
+      credentials.accessToken,
+      input.draftRequestId,
+      data?.mailboxAddress,
+    );
+  } catch (error) {
+    // Never invite a second approval on the strength of a question Gmail did not
+    // answer: the draft may well exist.
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new MailDraftOutcomeUnknownError(
+      `Gmail could not be reached to check for this draft, so the outcome is still unknown. Try reconciling again: ${detail}`,
+    );
+  }
   if (!found) {
     throw new Error(
       "No Gmail draft was found for this request. It is safe to approve again to create one.",
