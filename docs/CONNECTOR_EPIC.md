@@ -2,8 +2,8 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** none. The core epic (C0–C5, G1–G3) is complete
-and accepted. Every remaining slice is behind an expansion decision gate.
+**Current implementation slice:** H1 — outbound approval notification to Slack.
+The core epic (C0–C5, G1–G3) is complete and accepted.
 
 **Last plan revision:** 2026-08-06
 
@@ -264,7 +264,7 @@ Every action capability must define:
 | M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
-| H1 | Post approval/case notifications to one chat provider | Gated | A customer loop requires it |
+| H1 | Post pending-approval notifications to one selected Slack channel | In progress | Gate opened 2026-08-06; approvals are invisible until someone opens the app |
 | H2 | Read selected chat mentions or channels | Gated | H1 is useful and privacy case is accepted |
 
 ## Core foundation slices
@@ -1364,16 +1364,96 @@ because it is already a planned catalog entry.
 Decision gate: a customer operating loop measurably benefits from chat delivery
 and identifies the provider it already uses.
 
-H1 is outbound notification only:
-
-- selected destination;
-- exact short message and Erik deep link;
-- mandatory named approver;
-- result ID and deep link; and
-- no attempt to reproduce conversation in Erik.
+**Gate status — 2026-08-06:** opened by product decision for Slack. No external
+design partner is named; the operating loop it serves is Erik's own. Every
+external effect in the product waits on a named approver, and nothing tells that
+approver they are needed. Record this as the reason if the slice is later
+questioned.
 
 H2 may later ingest direct mentions or explicitly selected channels. It does
 not ingest a whole company by default and does not promise complete history.
+
+#### H1 — Outbound approval notification
+
+**Usable outcome:** when an approval is waiting, the person who must decide sees
+it in the chat tool they already have open, and one tap lands them on the
+approval card.
+
+Two contract decisions shape this slice.
+
+**Delivery is a standing configuration, not a typed action.** Every other
+external effect enters the action registry and takes a named approver. A
+notification cannot: approving each notice about a pending approval is circular,
+and the notice exists precisely because nobody has looked yet. The administrator
+approves the *destination* once, when configuring it, and that recorded decision
+authorizes every later delivery to it. `chat.message.post` is therefore **not**
+registered as an action, and no agent or workflow can choose to send chat. Only
+Erik's own approval lifecycle emits notifications, with content Erik composes
+from records it already owns.
+
+**The channel receives a pointer, not the payload.** The message carries the
+action kind, the case or contact label, the named approver, and a deep link.
+It never carries the draft body, the recipient address, transcript text, or
+evidence. Erik's own access control then governs what the person actually sees
+when they follow the link — a channel's membership is not an Erik audience and
+must never be treated as one. For the same reason, approvals whose audience is
+`restricted` do not notify a shared channel at all in this slice.
+
+Build:
+
+- a `slack` connector on the existing connection kernel: one workspace
+  connection, encrypted bot credential, stable workspace/team identity;
+- capability `action.chat.notify` (`chat:write`, `channels:read`), whose
+  selected resources are the channels an administrator explicitly chose;
+- Slack's own consent boundary as the outer bound: Erik can only post where the
+  bot has been invited, so channel selection lists only those channels;
+- notification emission on `approval_requested` for company-audience approvals,
+  composed from the approval record;
+- one delivery per approval per destination, keyed by an execution record like
+  `mailDraftExecutions`, since `chat.postMessage` offers no dedupe key;
+- stored result: channel id, message `ts`, and `chat.getPermalink` URL;
+- the G3 outcome classification, unchanged: `succeeded`,
+  `failed_safe_to_retry`, `outcome_unknown`, with a lookup that never reads a
+  failed call as an absence;
+- delivery state visible on the approval and in Sources, including a failed or
+  unknown delivery; and
+- disconnect that revokes the bot token and stops all delivery.
+
+Known limits accepted for this slice:
+
+- **The message names no subject.** Pointer-not-payload leaves "Approval waiting:
+  Email draft — Tomáš Holas decides" and a link. A human-readable case or contact
+  label would need a lookup whose own audience must then be checked, so it is a
+  deliberate second step rather than a convenience taken now.
+- **The link lands on the page, not the card.** There is no `/approvals/:id`
+  route; approvals render inside `/cases/:id` and `/tasks`. The notification links
+  to whichever of those actually holds the card. A per-approval route is worth
+  adding, but inventing the URL before the route exists is the mistake `c06cde8`
+  already made with Gmail links.
+
+Not included:
+
+- reading any Slack message, thread, mention, or reaction;
+- replies, threading, interactive approve/reject buttons in Slack;
+- direct messages or per-user routing;
+- agent- or workflow-composed chat content;
+- notification of anything other than a pending approval; or
+- Teams, Google Chat, and Discord.
+
+Exit criteria:
+
+- a company with no chat connection behaves exactly as it does today;
+- Erik cannot post to a channel the bot was never invited to, and cannot post to
+  a channel the administrator did not select;
+- one approval produces exactly one message per destination, including across
+  retries and duplicate emission;
+- a restricted-audience approval produces no message;
+- no draft body, recipient, or transcript text appears in any posted message;
+- a failed delivery is visible and retryable, and an unknown delivery is not
+  blindly retried;
+- disconnecting the workspace stops delivery and revokes the token; and
+- an approval created from a real call reaches a real Slack channel in test
+  production, and the deep link opens that approval.
 
 Slack, Teams, Google Chat, and Discord remain provider candidates. Erik should
 not recommend Discord as a universal company default merely because its free
