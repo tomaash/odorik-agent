@@ -1413,8 +1413,15 @@ Build:
   `mailDraftExecutions`, since `chat.postMessage` offers no dedupe key;
 - stored result: channel id, message `ts`, and `chat.getPermalink` URL;
 - the G3 outcome classification, unchanged: `succeeded`,
-  `failed_safe_to_retry`, `outcome_unknown`, with a lookup that never reads a
-  failed call as an absence;
+  `failed_safe_to_retry`, `outcome_unknown` — but note that an unknown Slack
+  delivery is **not** automatically reconcilable the way a Gmail draft is.
+  `chat.postMessage` has no dedupe key, and searching for our own message would
+  need `channels:history`, a standing read grant over the whole channel that a
+  notification-only capability has no business holding. An unknown delivery
+  therefore stays unknown and waits for a person, who can simply look at the
+  channel. A rare duplicate notice is a smaller cost than a permanent read grant;
+- Slack's `ok: false` on an HTTP 200 treated as failure everywhere, and any
+  unrecognized provider error treated as ambiguous rather than terminal;
 - delivery state visible on the approval and in Sources, including a failed or
   unknown delivery; and
 - disconnect that revokes the bot token and stops all delivery.
