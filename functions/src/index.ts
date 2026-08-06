@@ -1,4 +1,8 @@
-import { onDocumentUpdated, onDocumentWritten } from "firebase-functions/v2/firestore";
+import {
+  onDocumentCreated,
+  onDocumentUpdated,
+  onDocumentWritten,
+} from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import { api } from "./api.js";
 import { db } from "./firestore.js";
@@ -19,6 +23,8 @@ import {
   qdrantUrl,
 } from "./router.js";
 import { projectOdorikCallContext } from "./connectors/odorik.js";
+import { deliverApprovalNotifications } from "./chat/deliver.js";
+import { productionAppOrigin } from "./connectors/google-oauth-return.js";
 import {
   retryDueGoogleCalendarSyncRuns,
   syncAllGoogleCalendarConnections,
@@ -47,6 +53,7 @@ import {
 } from "./coding/reconcile.js";
 import { queueCodingPublisher } from "./coding/service.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
+export { slackOAuthCallback } from "./connectors/slack-oauth-callback.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
 export { grokAuthCallback } from "./grok-auth-callback.js";
@@ -126,6 +133,51 @@ export const syncKnowledgeIndex = onDocumentWritten(
         companyId: event.params.companyId,
         deliveryId: queued.deliveryId,
       }, knowledgeIndexDependencies());
+    }
+  },
+);
+
+/**
+ * Tell the named approver that a decision is waiting.
+ *
+ * A trigger rather than a call inside `requestWorkflowActionApproval`: that runs in
+ * a Firestore transaction, transactions retry, and a retried transaction that posts
+ * to Slack posts twice. Running here also means a failing Slack can never fail
+ * approval creation — the decision stands whether or not anyone was told.
+ *
+ * `retry: false` deliberately. Delivery already records its own outcome per
+ * destination, and an automatic re-run of an `outcome_unknown` delivery is exactly
+ * the blind retry the epic forbids.
+ */
+export const notifyApprovalRequested = onDocumentCreated(
+  {
+    document: "companies/{companyId}/actionApprovals/{approvalId}",
+    database: "odorik",
+    region: "europe-west3",
+    timeoutSeconds: 60,
+    memory: "256MiB",
+    maxInstances: 5,
+    retry: false,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [connectorCredentialKey],
+  },
+  async (event) => {
+    const data = event.data?.data();
+    if (!data) return;
+    try {
+      await deliverApprovalNotifications({
+        companyId: event.params.companyId,
+        approval: { id: event.params.approvalId, ...data },
+        appOrigin: productionAppOrigin,
+        credentialKey: connectorCredentialKey.value(),
+      });
+    } catch (error) {
+      // Never let notification trouble surface as approval trouble.
+      console.error("[chat-notify] approval notification failed", {
+        companyId: event.params.companyId,
+        approvalId: event.params.approvalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   },
 );

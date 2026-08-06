@@ -94,6 +94,12 @@ import {
   GrokAuthorizationError,
   startGrokAuthorization,
 } from "./connectors/grok-subscription.js";
+import {
+  createSlackAuthorization,
+  slackConnectorClientId,
+  slackConnectorClientSecret,
+} from "./connectors/slack-oauth.js";
+import { listSlackChannels, selectSlackChannels } from "./chat/channels.js";
 import type { SourceCapabilityId } from "./connectors/types.js";
 import {
   acceptTeamInvitation,
@@ -553,6 +559,40 @@ export const appRouter = router({
           capabilityIds: input.capabilityIds as SourceCapabilityId[],
           connectionId: input.connectionId,
           returnOrigin: input.returnOrigin,
+        })),
+    }),
+    slack: router({
+      authorizationUrl: adminProcedure
+        .input(z.object({
+          returnOrigin: z.string().max(200).optional(),
+        }))
+        .mutation(({ ctx, input }) => createSlackAuthorization({
+          companyId: ctx.companyId,
+          uid: ctx.uid,
+          email: ctx.email,
+          displayName: ctx.displayName,
+          clientId: slackConnectorClientId.value(),
+          returnOrigin: input.returnOrigin,
+        })),
+      channels: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .query(({ ctx, input }) => listSlackChannels({
+          companyId: ctx.companyId,
+          ...input,
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      select: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          channelIds: z.array(z.string().min(1).max(100)).max(20),
+        }))
+        .mutation(({ ctx, input }) => selectSlackChannels({
+          companyId: ctx.companyId,
+          ...input,
+          actorUid: ctx.uid,
+          credentialKey: connectorCredentialKey.value(),
         })),
     }),
     googleCalendar: router({

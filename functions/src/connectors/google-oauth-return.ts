@@ -14,7 +14,10 @@ export const appOrigins = (process.env.APP_ORIGINS?.trim()
   .map((origin) => origin.trim().replace(/\/$/, ""))
   .filter(Boolean);
 
-const productionOrigin = appOrigins[0];
+/** The canonical origin every deployed callback and notification link points at. */
+export const productionAppOrigin = appOrigins[0] || defaultAppOrigins[0]!;
+
+const productionOrigin = productionAppOrigin;
 const localDevelopmentOrigin = "http://127.0.0.1:5173";
 const callbackPath = "/oauth/google/callback";
 

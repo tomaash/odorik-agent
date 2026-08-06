@@ -12,6 +12,10 @@ import {
 } from "./router.js";
 import { createContext } from "./trpc.js";
 import { resendApiKey } from "./teams.js";
+import {
+  slackConnectorClientId,
+  slackConnectorClientSecret,
+} from "./connectors/slack-oauth.js";
 
 const handler = createHTTPHandler({ router: appRouter, createContext });
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
@@ -31,6 +35,8 @@ export const api = onRequest(
       connectorCredentialKey,
       googleConnectorClientId,
       googleConnectorClientSecret,
+      slackConnectorClientId,
+      slackConnectorClientSecret,
       githubAppPrivateKey,
       resendApiKey,
     ],
