@@ -175,6 +175,13 @@ references, unresolved questions, and summary version. A session closes after
 an explicit new-topic request or a product-defined inactivity threshold; it is
 not kept alive by an open model process.
 
+The first continuity contract deliberately implements only the active session.
+Six hours of inactivity closes it; recent messages use a 6,000-token estimate;
+and compact state versions cite exact first/last message IDs. A memory-generation
+fence implements forget without erasing immutable provider events or audit runs.
+Older-session semantic retrieval is a separate 9B capability and must not be
+approximated by appending every historical summary.
+
 Context assembly has separate inputs:
 
 ```text

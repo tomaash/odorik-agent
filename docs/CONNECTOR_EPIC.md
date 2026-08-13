@@ -2,8 +2,8 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** durable conversation sessions and memory
-(Slice 9 / H2A continuity). H1 notification and Slice 8 Slack conversational
+**Current implementation slice:** bounded durable conversation sessions
+(Slice 9A / H2A continuity). H1 notification and Slice 8 Slack conversational
 correctness are complete and accepted.
 The core epic (C0–C5, G1–G3) is complete and accepted.
 
@@ -269,7 +269,7 @@ Every action capability must define:
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
 | H1 | Post pending-approval notifications to one selected Slack channel | Completed | Accepted in test production 2026-08-13 |
-| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Conversational correctness accepted; durable continuity pending | Slice 9 memory/retention controls pass |
+| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Conversational correctness accepted; 9A implemented, live acceptance pending | Slice 9A session/retention controls pass |
 | H2B | Resume one logical conversation across Slack and Erik | Gated | H2A is useful and memory/retention controls pass |
 | H2C | Read selected mentions or shared channels | Gated | A named group loop and audience/privacy model are accepted |
 
@@ -1493,9 +1493,9 @@ inbound-first persistence, one ordered per-DM inbox, a fenced single worker,
 stable reply identities, and stored-reply delivery retry. Test-production
 acceptance confirms that a greeting no longer repeats the prior company answer,
 factual and contextual turns retrieve fresh evidence, and rapid social/capability
-turns remain causal. The remaining H2A gap is deliberate: history still uses a
-fixed recent window and has no session summary, older-memory retrieval, or
-inspect/correct/forget controls. Those belong to Slice 9.
+turns remain causal. Slice 9A replaces the fixed recent window with bounded
+active sessions, versioned compact state, and inspect/reset/forget controls.
+Relevant older-session retrieval and correction remain Slice 9B.
 
 Contract decisions:
 
@@ -2181,7 +2181,34 @@ YYYY-MM-DD — Slice
   out-of-order rapid messages, factual-then-social regression, late arrivals,
   persisted-reply retry, OAuth capability isolation, and the existing connector,
   approval, access, retrieval, action, and workflow suites.
-- **Next:** Slice 9 adds explicit session boundaries, token-budgeted recent
-  context, versioned summaries, relevant older-session retrieval, and
-  inspect/correct/forget/start-fresh controls. It must continue to re-fetch
-  company truth and recheck authorization on every factual turn.
+- **Next:** Slice 9A adds explicit session boundaries, token-budgeted recent
+  context, versioned active-session state, and inspect/forget/start-fresh
+  controls. It must continue to re-fetch company truth and recheck authorization
+  on every factual turn. Relevant older-session retrieval remains Slice 9B.
+
+### 2026-08-13 — Slice 9A bounded-session implementation checkpoint
+
+- **Consolidated baseline:** `main` was fast-forwarded through the Gmail
+  idempotency fix, H1 Slack notification delivery, and Slice 8 conversation
+  runtime at `57ea348`; 200 Functions tests, 22 frontend tests, and the frontend
+  production build passed before the push.
+- **Session boundary:** one private member thread owns an active session. Six
+  hours of inactivity, `new topic`, or `start fresh` closes it and creates a new
+  versioned session. Provider event time drives ordinary session selection.
+- **Bounded context:** factual generation receives recent raw turns under a
+  6,000-token estimate plus compact active-session state. The run records exact
+  message IDs, state version, selected memory IDs, and estimated token use.
+- **Authority:** compact state is explicitly labeled derived conversation
+  context. Every factual turn still calls fresh company tools. Source-derived
+  assistant turns and remembered entities are re-authorized before reuse; a
+  revoked record leaves the new prompt.
+- **Controls:** `what do you remember?` inspects the active state. `start fresh`
+  changes sessions. `forget this conversation` rotates the thread memory
+  generation, preventing retained transport/audit history from entering future
+  prompts without destroying operational evidence.
+- **Crash safety:** session selection/reset and state completion are idempotent
+  per inbound message, matching the existing stable reply and run identities.
+- **Scope decision:** semantic/lexical/entity retrieval across older sessions is
+  9B. It is not required before Slice 10 proves conversation-to-proposal.
+- **Automated checkpoint:** focused session and Slack suites pass. Full suite,
+  deployment, and real Slack acceptance remain before 9A is accepted.

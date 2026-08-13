@@ -193,6 +193,12 @@ The durable conversation remains available, but old sessions enter prompts
 only when relevant. People can inspect, correct, forget, or start fresh; memory
 must not become an inescapable hidden profile.
 
+The initial product cut keeps this intentionally narrow: six-hour active
+sessions, token-budgeted recent turns, inspectable compact state, and explicit
+reset/forget controls come before semantic retrieval over older sessions. This
+is enough continuity to prove conversation-to-proposal without turning memory
+infrastructure into the product milestone.
+
 ## Human responsibility boundary
 
 The platform separates three kinds of writes:

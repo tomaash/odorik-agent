@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   drainSlackConversation,
   parseSlackDmEvent,
+  processSlackDmEvent,
   queueSlackDmEvent,
   routeSlackTurn,
   slackConversationEventPath,
@@ -122,6 +123,9 @@ test("the turn router keeps social and capability messages out of factual retrie
   assert.equal(routeSlackTurn("Make sense of the latest call", true), "company_fact");
   assert.equal(routeSlackTurn("Summarize Acme", false), "company_fact");
   assert.equal(routeSlackTurn("What about its open cases?", true), "contextual_followup");
+  assert.equal(routeSlackTurn("What do you remember?", true), "memory_inspect");
+  assert.equal(routeSlackTurn("start fresh", true), "session_reset");
+  assert.equal(routeSlackTurn("forget this conversation", true), "memory_forget");
 });
 
 function seedLinkedSlackMember(memory: MemoryFirestore) {
@@ -235,6 +239,85 @@ test("a factual answer followed by hello retrieves once and never repeats the an
   assert.match(posted[0] || "", /Acme summary/);
   assert.match(posted[1] || "", /^Hello!/);
   assert.doesNotMatch(posted[1] || "", /Acme summary/);
+});
+
+test("a Slack session carries authorized state across hours and start-fresh removes it", async () => {
+  const memory = new MemoryFirestore();
+  seedLinkedSlackMember(memory);
+  memory.seed("companies/acme/workItems/task-1", {
+    title: "Call Acme", status: "open", access: { visibility: "company" },
+  });
+  const contexts: Array<Record<string, unknown>> = [];
+  let call = 0;
+  const ask = async (input: Parameters<NonNullable<import("../chat/slack-events.js").SlackConversationDependencies["ask"]>>[0]) => {
+    call += 1;
+    contexts.push(input.conversationContext as unknown as Record<string, unknown>);
+    return {
+      answer: call === 1 ? "Call Acme is open [C1]" : "It is still open [C1]",
+      citations: [{
+        citationId: "C1", kind: "task" as const, recordId: "task-1", title: "Call Acme",
+        sourcePath: "companies/acme/workItems/task-1", excerpt: "open", occurredAt: null,
+      }],
+      confidence: "high" as const,
+      limitations: [],
+      toolTrace: [{ name: "get_company_record", args: {}, citationIds: ["C1"] }],
+      usage: { promptTokens: 1, outputTokens: 1, thinkingTokens: 0, totalTokens: 2 },
+      runId: `fact-${call}`,
+      messageId: `assistant-${call}`,
+    };
+  };
+  const dependencies = {
+    authorize: async () => ({ botToken: "token", teamId: "T1", botUserId: "B1" }),
+    ask,
+  };
+  const first = {
+    eventId: "Ev-memory-1", teamId: "T1", slackUserId: "U1", channelId: "D1",
+    text: "Tell me about the Acme task", eventTs: "100000.001",
+  };
+  await processSlackDmEvent({
+    event: first, credentialKey: "unused", geminiApiKey: "unused",
+    appOrigin: "https://example.test", dependencies, database: memory.asFirestore(),
+  });
+  const followup = { ...first, eventId: "Ev-memory-2", text: "What about its status?", eventTs: "117000.001" };
+  await processSlackDmEvent({
+    event: followup, credentialKey: "unused", geminiApiKey: "unused",
+    appOrigin: "https://example.test", hasPriorTurn: true,
+    dependencies, database: memory.asFirestore(),
+  });
+  assert.equal(contexts[0]?.stateVersion, 0);
+  assert.equal(contexts[1]?.stateVersion, 1);
+  assert.match(String((contexts[1]?.state as { summary?: string })?.summary || ""), /Acme task/);
+  assert.deepEqual(
+    (contexts[1]?.priorMessages as Array<{ text: string }>).map((message) => message.text),
+    ["Tell me about the Acme task"],
+  );
+  const inspect = await processSlackDmEvent({
+    event: { ...first, eventId: "Ev-memory-3", text: "What do you remember?", eventTs: "117000.002" },
+    credentialKey: "unused", geminiApiKey: "unused", appOrigin: "https://example.test",
+    hasPriorTurn: true, dependencies, database: memory.asFirestore(),
+  });
+  assert.match(inspect.replyText || "", /Current topic: What about its status/);
+  assert.match(inspect.replyText || "", /Referenced records: Call Acme/);
+
+  const reset = await processSlackDmEvent({
+    event: { ...first, eventId: "Ev-memory-4", text: "start fresh", eventTs: "117000.003" },
+    credentialKey: "unused", geminiApiKey: "unused", appOrigin: "https://example.test",
+    hasPriorTurn: true, dependencies, database: memory.asFirestore(),
+  });
+  assert.match(reset.replyText || "", /Started a fresh topic/);
+  const afterReset = await processSlackDmEvent({
+    event: { ...first, eventId: "Ev-memory-5", text: "What do you remember?", eventTs: "117000.004" },
+    credentialKey: "unused", geminiApiKey: "unused", appOrigin: "https://example.test",
+    hasPriorTurn: true, dependencies, database: memory.asFirestore(),
+  });
+  assert.match(afterReset.replyText || "", /not carrying any useful discussion state/);
+
+  const forgotten = await processSlackDmEvent({
+    event: { ...first, eventId: "Ev-memory-6", text: "forget this conversation", eventTs: "117000.005" },
+    credentialKey: "unused", geminiApiKey: "unused", appOrigin: "https://example.test",
+    hasPriorTurn: true, dependencies, database: memory.asFirestore(),
+  });
+  assert.match(forgotten.replyText || "", /Forgot the conversation context/);
 });
 
 test("a late event is retained and flagged without moving the committed cursor backward", async () => {

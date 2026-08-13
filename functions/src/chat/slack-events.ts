@@ -6,6 +6,13 @@ import {
   persistCompanyAgentInbound,
   persistCompanyConversationReply,
 } from "../agent/service.js";
+import {
+  beginConversationSession,
+  completeConversationSessionTurn,
+  describeConversationMemory,
+  loadAuthorizedConversationContext,
+  type ConversationSessionControl,
+} from "../agent/conversation-memory.js";
 import { authorizedSlackDirect } from "../connectors/slack-oauth.js";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
@@ -61,9 +68,12 @@ export type SlackTurnRoute =
   | "capability"
   | "company_fact"
   | "contextual_followup"
-  | "action_request";
+  | "action_request"
+  | "memory_inspect"
+  | "session_reset"
+  | "memory_forget";
 
-export const slackConversationContextVersion = "slack-conversation-v1";
+export const slackConversationContextVersion = "slack-conversation-v2";
 // Longer than the five-minute function timeout: a live worker cannot be
 // reclaimed merely because one grounded answer is slow.
 export const slackConversationLeaseMs = 6 * 60 * 1000;
@@ -78,6 +88,15 @@ export class SlackConversationBusyError extends Error {
 
 export function routeSlackTurn(text: string, hasPriorTurn = false): SlackTurnRoute {
   const normalized = text.trim().toLocaleLowerCase("en").replace(/\s+/g, " ");
+  if (/^(?:what do you remember|what are we discussing|co si pamatuješ|o čem se bavíme)[?.!]*$/u.test(normalized)) {
+    return "memory_inspect";
+  }
+  if (/^(?:new topic|start fresh|nové téma|začni znovu)[?.!]*$/u.test(normalized)) {
+    return "session_reset";
+  }
+  if (/^(?:forget this conversation|forget our conversation|zapomeň (?:tento|náš) rozhovor)[?.!]*$/u.test(normalized)) {
+    return "memory_forget";
+  }
   if (/^(hi|hello|hey|ahoj|čau|dobrý den|good (morning|afternoon|evening))( erik)?[!.?]*$/u.test(normalized)
     || /^(thanks|thank you|díky|děkuji|bye|goodbye|nashledanou)[!.?]*$/u.test(normalized)) {
     return "social";
@@ -239,6 +258,8 @@ function socialReply(text: string): string {
 
 const capabilityReply = "I can answer read-only questions about the company data you’re allowed to access and show the supporting sources. I won’t approve or execute consequential actions from an ordinary Slack reply.";
 const actionRequestReply = "I won’t execute or approve an action from an ordinary Slack message. I can help verify the relevant company context here; use Agent Erik’s authenticated approval surface for consequential actions.";
+const sessionResetReply = "Started a fresh topic. I won’t automatically use the previous session’s discussion state.";
+const memoryForgetReply = "Forgot the conversation context I was carrying. Retained transport and audit records will not be used as memory in future turns.";
 
 type PreparedSlackReply = {
   outcome: "answered" | "link_requested" | "ignored";
@@ -314,12 +335,30 @@ export async function processSlackDmEvent(input: {
   }
   const threadId = `slack_${sha256Hex(`${input.event.teamId}:${input.event.channelId}:${uid}`).slice(0, 40)}`;
   const inboundMessageId = `slack_${sha256Hex(input.event.eventId).slice(0, 40)}`;
+  const route = routeSlackTurn(input.event.text, input.hasPriorTurn);
+  const sessionControl: ConversationSessionControl = route === "memory_forget"
+    ? "forget"
+    : route === "session_reset" ? "start_fresh" : "continue";
+  const activityAtMs = input.lateArrival
+    ? Date.now()
+    : Math.round(Number(input.event.eventTs) * 1000);
+  const session = await beginConversationSession({
+    companyId: workspace.companyId,
+    actorUid: uid,
+    threadId,
+    activityAtMs,
+    control: sessionControl,
+    idempotencyKey: inboundMessageId,
+    database,
+  });
   const originMetadata = {
     teamId: input.event.teamId,
     slackUserId: input.event.slackUserId,
     channelId: input.event.channelId,
     eventId: input.event.eventId,
     eventTs: input.event.eventTs,
+    sessionId: session.sessionId,
+    memoryGeneration: session.memoryGeneration,
     ...(input.lateArrival ? { lateArrival: true } : {}),
   };
   await persistInbound({
@@ -328,24 +367,43 @@ export async function processSlackDmEvent(input: {
     threadId,
     question: input.event.text,
     messageId: inboundMessageId,
-    createdAtMs: input.lateArrival
-      ? Date.now()
-      : Math.round(Number(input.event.eventTs) * 1000),
+    createdAtMs: activityAtMs,
     origin: "slack_dm",
     originMetadata,
+    sessionId: session.sessionId,
+    memoryGeneration: session.memoryGeneration,
     database,
   });
-  const route = routeSlackTurn(input.event.text, input.hasPriorTurn);
+  const context = await loadAuthorizedConversationContext({
+    companyId: workspace.companyId,
+    actorUid: uid,
+    threadId,
+    session,
+    excludeMessageId: inboundMessageId,
+    database,
+  });
   const turnMetadata = {
     route,
     contextVersion: slackConversationContextVersion,
     toolPolicy: ["company_fact", "contextual_followup"].includes(route)
       ? "fresh_company_evidence_required"
       : "no_company_tools",
+    contextUsed: {
+      sessionId: context.sessionId,
+      memoryGeneration: context.memoryGeneration,
+      stateVersion: context.stateVersion,
+      recentMessageIds: context.priorMessages.map((message) => message.id),
+      estimatedRecentTokens: context.estimatedTokens,
+      selectedMemoryIds: context.selectedMemoryIds,
+    },
     replyIdentity: { slackEventId: input.event.eventId, clientMessageId: input.event.eventId },
   };
   let replyText = "";
   let runId = "";
+  let assistantMessageId = "";
+  let citations: Awaited<ReturnType<typeof askCompanyFactAgent>>["citations"] = [];
+  let confidence: "high" | "medium" | "low" = "high";
+  let limitations: string[] = [];
   if (route === "company_fact" || route === "contextual_followup") {
     const answer = await ask({
       companyId: workspace.companyId,
@@ -358,14 +416,23 @@ export async function processSlackDmEvent(input: {
       inboundMessageId,
       idempotencyKey: input.event.eventId,
       turnMetadata,
+      conversationContext: context,
       database,
     });
     replyText = slackAnswerText(answer, input.appOrigin);
     runId = answer.runId;
+    assistantMessageId = answer.messageId;
+    citations = answer.citations;
+    confidence = answer.confidence;
+    limitations = answer.limitations;
   } else {
     replyText = route === "social"
       ? socialReply(input.event.text)
-      : route === "capability" ? capabilityReply : actionRequestReply;
+      : route === "capability" ? capabilityReply
+        : route === "memory_inspect" ? describeConversationMemory(context)
+          : route === "session_reset" ? sessionResetReply
+            : route === "memory_forget" ? memoryForgetReply
+              : actionRequestReply;
     const persisted = await persistReply({
       companyId: workspace.companyId,
       actorUid: uid,
@@ -377,10 +444,34 @@ export async function processSlackDmEvent(input: {
       origin: "slack_dm",
       originMetadata,
       turnMetadata,
+      sessionId: session.sessionId,
+      memoryGeneration: session.memoryGeneration,
       database,
     });
     runId = persisted.runId;
+    assistantMessageId = persisted.messageId;
   }
+  const completed = await completeConversationSessionTurn({
+    companyId: workspace.companyId,
+    actorUid: uid,
+    threadId,
+    session,
+    userMessageId: inboundMessageId,
+    assistantMessageId,
+    question: input.event.text,
+    route,
+    citations,
+    confidence,
+    limitations,
+    activityAtMs,
+    database,
+  });
+  await database.doc(companyDocumentPath(workspace.companyId, "agentRuns", runId)).set({
+    contextUsed: {
+      ...turnMetadata.contextUsed,
+      resultingStateVersion: completed.stateVersion,
+    },
+  }, { merge: true });
   return {
     outcome: "answered",
     replyText,

@@ -36,7 +36,8 @@ below suggests:
 - Slack direct-message conversational correctness is deployed and accepted. It
   verifies Slack requests, links a Slack identity to an Erik member, routes
   before tools, persists inbound events first, serializes each DM, and records
-  idempotent reply identities. Durable multi-session memory remains Slice 9.
+  idempotent reply identities. Slice 9A adds bounded durable sessions and
+  explicit memory controls; retrieval across older sessions remains 9B.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -314,30 +315,50 @@ question, pronoun-based follow-up, capability question, and two rapid messages;
 the stored and visible order is causal and no answer repeats merely because a
 tool call was forced.
 
-### Slice 9: durable conversation sessions and memory
+### Slice 9A: bounded durable conversation sessions
+
+**Implemented; test-production acceptance pending:** Slack DM threads now use a
+six-hour inactivity boundary and explicit `new topic` / `start fresh` controls.
+Recent raw turns are assembled under a 6,000-token estimate rather than a fixed
+message count. Each session stores versioned compact state with exact first and
+last message IDs, discussed authorized records, unresolved questions, explicit
+corrections, and conversation decisions. Every factual turn still uses fresh
+authorized company tools; summaries cannot satisfy citations.
+
+`what do you remember?` exposes the active state. `forget this conversation`
+rotates a memory generation, so retained provider/audit records cannot silently
+re-enter future prompts. Session selection and state completion are idempotent
+per inbound Slack message, and every run records the exact session, state
+version, selected raw message IDs, estimated token use, and selected memory IDs.
+
+**Usable outcome:** a person can continue one working discussion across a
+normal break, inspect what Erik is carrying, and deliberately reset or forget
+it.
+
+Exit criterion: a real Slack discussion persists across a later follow-up,
+`what do you remember?` reports only the current session, updated facts are
+retrieved again, `start fresh` removes prior discussion state, and membership or
+source revocation fails closed on the next turn.
+
+### Slice 9B: relevant older-session recall
 
 **Usable outcome:** a person can return after hours or days and Erik remembers
 the useful discussion state without confusing memory with current company
 truth.
 
-- use a token budget for recent raw turns instead of a fixed message count;
-- close sessions after a deliberate inactivity threshold or explicit new-topic
-  command;
-- build versioned summaries over exact message ranges, including discussed
-  entities, unresolved questions, decisions, and explicit corrections;
 - retrieve older sessions by semantic, lexical, entity, and temporal relevance;
 - re-fetch authoritative company evidence for every current factual claim;
-- provide inspect, correct, forget, and start-fresh controls; and
-- apply member/source authorization again when assembling both conversation
-  memory and company evidence.
+- support explicit correction of derived older-session state; and
+- rebuild or exclude older memories when their source dependencies or policy
+  version change.
 
 Do not start with a universal autonomous memory framework. Recent turns,
 provenance-bound summaries, conservative retrieval, and explicit deletion are
 the smallest supportable design.
 
-Exit criterion: deterministic and live evaluations cover multi-session recall,
-time references, updated facts, contradictions, revocation, and abstention. No
-summary is accepted as a citation.
+Exit criterion: deterministic and live evaluations cover relevant older-session
+recall, time references, contradictions, revocation, and abstention. No summary
+is accepted as a citation.
 
 ### Slice 10: conversation-to-proposal handoff
 

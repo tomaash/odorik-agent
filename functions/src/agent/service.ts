@@ -9,6 +9,11 @@ import { qdrantFromEnvironment } from "./search.js";
 import { CompanyFactTools } from "./tools.js";
 import { memberThreadDocumentId } from "./threads.js";
 import { sha256Hex } from "../hash.js";
+import {
+  conversationStatePrompt,
+  selectTokenBudgetedMessages,
+  type ConversationContextSnapshot,
+} from "./conversation-memory.js";
 
 export type AgentMessageOrigin = "web" | "slack_dm";
 
@@ -17,6 +22,7 @@ export type ConversationTurnMetadata = {
   contextVersion?: string;
   toolPolicy?: string;
   replyIdentity?: Record<string, unknown>;
+  contextUsed?: Record<string, unknown>;
 };
 
 function conversationRefs(input: {
@@ -43,6 +49,8 @@ export async function persistCompanyAgentInbound(input: {
   createdAtMs: number;
   origin: AgentMessageOrigin;
   originMetadata?: Record<string, unknown>;
+  sessionId?: string;
+  memoryGeneration?: number;
   database?: FirebaseFirestore.Firestore;
 }): Promise<void> {
   const database = input.database || db;
@@ -67,6 +75,8 @@ export async function persistCompanyAgentInbound(input: {
     actorUid: input.actorUid,
     origin: input.origin,
     originMetadata: jsonSafe(input.originMetadata || {}),
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.memoryGeneration ? { memoryGeneration: input.memoryGeneration } : {}),
     createdAt,
   }, { merge: true });
   await batch.commit();
@@ -83,6 +93,8 @@ export async function persistCompanyConversationReply(input: {
   origin: AgentMessageOrigin;
   originMetadata?: Record<string, unknown>;
   turnMetadata?: ConversationTurnMetadata;
+  sessionId?: string;
+  memoryGeneration?: number;
   database?: FirebaseFirestore.Firestore;
 }) {
   const database = input.database || db;
@@ -115,6 +127,8 @@ export async function persistCompanyConversationReply(input: {
     origin: input.origin,
     originMetadata,
     replyToMessageId: input.inboundMessageId,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
+    ...(input.memoryGeneration ? { memoryGeneration: input.memoryGeneration } : {}),
     createdAt: answerAt,
   });
   batch.set(runRef, {
@@ -153,6 +167,7 @@ export async function askCompanyFactAgent(input: {
   inboundMessageId?: string;
   idempotencyKey?: string;
   turnMetadata?: ConversationTurnMetadata;
+  conversationContext?: ConversationContextSnapshot;
   database?: FirebaseFirestore.Firestore;
 }) {
   const database = input.database || db;
@@ -188,9 +203,11 @@ export async function askCompanyFactAgent(input: {
   }
   const [threadSnapshot, historySnapshot] = await Promise.all([
     threadRef.get(),
-    messagesRef.orderBy("createdAt", "desc").limit(8).get(),
+    input.conversationContext
+      ? Promise.resolve(null)
+      : messagesRef.orderBy("createdAt", "desc").limit(80).get(),
   ]);
-  const priorMessages = historySnapshot.docs.reverse().flatMap((document) => {
+  const fallbackNewest = historySnapshot?.docs.flatMap((document) => {
     if (document.id === input.inboundMessageId) return [];
     const data = document.data();
     const role = data.role === "assistant"
@@ -203,7 +220,9 @@ export async function askCompanyFactAgent(input: {
       )
       : "";
     return role && text ? [{ role, text }] : [];
-  });
+  }) || [];
+  const fallback = selectTokenBudgetedMessages(fallbackNewest);
+  const priorMessages = input.conversationContext?.priorMessages || fallback.messages;
   const repository = new FirestoreCompanyData(database, input.companyId, input.actorUid);
   const { search } = qdrantFromEnvironment({
     geminiApiKey: input.geminiApiKey,
@@ -217,6 +236,9 @@ export async function askCompanyFactAgent(input: {
     model: new GeminiRestAgentModel(input.geminiApiKey),
     tools,
     priorMessages,
+    conversationStateInstruction: input.conversationContext
+      ? conversationStatePrompt(input.conversationContext)
+      : "",
   });
   const userAt = Timestamp.now();
   const answerAt = Timestamp.fromMillis(userAt.toMillis() + 1);
@@ -263,6 +285,10 @@ export async function askCompanyFactAgent(input: {
     origin,
     originMetadata,
     replyToMessageId: input.inboundMessageId || userMessageRef.id,
+    ...(input.conversationContext ? {
+      sessionId: input.conversationContext.sessionId,
+      memoryGeneration: input.conversationContext.memoryGeneration,
+    } : {}),
     createdAt: answerAt,
   });
   batch.set(runRef, {
@@ -282,6 +308,18 @@ export async function askCompanyFactAgent(input: {
     origin,
     originMetadata,
     ...(jsonSafe(input.turnMetadata || {}) as Record<string, unknown>),
+    contextUsed: jsonSafe(input.conversationContext ? {
+      sessionId: input.conversationContext.sessionId,
+      memoryGeneration: input.conversationContext.memoryGeneration,
+      stateVersion: input.conversationContext.stateVersion,
+      recentMessageIds: input.conversationContext.priorMessages.map((message) => message.id),
+      estimatedRecentTokens: input.conversationContext.estimatedTokens,
+      selectedMemoryIds: input.conversationContext.selectedMemoryIds,
+      companyEvidencePolicy: "fresh_authorized_tools_required",
+    } : {
+      recentMessageCount: priorMessages.length,
+      estimatedRecentTokens: fallback.estimatedTokens,
+    }),
     latencyMs: Date.now() - startedAt,
     createdAt: answerAt,
   });

@@ -71,11 +71,12 @@ export async function runFactAgent(input: {
   model: AgentModel;
   tools: AgentToolExecutor;
   priorMessages?: Array<{ role: "user" | "model"; text: string }>;
+  conversationStateInstruction?: string;
   maxTurns?: number;
 }): Promise<AgentAnswer> {
   const question = input.question.trim();
   if (!question) throw new Error("Question is required");
-  const contents: GeminiContent[] = (input.priorMessages || []).slice(-8).map((message) => ({
+  const contents: GeminiContent[] = (input.priorMessages || []).map((message) => ({
     role: message.role,
     parts: [{ text: message.text.slice(0, 6000) }],
   }));
@@ -89,7 +90,8 @@ export async function runFactAgent(input: {
   for (let turnIndex = 0; turnIndex < maxTurns; turnIndex += 1) {
     const forceFinal = turnIndex === maxTurns - 1;
     const turn = await input.model.generate({
-      systemInstruction: factAgentSystemInstruction,
+      systemInstruction: [factAgentSystemInstruction, input.conversationStateInstruction || ""]
+        .filter(Boolean).join("\n\n"),
       contents,
       tools: forceFinal ? [] : [...factToolDeclarations],
       toolMode: forceFinal ? "NONE" : (toolTrace.length === 0 ? "ANY" : "AUTO"),
