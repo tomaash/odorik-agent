@@ -55,7 +55,7 @@ export const slackOAuthCallback = onRequest(
         clientSecret: slackConnectorClientSecret.value(),
         credentialKey: connectorCredentialKey.value(),
       });
-      const complete = ["chat:write", "channels:read"]
+      const complete = result.requestedScopes
         .every((scope) => result.grantedScopes.includes(scope));
       response.redirect(`${sourcesUrl}?slack=${complete ? "connected" : "partial"}`);
     } catch (error) {

@@ -17,6 +17,35 @@ The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
 CRM-specific customer intake are not platform priorities.
 
+## Current product position — 2026-08-13
+
+The repository has proved more of the kernel than the historical numbering
+below suggests:
+
+- permission-aware Calendar, Drive, Gmail, Odorik, and GitHub evidence use one
+  source and retrieval contract;
+- private member-owned agent threads, hybrid search, exact tools, citations,
+  durable index delivery, and factual-agent run traces are implemented;
+- typed task, case, case-movement, and Gmail-draft effects share the mandatory
+  approval and execution kernel;
+- approval-gated Gmail draft creation has passed test-production acceptance;
+- Slack workspace OAuth, channel selection, pointer-only approval delivery,
+  delivery outcome classification, exact authenticated approval links, and
+  operator recovery have passed automated and live test-production acceptance;
+  H1 is complete; and
+- a Slack direct-message assistant prototype is deployed and present in the
+  working tree. It verifies Slack requests, links a Slack identity to an Erik
+  member, reuses the factual agent, and persists Slack-origin runs. It is not an
+  accepted H2 slice.
+
+The direct-message dogfood exposed a product-level defect: after a company
+summary, the message “hello” was forced through a company search and produced
+another version of the summary. The previous turns were loaded; the factual
+loop's unconditional first-tool rule selected the wrong behavior for a social
+turn. The prototype also has no per-conversation serialization, only eight
+recent message documents, and no durable session memory. These are now explicit
+roadmap requirements rather than prompt-tuning follow-ups.
+
 ## Slice 1: factual company agent — implemented
 
 ### Outcome
@@ -37,7 +66,7 @@ question
 
 ### Implemented scope
 
-- One shared company thread in the new mobile-first **Agent** screen.
+- Private member-owned threads in the mobile-first **Agent** screen.
 - Safe projections of calls, contacts, cases, tasks, normalized context items,
   and audit events.
 - Four tools:
@@ -46,7 +75,8 @@ question
   - filtered record listing; and
   - exact count/group aggregation.
 - Bounded Gemini 3.5 Flash-Lite tool loop.
-- Forced tool use on the first turn.
+- Forced tool use on the first turn of the current factual endpoint. This is a
+  grounding mechanism, not the correct router for a general conversation.
 - Structured final answers with source-ID validation.
 - Prompt-injection boundary: retrieved data is evidence, never instructions.
 - Qdrant hybrid RAG with a stable temporary-unavailable response when the
@@ -69,9 +99,12 @@ question
   requires test-production acceptance under real embedding and Qdrant load.
 - Full reconciliation still deletes and rebuilds the target collection rather
   than building a shadow collection and switching an alias.
-- Firestore projections and Qdrant operations are company scoped. Per-member
-  source ACLs remain future work.
-- Conversation history is shared but there is no thread management yet.
+- Firestore projections and Qdrant operations enforce company and member source
+  access. Permission behavior still needs ongoing adversarial and revocation
+  evaluation as new sources are added.
+- Member-owned thread creation and switching exist, but there is no ordered
+  external event inbox, session lifecycle, summary, or long-term conversation
+  retrieval.
 - The evaluation set is intentionally small and synthetic; it establishes the
   harness, not production quality.
 - The agent cannot write, approve, send, or change company data.
@@ -88,20 +121,23 @@ question
 - Production search fails closed without Qdrant and never scans Firestore as
   a lexical fallback.
 
-## Slice 2: durable context index and ingestion contract — implemented kernel
+## Slice 2: durable context index and ingestion contract — implemented
 
-The index now accepts company-scoped normalized `ContextItem` records.
-Existing calls were backfilled into this contract and the generic
-Firestore-to-Qdrant path was verified. Provisioning, secret binding, verified
-backfill, and per-record synchronization are implemented. Remaining work:
+The index accepts company-scoped normalized `ContextItem` records. Existing
+sources were backfilled into this contract and the generic Firestore-to-Qdrant
+path is deployed. It now includes generation-fenced delivery leases, bounded
+retry, stale-lease recovery, terminal attention, targeted operator replay,
+one-time existing-record backfill, member eligibility, and measured
+provider-to-context and context-to-search freshness.
 
-- add indexing leases, retries, dead-letter state, replay, and health metrics;
-- measure and alert on source-to-index freshness;
+Remaining hardening is no longer required to prove the kernel, but matters
+before larger production scale:
+
 - build a shadow collection and switch an alias for zero-downtime migrations;
-- separate raw source records from derived chunks and embedding versions;
-- add restricted per-member source permissions before sharing sensitive
-  sources inside a company;
-- add corpus-size, freshness, and missing-index evaluations; and
+- separate raw source records from derived chunks and embedding versions more
+  explicitly;
+- add corpus-size, freshness, missing-index, and access-revocation evaluations;
+  and
 - expand the labeled query set from real usage.
 
 Exit criterion: every eligible source change is searchable within a measured
@@ -135,16 +171,22 @@ Exit criterion: after the first interactive calendar grant and selection, the
 same agent can answer a question requiring both a call and calendar event
 without a source-specific model tool.
 
-## Slice 3b: Drive folder connector — implemented initial version
+## Slice 3b: Drive folder connector — implemented and hardened
 
-The application now reuses the connection/resource/context kernel for
-explicitly selected Google Drive folders using `drive.readonly`. The initial
-implementation imports direct children, extracts Google Docs and text-like
-files, and retains metadata for other files. Scheduled reconciliation,
-recursive folder semantics, stale-file deletion, PDF extraction, and
-permission-aware audiences remain part of `CONNECTOR_EPIC.md`.
+The application reuses the connection/resource/context kernel for explicitly
+selected Google Drive folders using `drive.readonly`. C5 added recursive folder
+semantics, deterministic ownership for overlapping selected roots,
+complete-snapshot stale cleanup, Google Docs/text/PDF extraction, honest
+metadata-only fallbacks, durable recovery, scheduled reconciliation, freshness
+observations, and permission-aware resource audiences. The slice passed
+test-production acceptance on 2026-08-02.
 
-## Slice 4: generic proposal and human-decision cards
+## Slice 4: generic proposal and human-decision cards — kernel partially delivered
+
+The current typed action approvals already bind a named approver, immutable
+effect digest, execution attempt, result, and audit. Approve/reject and exact
+task, case, case-movement, and Gmail-draft cards are implemented. What remains
+is the broader proposal lifecycle originally intended by this slice:
 
 Once factual navigation is useful, add the second half of the product:
 
@@ -199,6 +241,144 @@ this slice. Add one only when a real workflow demands it.
 
 Exit criterion: a person can approve one external action and later prove what
 was authorized and what the provider actually did.
+
+## Next product sequence: from connector proof to operating relationship
+
+The next roadmap is organized around one usable relationship with Erik, not
+around accumulating providers. A later slice starts only after the previous
+one passes both automated contracts and a real test-production scenario.
+
+### Slice 7: finish H1 approval delivery
+
+**Completed and accepted:** 2026-08-13. The normal install now requests only
+`chat:write` and `channels:read`; `/approvals/:id` preserves the exact internal
+route across login and re-authorizes the record on load. A real call-derived
+pending task approval posted once to the selected `#all-headstart` channel. A
+second delivery attempt posted zero messages, and the exact signed-in page
+rendered the approval plus `Slack notification — Delivered`. Restricted-data,
+ambiguous-outcome, retry, disabled destination, and disconnect/revocation
+behavior remain covered by the full contract suite. The live workspace was not
+destructively disconnected after acceptance.
+
+**Usable outcome:** the named approver notices waiting work in a selected Slack
+channel and one tap reaches the real decision surface.
+
+- keep notification delivery separate from agent-authored chat actions;
+- keep shared-channel content pointer-only and skip restricted approvals;
+- finish atomic delivery claims, visible failure state, safe retry, disconnect
+  revocation, and exact approval navigation;
+- request only the notification scopes when direct conversation was not
+  explicitly enabled; and
+- dogfood one real call-derived approval through Slack.
+
+Exit criterion: one real pending approval produces one safe message per selected
+destination across duplicate trigger delivery, and disconnect stops further
+delivery. Record the observation in `CONNECTOR_EPIC.md` before calling H1 done.
+
+### Slice 8: conversational correctness in one Slack DM
+
+**Usable outcome:** a linked member can hold a short, natural, read-only Slack
+conversation without repeated, missing, duplicated, or reversed replies.
+
+- introduce a turn router with explicit `social`, `capability`,
+  `company_fact`, `contextual_followup`, and `action_request` modes;
+- use no company tools for social/capability turns, require fresh evidence for
+  factual modes, and keep action requests non-executing;
+- persist each inbound event before generation and deduplicate on Slack event
+  identity;
+- serialize work with a per-conversation lease, fence stale workers, and process
+  pending events by provider timestamp plus a stable tie-breaker;
+- persist the chosen mode, context version, tool policy, and reply identity on
+  every run; and
+- keep direct-message access as an explicit capability independent of H1
+  notification delivery.
+
+Exit criterion: the acceptance conversation covers greeting, grounded company
+question, pronoun-based follow-up, capability question, and two rapid messages;
+the stored and visible order is causal and no answer repeats merely because a
+tool call was forced.
+
+### Slice 9: durable conversation sessions and memory
+
+**Usable outcome:** a person can return after hours or days and Erik remembers
+the useful discussion state without confusing memory with current company
+truth.
+
+- use a token budget for recent raw turns instead of a fixed message count;
+- close sessions after a deliberate inactivity threshold or explicit new-topic
+  command;
+- build versioned summaries over exact message ranges, including discussed
+  entities, unresolved questions, decisions, and explicit corrections;
+- retrieve older sessions by semantic, lexical, entity, and temporal relevance;
+- re-fetch authoritative company evidence for every current factual claim;
+- provide inspect, correct, forget, and start-fresh controls; and
+- apply member/source authorization again when assembling both conversation
+  memory and company evidence.
+
+Do not start with a universal autonomous memory framework. Recent turns,
+provenance-bound summaries, conservative retrieval, and explicit deletion are
+the smallest supportable design.
+
+Exit criterion: deterministic and live evaluations cover multi-session recall,
+time references, updated facts, contradictions, revocation, and abstention. No
+summary is accepted as a citation.
+
+### Slice 10: conversation-to-proposal handoff
+
+**Usable outcome:** after discussing a customer or desired result, a person can
+ask Erik to prepare one existing typed action and receive an exact decision
+card in the application.
+
+- begin with an already proven effect such as `task.create` or
+  `mail.draft.create` rather than a new action;
+- resolve conversational references to exact records and current evidence;
+- disclose the proposed payload, assumptions, approver, and effects before any
+  decision;
+- post only a pointer and proposal status into Slack;
+- perform approval, edits, evidence inspection, execution, and recovery in the
+  authenticated Erik application; and
+- resume the conversation with the observed result.
+
+Exit criterion: one Slack discussion produces one immutable proposal, the named
+person approves it in Erik, exactly one effect occurs, and both surfaces show
+the same factual outcome.
+
+### Slice 11: intentional multi-surface continuity
+
+**Usable outcome:** a person can deliberately continue the same conversation
+between Slack and the Erik application without accidental history merging.
+
+- model external bindings separately from logical threads and sessions;
+- make “continue in Erik,” “new topic,” and binding state visible;
+- add exact deep links to the thread, proposal, and approval being discussed;
+- define retention and deletion behavior for provider events and derived
+  memory; and
+- add mentions, shared channels, or another provider only when a named loop and
+  privacy model require them.
+
+Direct messages do not justify reading general channel history. A future shared
+conversation must define audience intersection, participant identity, mention
+semantics, and what happens when membership changes before implementation.
+
+### Slice 12: measured coordination and carefully bounded initiative
+
+**Usable outcome:** Erik helps work progress without becoming noisy or silently
+autonomous.
+
+- measure unanswered questions, proposal conversion, decision latency,
+  repetition, correction, memory usefulness, and notification fatigue;
+- use workflow-owned triggers for reminders and exception notices rather than
+  letting a model send arbitrary proactive messages;
+- let administrators configure destination, cadence, quiet hours, and stop
+  controls;
+- add another agent package or provider only when it improves a measured loop;
+  and
+- consider delegated low-risk automation only as a separate governance product
+  with explicit limits, revocation, and audit—not as an extension of memory.
+
+Exit criterion: a bounded proactive behavior measurably shortens one operating
+loop, can be disabled immediately, and does not increase unauthorized,
+duplicated, or unwanted effects.
 
 ## Small executable language before a universal builder
 

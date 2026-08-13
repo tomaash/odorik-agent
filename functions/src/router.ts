@@ -6,8 +6,7 @@ import { defineSecret } from "firebase-functions/params";
 import { db, jsonSafe } from "./firestore.js";
 import { canMemberAccessSourceData } from "./access.js";
 import { adminProcedure, enabledProcedure, router, signedInProcedure } from "./trpc.js";
-import { GeminiRestAgentModel } from "./agent/gemini.js";
-import { runFactAgent, factAgentPromptVersion } from "./agent/loop.js";
+import { factAgentPromptVersion } from "./agent/loop.js";
 import { FirestoreCompanyData, rehydrateCitationPresentation } from "./agent/knowledge.js";
 import {
   embeddingDimensions,
@@ -16,8 +15,8 @@ import {
   qdrantConfigurationFromEnvironment,
   qdrantFromEnvironment,
 } from "./agent/search.js";
-import { CompanyFactTools } from "./agent/tools.js";
 import { memberThreadDocumentId } from "./agent/threads.js";
+import { askCompanyFactAgent } from "./agent/service.js";
 import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
 import {
   enqueueKnowledgeIndexBackfill,
@@ -40,6 +39,7 @@ import {
 } from "./workflow/runtime.js";
 import {
   approveAction,
+  getActionApproval,
   listActionApprovals,
   rejectAction,
 } from "./approvals/repository.js";
@@ -96,10 +96,16 @@ import {
 } from "./connectors/grok-subscription.js";
 import {
   createSlackAuthorization,
+  revokeSlackAuthorization,
   slackConnectorClientId,
-  slackConnectorClientSecret,
 } from "./connectors/slack-oauth.js";
 import { listSlackChannels, selectSlackChannels } from "./chat/channels.js";
+import { consumeSlackLink, inspectSlackLink } from "./chat/slack-link.js";
+import {
+  listChatNotifications,
+  retryApprovalNotifications,
+} from "./chat/deliver.js";
+import { productionAppOrigin } from "./connectors/google-oauth-return.js";
 import type { SourceCapabilityId } from "./connectors/types.js";
 import {
   acceptTeamInvitation,
@@ -564,6 +570,10 @@ export const appRouter = router({
     slack: router({
       authorizationUrl: adminProcedure
         .input(z.object({
+          capabilityIds: z.array(z.enum([
+            "action.chat.notify",
+            "context.chat.direct",
+          ])).min(1).max(2).default(["action.chat.notify"]),
           returnOrigin: z.string().max(200).optional(),
         }))
         .mutation(({ ctx, input }) => createSlackAuthorization({
@@ -572,6 +582,7 @@ export const appRouter = router({
           email: ctx.email,
           displayName: ctx.displayName,
           clientId: slackConnectorClientId.value(),
+          capabilityIds: input.capabilityIds,
           returnOrigin: input.returnOrigin,
         })),
       channels: adminProcedure
@@ -593,6 +604,44 @@ export const appRouter = router({
           ...input,
           actorUid: ctx.uid,
           credentialKey: connectorCredentialKey.value(),
+        })),
+      deliveries: adminProcedure
+        .input(z.object({
+          limit: z.number().int().min(1).max(200).default(100),
+        }).optional())
+        .query(({ ctx, input }) => listChatNotifications({
+          companyId: ctx.companyId,
+          limit: input?.limit,
+        })),
+      retryDelivery: adminProcedure
+        .input(z.object({
+          approvalId: z.string().min(1).max(200),
+        }))
+        .mutation(({ ctx, input }) => retryApprovalNotifications({
+          companyId: ctx.companyId,
+          approvalId: input.approvalId,
+          appOrigin: productionAppOrigin,
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      linkPreview: enabledProcedure
+        .input(z.object({ token: z.string().min(20).max(200) }))
+        .query(async ({ ctx, input }) => {
+          const link = await inspectSlackLink({
+            token: input.token,
+            companyId: ctx.companyId,
+          });
+          return {
+            teamId: link.teamId,
+            slackUserId: link.slackUserId,
+            expiresAt: link.expiresAt.toDate().toISOString(),
+          };
+        }),
+      linkIdentity: enabledProcedure
+        .input(z.object({ token: z.string().min(20).max(200) }))
+        .mutation(({ ctx, input }) => consumeSlackLink({
+          token: input.token,
+          companyId: ctx.companyId,
+          uid: ctx.uid,
         })),
     }),
     googleCalendar: router({
@@ -943,6 +992,12 @@ export const appRouter = router({
               });
               providerAccessRevoked = false;
             }
+          } else if (prepared.connectorId === "slack") {
+            providerAccessRevoked = await revokeSlackAuthorization({
+              companyId: ctx.companyId,
+              connectionId: input.connectionId,
+              credentialKey: connectorCredentialKey.value(),
+            });
           }
           return await deleteSourceConnection({
             companyId: ctx.companyId,
@@ -1147,99 +1202,13 @@ export const appRouter = router({
         threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general"),
         question: z.string().trim().min(1).max(3000),
       }))
-      .mutation(async ({ ctx, input }) => {
-        const threadRef = db.doc(
-          companyDocumentPath(
-            ctx.companyId,
-            "agentThreads",
-            memberThreadDocumentId(ctx.uid, input.threadId),
-          ),
-        );
-        const messagesRef = threadRef.collection("messages");
-        const [threadSnapshot, historySnapshot] = await Promise.all([
-          threadRef.get(),
-          messagesRef.orderBy("createdAt", "desc").limit(8).get(),
-        ]);
-        const priorMessages = historySnapshot.docs.reverse().flatMap((document) => {
-          const data = document.data();
-          const role = data.role === "assistant" ? "model" as const : data.role === "user" ? "user" as const : null;
-          const text = typeof data.text === "string"
-            ? data.text.replace(/\[C\d+(?:\s*,\s*C\d+)*\]/g, "[previous sources omitted; re-check with tools]")
-            : "";
-          return role && text ? [{ role, text }] : [];
-        });
-        const apiKey = geminiApiKey.value();
-        const repository = new FirestoreCompanyData(db, ctx.companyId, ctx.uid);
-        const { search } = qdrantFromEnvironment({
-          geminiApiKey: apiKey,
-          companyId: ctx.companyId,
-          memberId: ctx.uid,
-        });
-        const tools = new CompanyFactTools(repository, search);
-        const startedAt = Date.now();
-        const answer = await runFactAgent({
-          question: input.question,
-          model: new GeminiRestAgentModel(apiKey),
-          tools,
-          priorMessages,
-        });
-        const userAt = Timestamp.now();
-        const answerAt = Timestamp.fromMillis(userAt.toMillis() + 1);
-        const userMessageRef = messagesRef.doc();
-        const answerMessageRef = messagesRef.doc();
-        const runRef = db.collection(
-          companyCollectionPath(ctx.companyId, "agentRuns"),
-        ).doc();
-        const batch = db.batch();
-        batch.set(threadRef, {
-          ownerUid: ctx.uid,
-          clientThreadId: input.threadId,
-          ...(!threadSnapshot.exists || !threadSnapshot.data()?.lastMessageAt ? {
-            title: input.question.slice(0, 80),
-          } : {}),
-          ...(threadSnapshot.exists ? {} : {
-            createdAt: userAt,
-          }),
-          updatedAt: answerAt,
-          lastMessageAt: answerAt,
-        }, { merge: true });
-        batch.set(userMessageRef, {
-          role: "user",
-          text: input.question,
-          actorUid: ctx.uid,
-          createdAt: userAt,
-        });
-        const safeCitations = jsonSafe(answer.citations);
-        batch.set(answerMessageRef, {
-          role: "assistant",
-          text: answer.answer,
-          citations: safeCitations,
-          confidence: answer.confidence,
-          limitations: answer.limitations,
-          runId: runRef.id,
-          actorUid: ctx.uid,
-          createdAt: answerAt,
-        });
-        batch.set(runRef, {
-          kind: "fact_agent",
-          companyId: ctx.companyId,
-          threadId: input.threadId,
-          question: input.question,
-          answer: answer.answer,
-          citations: safeCitations,
-          confidence: answer.confidence,
-          limitations: answer.limitations,
-          toolTrace: jsonSafe(answer.toolTrace),
-          usage: answer.usage,
-          model: "gemini-3.5-flash-lite",
-          promptVersion: factAgentPromptVersion,
-          actorUid: ctx.uid,
-          latencyMs: Date.now() - startedAt,
-          createdAt: answerAt,
-        });
-        await batch.commit();
-        return { ...answer, runId: runRef.id, messageId: answerMessageRef.id };
-      }),
+      .mutation(({ ctx, input }) => askCompanyFactAgent({
+        companyId: ctx.companyId,
+        actorUid: ctx.uid,
+        threadId: input.threadId,
+        question: input.question,
+        geminiApiKey: geminiApiKey.value(),
+      })),
     reindex: adminProcedure.mutation(async ({ ctx }) => {
       const apiKey = geminiApiKey.value();
       const repository = new FirestoreCompanyData(db, ctx.companyId);
@@ -1323,6 +1292,13 @@ export const appRouter = router({
   }),
 
   approvals: router({
+    get: enabledProcedure
+      .input(z.object({ approvalId: z.string().min(1).max(200) }))
+      .query(({ ctx, input }) => getActionApproval({
+        companyId: ctx.companyId,
+        memberUid: ctx.uid,
+        approvalId: input.approvalId,
+      })),
     list: enabledProcedure
       .input(z.object({
         status: z.enum([

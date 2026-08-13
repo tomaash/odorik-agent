@@ -38,17 +38,15 @@ function actionKindLabel(kind: unknown): string {
 }
 
 /**
- * Approvals have no route of their own; they render on the case page when they
- * belong to a case and on the task list otherwise. Link where the card actually is,
- * rather than minting a URL that looks precise and resolves nowhere.
+ * Every notice links to the authenticated approval surface. That surface loads the
+ * exact access-filtered record and renders the same card used by Work and Cases.
  */
 export function approvalNotificationLink(input: {
   appOrigin: string;
-  caseId?: unknown;
+  approvalId: string;
 }): string {
   const origin = input.appOrigin.replace(/\/+$/, "");
-  const caseId = typeof input.caseId === "string" ? input.caseId.trim() : "";
-  return caseId ? `${origin}/cases/${encodeURIComponent(caseId)}` : `${origin}/tasks`;
+  return `${origin}/approvals/${encodeURIComponent(input.approvalId)}`;
 }
 
 function isCompanyWide(audience: unknown): boolean {
@@ -75,7 +73,6 @@ export function composeApprovalNotification(
   if (!isCompanyWide(approval.access)) return null;
 
   const action = (approval.action || {}) as Record<string, unknown>;
-  const scope = (approval.scope || {}) as Record<string, unknown>;
   const approverName = typeof approval.approverName === "string"
     ? approval.approverName.trim()
     : "";
@@ -86,7 +83,7 @@ export function composeApprovalNotification(
     text: `Approval waiting: ${label}${decider}`,
     linkUrl: approvalNotificationLink({
       appOrigin: options.appOrigin,
-      caseId: scope.caseId,
+      approvalId,
     }),
   };
 }

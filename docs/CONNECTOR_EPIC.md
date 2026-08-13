@@ -2,10 +2,12 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** H1 — outbound approval notification to Slack.
+**Current implementation slice:** H2A conversational correctness for the
+existing Slack direct-message assistant prototype. H1 outbound approval
+notification is complete and accepted.
 The core epic (C0–C5, G1–G3) is complete and accepted.
 
-**Last plan revision:** 2026-08-06
+**Last plan revision:** 2026-08-13
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains
@@ -40,7 +42,9 @@ Other products continue to own:
 
 A case note is durable operational context, not an internal chat product.
 Notifications should be delivered through the company's existing email or chat
-system.
+system. Erik may also be contacted through an explicitly linked external direct
+message, but the provider remains a transport surface. Erik owns the logical
+thread, memory policy, evidence, proposals, decisions, and run trace.
 
 ## What the sequence means
 
@@ -264,8 +268,10 @@ Every action capability must define:
 | M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
-| H1 | Post pending-approval notifications to one selected Slack channel | In progress | Gate opened 2026-08-06; approvals are invisible until someone opens the app |
-| H2 | Read selected chat mentions or channels | Gated | H1 is useful and privacy case is accepted |
+| H1 | Post pending-approval notifications to one selected Slack channel | Completed | Accepted in test production 2026-08-13 |
+| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Prototype; not accepted | H1 closes and conversational correctness passes |
+| H2B | Resume one logical conversation across Slack and Erik | Gated | H2A is useful and memory/retention controls pass |
+| H2C | Read selected mentions or shared channels | Gated | A named group loop and audience/privacy model are accepted |
 
 ## Core foundation slices
 
@@ -1359,7 +1365,7 @@ Build only one provider and one typed action first, such as creating a ticket
 or updating an external case stage. GitHub Issues is not privileged merely
 because it is already a planned catalog entry.
 
-### H1–H2 — Chat
+### H1–H2C — Chat
 
 Decision gate: a customer operating loop measurably benefits from chat delivery
 and identifies the provider it already uses.
@@ -1370,8 +1376,10 @@ external effect in the product waits on a named approver, and nothing tells that
 approver they are needed. Record this as the reason if the slice is later
 questioned.
 
-H2 may later ingest direct mentions or explicitly selected channels. It does
-not ingest a whole company by default and does not promise complete history.
+Chat expands in concentric privacy boundaries: linked direct message first,
+intentional cross-surface continuity second, selected shared conversation only
+if demanded. It does not ingest a whole company by default and does not promise
+complete provider history.
 
 #### H1 — Outbound approval notification
 
@@ -1392,7 +1400,7 @@ Erik's own approval lifecycle emits notifications, with content Erik composes
 from records it already owns.
 
 **The channel receives a pointer, not the payload.** The message carries the
-action kind, the case or contact label, the named approver, and a deep link.
+action kind, the named approver, and a deep link.
 It never carries the draft body, the recipient address, transcript text, or
 evidence. Erik's own access control then governs what the person actually sees
 when they follow the link — a channel's membership is not an Erik audience and
@@ -1432,11 +1440,9 @@ Known limits accepted for this slice:
   Email draft — Tomáš Holas decides" and a link. A human-readable case or contact
   label would need a lookup whose own audience must then be checked, so it is a
   deliberate second step rather than a convenience taken now.
-- **The link lands on the page, not the card.** There is no `/approvals/:id`
-  route; approvals render inside `/cases/:id` and `/tasks`. The notification links
-  to whichever of those actually holds the card. A per-approval route is worth
-  adding, but inventing the URL before the route exists is the mistake `c06cde8`
-  already made with Gmail links.
+- **The approval still happens in Erik.** `/approvals/:id` renders the exact,
+  access-filtered approval card and survives a login redirect. Slack contains no
+  interactive approve/reject controls in this slice.
 
 Not included:
 
@@ -1467,6 +1473,93 @@ not recommend Discord as a universal company default merely because its free
 tier is generous. A future starter-stack guide should be neutral, disclose
 identity/security/retention tradeoffs, and remain content rather than a product
 dependency.
+
+#### H2A — Linked direct-message assistant
+
+**Usable outcome:** an authenticated company member can message Erik privately
+in Slack, receive a concise grounded answer, ask a contextual follow-up, and
+return later without the conversation losing or inventing its state.
+
+**Current prototype:** the deployed and working-tree implementation verifies
+Slack signatures, deduplicates event IDs, queues DM events, maps one Slack
+workspace to one company connection, issues a short-lived account-link token,
+binds the Slack identity to an active Erik member, reuses the member-filtered
+factual agent, persists Slack-origin messages and runs, and posts citations back
+to the DM. The direct-message grant remains modeled independently; the normal
+H1 connector setup no longer requests `im:history`.
+
+This is implementation evidence, not slice acceptance. Test-production dogfood
+recorded a company-summary question followed the next day by “hello.” Although
+the previous thread was loaded, the factual loop forced a tool call, searched
+for another company overview, and repeated the summary. The prototype also
+processes event documents independently, persists the inbound message only
+after generation, uses a fixed eight-message history, and has no session summary
+or long-term retrieval. Rapid messages may therefore read the same stale
+history or complete out of causal order.
+
+Contract decisions:
+
+- **Route before tools.** Social and capability turns may answer without company
+  retrieval. Factual turns and contextual factual follow-ups must retrieve
+  current authorized evidence. Action requests may create only typed proposals.
+- **One ordered conversation runtime.** Slack is at-least-once transport, not
+  the scheduler. Append an idempotent inbox event, serialize by conversation,
+  apply a small explicit reorder window, process provider time plus stable
+  tie-breaker, fence stale workers, and reuse a persisted reply on delivery
+  retry. Retain and flag events that arrive behind the committed cursor rather
+  than rewriting visible history.
+- **Memory is layered.** Use recent raw turns under a token budget, compact
+  active-session state, and relevant provenance-bound older summaries. Previous
+  assistant answers and summaries never count as company evidence.
+- **Identity and access are live.** The Slack link proves a member binding, but
+  every turn rechecks active membership and source audiences. Disconnect,
+  unlink, membership disablement, and source revocation affect the next turn.
+- **DM capability is independent.** `context.chat.direct` and
+  `action.chat.notify` are separate logical grants. Setup requests only the
+  scopes for capabilities an administrator explicitly enabled, even if Slack
+  stores the resulting bot scopes in one token.
+- **No approval by ordinary reply.** “yes,” emoji, or reaction is conversation,
+  not an Erik decision. Consequential approval stays in the authenticated
+  application until an equivalent Slack interaction can bind identity, exact
+  proposal digest, disclosed effects, and replay protection.
+
+Build H2A in two acceptance steps:
+
+1. **Conversational correctness:** turn routing, inbound-before-generation,
+   per-conversation lease/cursor, deterministic ordering, idempotent response,
+   concise Slack rendering, and sequence tests.
+2. **Durable continuity:** explicit session boundaries, versioned summaries,
+   relevant older-session retrieval, inspect/correct/forget controls, updated
+   fact and revocation tests.
+
+Exit criteria:
+
+- company question → grounded answer → social turn does not repeat the answer;
+- “what about its open cases?” resolves the discussed entity and retrieves
+  current case evidence;
+- two rapid messages and out-of-order/duplicate deliveries produce one reply
+  each in causal order;
+- a later session recalls an explicit unresolved topic when relevant but
+  rechecks every factual claim;
+- disabling the member, unlinking Slack, or revoking a source prevents its use
+  on the next turn;
+- every run exposes route, context revision, selected memories, tool trace,
+  citations, latency, and delivery identity; and
+- a real multi-session Slack conversation passes in test production without
+  repetition, unauthorized recall, or direct effect.
+
+#### H2B–H2C — Later chat expansion
+
+H2B binds an existing logical Erik thread to Slack deliberately and adds exact
+“continue in Erik” and “new topic” controls. It must define retention and
+deletion across both surfaces before claiming seamless continuity.
+
+H2C may add direct mentions or explicitly selected shared channels only for a
+named operating loop. Before implementation it must define the effective
+audience as the intersection of provider participants and current Erik access,
+identity for every participant, thread and mention semantics, history boundary,
+membership changes, bot visibility, retention, and disclosure. Direct-message
+success is not permission to request general channel-history scopes.
 
 ## Metrics
 
@@ -1515,6 +1608,11 @@ Provider count is not a success metric.
 - [Microsoft identity platform scopes and incremental consent](https://learn.microsoft.com/en-us/entra/identity-platform/scopes-oidc)
 - [Google Workspace Events API](https://developers.google.com/workspace/events)
 - [Slack API rate limits](https://api.slack.com/apis/rate-limits)
+- [Slack Events API delivery and retry behavior](https://docs.slack.dev/apis/events-api/)
+- [Firestore Eventarc ordering and at-least-once delivery](https://docs.cloud.google.com/firestore/native/docs/eventarc)
+- [Gemini function-calling modes](https://ai.google.dev/gemini-api/docs/function-calling)
+- [MemGPT hierarchical memory](https://arxiv.org/abs/2310.08560)
+- [LongMemEval long-term conversation benchmark](https://arxiv.org/abs/2410.10813)
 - [Discord message resource and privileged content intent](https://docs.discord.com/developers/resources/message)
 
 ## Progress log
@@ -1984,3 +2082,64 @@ YYYY-MM-DD — Slice
   no-second-draft after an unanswered lookup, create after a *confirmed* absence,
   first-attempt tolerance of a flaky pre-check, and the withdrawn link shape.
   Full functions suite green at 162.
+
+### 2026-08-13 — H1/H2A product and conversation-runtime review
+
+- **H1 state:** the branch contains Slack notification composition, OAuth,
+  channel discovery/selection, honest outcome classification, Firestore-triggered
+  delivery, atomic delivery claims, operator status/retry UI, approval-card
+  delivery state, and disconnect revocation. Automated suites are green, but no
+  real approval-to-Slack acceptance has been recorded; H1 remains in progress.
+- **H2A prototype:** Slack Events request verification, event-ID deduplication,
+  DM queueing, short-lived member linking, source-authorized factual-agent reuse,
+  Slack-origin run persistence, and DM replies are deployed/prototyped. They are
+  not accepted product behavior yet.
+- **Observed defect:** the first dogfood question requested a company summary.
+  The later message “hello” loaded that history but was forced to call a factual
+  tool, searched for another company overview, and repeated the summary. The
+  production run trace makes this a routing defect, not a hypothesis about lost
+  history.
+- **Correctness gaps found:** external turns have no per-conversation lease or
+  cursor, inbound messages are persisted after generation, history is a fixed
+  eight-message window, there is no reorder window/session summary/older-memory
+  retrieval, and notification plus DM scopes are currently requested together
+  instead of following explicit capability selection.
+- **Decision:** close H1 independently. Then implement H2A conversational
+  correctness (route before tools, ordered durable inbox, fenced single worker,
+  persisted-response delivery) before long-term memory. Add session summaries
+  and older-memory retrieval only after short conversations are causal and
+  correct. The next value proof is conversation-to-existing-typed-proposal, not
+  another provider or broad channel ingestion.
+
+### 2026-08-13 — H1 test-production acceptance
+
+- **Least privilege:** the default Slack authorization and the public connector
+  catalog expose only `action.chat.notify`, requesting `chat:write` and
+  `channels:read`. The H2A `context.chat.direct` model remains internal and must
+  be explicitly selected before `im:history` is requested.
+- **Exact, authorized navigation:** notifications now link to
+  `/approvals/:id`. The route preserves its internal return path through Google
+  login, loads one member-authorized approval through `approvals.get`, and
+  returns the same not-found response for missing and inaccessible records.
+- **Live delivery:** existing call-derived approval
+  `approval_03ef40abe816228d02922b82776d` (`task.create`, company audience,
+  pending, approver Tomáš Holas) delivered to the configured
+  `#all-headstart` destination `C0BNFGYHJR3`. The durable delivery finished
+  `succeeded` with Slack message timestamp `1786623984.322599`, no error, and no
+  active execution claim.
+- **Duplicate proof:** an immediate second attempt returned `delivered: 0`; no
+  second post was made for the same approval/destination key.
+- **UI proof:** the deployed signed-in URL retained the exact approval id,
+  rendered “Follow up after call with +420604671420,” and displayed
+  `Slack notification — Delivered`. The approval remained pending; acceptance
+  performed no consequential action.
+- **Automated proof:** all 195 function tests and 22 frontend tests pass,
+  including pointer-only content, restricted-audience silence, concurrent
+  claims, retry versus unknown outcomes, disabled/disconnected destinations,
+  OAuth scope separation, access-filtered exact lookup, and login return-path
+  safety. Both TypeScript projects and the production frontend build pass.
+- **Operational note:** `chat.getPermalink` returned no usable link for this
+  message, which is intentionally non-fatal because the post itself has a Slack
+  timestamp. The live workspace was left connected after acceptance; token
+  revocation and post-disconnect refusal are covered by contract tests rather
+  than destructively repeated against the shared dogfood workspace.

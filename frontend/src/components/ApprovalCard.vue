@@ -87,6 +87,12 @@ function severity(status: ActionApprovalItem['status']) {
   return 'secondary'
 }
 
+function notificationSeverity(status: NonNullable<ActionApprovalItem['chatNotifications']>[number]['status']) {
+  if (status === 'succeeded') return 'success'
+  if (status === 'sending') return 'info'
+  return 'warn'
+}
+
 function title() {
   if (props.approval.action.kind === 'case.move') return props.approval.action.caseTitle
   if (props.approval.action.kind === 'mail.draft.create') return props.approval.action.subject
@@ -247,6 +253,17 @@ function confirmReject() {
       <p class="text-xs text-surface-500 mt-2 mb-0">
         <i class="pi pi-sitemap mr-1" />{{ t('approvals.workflowSource', { version: approval.source.workflowVersion }) }}
       </p>
+
+      <div v-if="approval.chatNotifications?.length" class="mt-2 flex flex-wrap items-center gap-2 text-xs">
+        <span class="font-medium text-surface-500"><i class="pi pi-slack mr-1" />{{ t('approvals.chatNotification') }}</span>
+        <Tag
+          v-for="notification in approval.chatNotifications"
+          :key="notification.id"
+          :value="t(`approvals.chatNotificationStatus.${notification.status}`)"
+          :severity="notificationSeverity(notification.status)"
+          rounded
+        />
+      </div>
 
       <details v-if="approval.action.context?.callSummary || approval.action.context?.transcriptExcerpt" class="mt-3">
         <summary class="cursor-pointer text-xs font-medium text-surface-600">{{ t('tasks.callContext') }}</summary>

@@ -1,8 +1,4 @@
-import { defineSecret } from "firebase-functions/params";
-
 import type { ApprovalNotification } from "./notification.js";
-
-export const slackBotToken = defineSecret("SLACK_BOT_TOKEN");
 
 /**
  * Slack answers `HTTP 200` with `{ ok: false, error }` for most failures, so the
@@ -65,15 +61,22 @@ async function slackPost(
   token: string,
   body: Record<string, unknown>,
 ): Promise<SlackApiResponse> {
-  const response = await fetch(`https://slack.com/api/${method}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${token}`,
-      "content-type": "application/json; charset=utf-8",
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(30_000),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`https://slack.com/api/${method}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json; charset=utf-8",
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(30_000),
+    });
+  } catch (error) {
+    throw new SlackDeliveryOutcomeUnknownError(
+      `Slack request outcome is unknown: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
   // A 429 or 5xx never reached the point of posting; a parse failure might have.
   if (response.status === 429 || response.status >= 500) {
     throw new SlackApiError({
@@ -91,6 +94,31 @@ async function slackPost(
     });
   }
   return payload;
+}
+
+export async function postSlackText(input: {
+  token: string;
+  channelId: string;
+  text: string;
+  clientMessageId?: string;
+}): Promise<{ channelId: string; messageTs: string }> {
+  const posted = await slackPost("Slack chat.postMessage", "chat.postMessage", input.token, {
+    channel: input.channelId,
+    text: input.text.slice(0, 39_000),
+    unfurl_links: false,
+    unfurl_media: false,
+    ...(input.clientMessageId ? { client_msg_id: input.clientMessageId } : {}),
+  });
+  const messageTs = String(posted.ts || "").trim();
+  if (!messageTs) {
+    throw new SlackDeliveryOutcomeUnknownError(
+      "Slack accepted the message but did not return its timestamp.",
+    );
+  }
+  return {
+    channelId: String(posted.channel || input.channelId).trim(),
+    messageTs,
+  };
 }
 
 export type SlackDeliveryResult = {

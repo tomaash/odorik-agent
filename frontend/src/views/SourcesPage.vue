@@ -19,18 +19,23 @@ import {
   getGrokSubscriptionAuthorization,
   getGoogleCalendars,
   getGoogleDriveFolders,
+  getSlackChannels,
   getTeamOverview,
   getOdorikSetup,
   listSources,
+  listChatNotificationDeliveries,
   replayKnowledgeIndexDelivery,
   replaySourceSync,
+  retryChatNotificationDelivery,
   selectGoogleCalendars,
   selectGoogleDriveFolders,
+  selectSlackChannels,
   setSourceCapabilityStatus,
   setSourceConnectionStatus,
   setSourceResourceEnabled,
   setSourceResourceAudience,
   startGoogleWorkspaceAuthorization,
+  startSlackAuthorization,
   startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
   syncGoogleDrive,
@@ -51,6 +56,8 @@ import {
   type SourcesResponse,
   type GrokAuthorization,
   type KnowledgeIndexStatus,
+  type SelectableSlackChannel,
+  type ChatNotificationDelivery,
   type TeamMember,
 } from '../api/client'
 
@@ -89,6 +96,13 @@ const loadingLabels = ref(false)
 const workspaceDialogVisible = ref(false)
 const workspaceConnection = ref<SourceConnection | null>(null)
 const selectedWorkspaceCapabilities = ref<WorkspaceCapabilityId[]>([...workspaceCapabilityIds])
+const slackConnection = ref<SourceConnection | null>(null)
+const slackChannels = ref<SelectableSlackChannel[]>([])
+const selectedSlackChannelIds = ref<string[]>([])
+const loadingSlackChannels = ref(false)
+const chatDeliveries = ref<ChatNotificationDelivery[]>([])
+const chatDeliveryError = ref('')
+const retryingChatApprovalId = ref('')
 
 function isWorkspaceCapability(
   capabilityId: SourceCapabilityId,
@@ -149,6 +163,12 @@ const mailPickerVisible = computed({
   get: () => mailConnection.value !== null,
   set: (visible: boolean) => {
     if (!visible) closeMailPicker()
+  },
+})
+const slackPickerVisible = computed({
+  get: () => slackConnection.value !== null,
+  set: (visible: boolean) => {
+    if (!visible && !saving.value) slackConnection.value = null
   },
 })
 const pendingDeleteConnection = computed(() => (
@@ -230,6 +250,7 @@ function connectorIcon(connector: SourceConnector) {
     google_workspace: 'pi pi-google',
     github: 'pi pi-github',
     grok_subscription: 'pi pi-code',
+    slack: 'pi pi-slack',
   }[connector.id]
 }
 
@@ -237,11 +258,13 @@ function connectorTag(connector: SourceConnector) {
   if (connector.id === 'odorik') return t('sources.receivesRecordings')
   if (connector.id === 'github') return t('sources.github.readOnlyIssues')
   if (connector.id === 'grok_subscription') return t('sources.grok.subscriptionOAuth')
+  if (connector.id === 'slack') return t('sources.slack.notificationsOnly')
   return t('sources.workspace.services')
 }
 
 function addConnectionTitle(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connectTitle')
+  if (connector.id === 'slack') return t('sources.slack.connectTitle')
   if (connector.id !== 'github') return t('sources.workspace.addAccountTitle')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshTitle')
@@ -250,6 +273,7 @@ function addConnectionTitle(connector: SourceConnector) {
 
 function addConnectionHint(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connectHint')
+  if (connector.id === 'slack') return t('sources.slack.connectHint')
   if (connector.id !== 'github') return t('sources.workspace.addAccountHint')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshHint')
@@ -258,6 +282,7 @@ function addConnectionHint(connector: SourceConnector) {
 
 function addConnectionLabel(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connect')
+  if (connector.id === 'slack') return t('sources.slack.connect')
   if (connector.id !== 'github') return t('sources.workspace.connectAccount')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshInstallation')
@@ -274,6 +299,7 @@ function connectionKindLabel(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return t('sources.workspace.account')
   if (connection.connectorId === 'github') return t('sources.github.installation')
   if (connection.connectorId === 'grok_subscription') return t('sources.grok.connectionKind')
+  if (connection.connectorId === 'slack') return t('sources.slack.connectionKind')
   return connection.displayName
 }
 
@@ -286,6 +312,7 @@ function permissionDetailsLabel(connection: SourceConnection) {
 function deleteDescriptionKey(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return 'sources.workspace.disconnectDescription'
   if (connection.connectorId === 'github') return 'sources.github.deleteDescription'
+  if (connection.connectorId === 'slack') return 'sources.slack.disconnectDescription'
   return 'sources.deleteConfirmDescription'
 }
 
@@ -433,6 +460,9 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
     'https://www.googleapis.com/auth/gmail.readonly': t('sources.scopes.gmail'),
     'https://www.googleapis.com/auth/gmail.compose': t('sources.scopes.gmailCompose'),
+    'chat:write': t('sources.scopes.slackChatWrite'),
+    'channels:read': t('sources.scopes.slackChannelsRead'),
+    'im:history': t('sources.scopes.slackImHistory'),
     'contents:read': t('sources.scopes.githubContents'),
     'contents:write': t('sources.scopes.githubContentsWrite'),
     'issues:read': t('sources.scopes.githubIssues'),
@@ -492,6 +522,7 @@ async function load() {
   loading.value = true
   error.value = ''
   searchIndexError.value = ''
+  chatDeliveryError.value = ''
   try {
     const indexStatus = isAdmin.value
       ? getKnowledgeIndexStatus().catch((cause) => {
@@ -500,10 +531,19 @@ async function load() {
         })
       : Promise.resolve(null)
     const team = isAdmin.value ? getTeamOverview() : Promise.resolve(null)
-    const [sources, index, overview] = await Promise.all([listSources(), indexStatus, team])
+    const deliveries = isAdmin.value
+      ? listChatNotificationDeliveries().catch((cause) => {
+          chatDeliveryError.value = cause instanceof Error ? cause.message : String(cause)
+          return [] as ChatNotificationDelivery[]
+        })
+      : Promise.resolve([] as ChatNotificationDelivery[])
+    const [sources, index, overview, recentDeliveries] = await Promise.all([
+      listSources(), indexStatus, team, deliveries,
+    ])
     data.value = sources
     searchIndex.value = index
     teamMembers.value = overview?.members || []
+    chatDeliveries.value = recentDeliveries
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -565,6 +605,18 @@ async function addConnection(connector: SourceConnector) {
     openWorkspaceAuthorization()
     return
   }
+  if (connector.id === 'slack') {
+    saving.value = true
+    error.value = ''
+    try {
+      const result = await startSlackAuthorization()
+      window.location.assign(result.authorizationUrl)
+    } catch (cause) {
+      error.value = cause instanceof Error ? cause.message : String(cause)
+      saving.value = false
+    }
+    return
+  }
   if (connector.id === 'odorik') {
     await createOdorik()
     return
@@ -582,6 +634,72 @@ async function addConnection(connector: SourceConnector) {
     } finally {
       saving.value = false
     }
+  }
+}
+
+async function openSlackPicker(connection: SourceConnection) {
+  loadingSlackChannels.value = true
+  error.value = ''
+  slackConnection.value = connection
+  slackChannels.value = []
+  selectedSlackChannelIds.value = connection.resources
+    .filter((resource) => resource.capabilityId === 'action.chat.notify' && resource.status === 'enabled')
+    .map((resource) => resource.externalId)
+  try {
+    slackChannels.value = await getSlackChannels(connection.id)
+  } catch (cause) {
+    slackConnection.value = null
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    loadingSlackChannels.value = false
+  }
+}
+
+function toggleSlackChannel(channelId: string) {
+  selectedSlackChannelIds.value = selectedSlackChannelIds.value.includes(channelId)
+    ? selectedSlackChannelIds.value.filter((id) => id !== channelId)
+    : [...selectedSlackChannelIds.value, channelId]
+}
+
+async function saveSlackSelection() {
+  if (!slackConnection.value) return
+  saving.value = true
+  error.value = ''
+  try {
+    await selectSlackChannels(slackConnection.value.id, selectedSlackChannelIds.value)
+    slackConnection.value = null
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    saving.value = false
+  }
+}
+
+function deliveriesForConnection(connectionId: string) {
+  return chatDeliveries.value.filter((delivery) => delivery.connectionId === connectionId)
+}
+
+function slackChannelName(connection: SourceConnection, channelId: string) {
+  return connection.resources.find((resource) => resource.externalId === channelId)?.displayName || channelId
+}
+
+function chatDeliverySeverity(status: ChatNotificationDelivery['status']) {
+  if (status === 'succeeded') return 'success'
+  if (status === 'sending') return 'info'
+  return 'warn'
+}
+
+async function retryChatDelivery(delivery: ChatNotificationDelivery) {
+  retryingChatApprovalId.value = delivery.approvalId
+  error.value = ''
+  try {
+    await retryChatNotificationDelivery(delivery.approvalId)
+    chatDeliveries.value = await listChatNotificationDeliveries()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    retryingChatApprovalId.value = ''
   }
 }
 
@@ -1412,6 +1530,47 @@ onUnmounted(() => {
     </Dialog>
 
     <Dialog
+      v-model:visible="slackPickerVisible"
+      modal
+      blockScroll
+      dismissableMask
+      :draggable="false"
+      :header="t('sources.slack.pickerTitle')"
+      class="w-[calc(100vw-2rem)] sm:w-[min(40rem,calc(100vw-4rem))] max-h-[calc(100dvh-4rem)] my-auto"
+      contentClass="!p-0 flex flex-col min-h-0 min-w-0 overflow-hidden"
+    >
+      <div v-if="loadingSlackChannels" class="flex flex-col items-center justify-center gap-3 px-4 py-14">
+        <ProgressSpinner />
+      </div>
+      <form v-else class="flex flex-col min-h-0 min-w-0 overflow-hidden" @submit.prevent="saveSlackSelection">
+        <div class="flex-1 min-h-0 grid content-start gap-3 overflow-y-auto px-4 py-4 sm:px-6">
+          <Message severity="info" :closable="false">{{ t('sources.slack.privacy') }}</Message>
+          <label
+            v-for="channel in slackChannels"
+            :key="channel.id"
+            class="min-w-0 flex items-start gap-3 rounded-2xl border border-surface-200 bg-surface-50 p-3.5 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              class="mt-1 w-4 h-4 accent-emerald-700 shrink-0"
+              :checked="selectedSlackChannelIds.includes(channel.id)"
+              @change="toggleSlackChannel(channel.id)"
+            />
+            <span class="min-w-0 grow">
+              <span class="font-semibold">{{ channel.displayName }}</span>
+              <span v-if="channel.isPrivate" class="block text-xs text-surface-400 mt-1">{{ t('sources.slack.privateChannel') }}</span>
+            </span>
+          </label>
+          <p v-if="slackChannels.length === 0" class="text-sm text-surface-500">{{ t('sources.slack.noChannels') }}</p>
+        </div>
+        <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+          <Button :label="t('common.cancel')" severity="secondary" text type="button" :disabled="saving" @click="slackConnection = null" />
+          <Button :label="t('sources.slack.saveChannels')" icon="pi pi-check" type="submit" :loading="saving" />
+        </div>
+      </form>
+    </Dialog>
+
+    <Dialog
       v-model:visible="mailPickerVisible"
       modal
       blockScroll
@@ -2115,6 +2274,69 @@ onUnmounted(() => {
                     </div>
                   </div>
                   <p v-if="connection.resources.length === 0" class="text-sm text-surface-400 m-0">{{ emptyResourceMessage('context.call.read') }}</p>
+                </div>
+              </template>
+
+              <template v-else-if="connection.connectorId === 'slack'">
+                <div class="grid gap-3">
+                  <section class="rounded-2xl border border-surface-200 bg-white p-3.5">
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <h4 class="m-0 text-sm font-semibold text-surface-900">{{ t('sources.slack.destinations') }}</h4>
+                        <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">{{ t('sources.slack.destinationsHint') }}</p>
+                      </div>
+                      <Button
+                        v-if="isAdmin"
+                        :label="t('sources.slack.chooseChannels')"
+                        icon="pi pi-list-check"
+                        severity="secondary"
+                        outlined
+                        size="small"
+                        @click="openSlackPicker(connection)"
+                      />
+                    </div>
+                    <div v-if="connection.resources.length" class="mt-3 flex flex-wrap gap-2">
+                      <Tag v-for="resource in connection.resources" :key="resource.id" :value="resource.displayName" icon="pi pi-hashtag" rounded />
+                    </div>
+                    <p v-else class="m-0 mt-3 text-sm text-surface-400">{{ t('sources.slack.noDestinations') }}</p>
+                  </section>
+
+                  <section class="rounded-2xl border border-surface-200 bg-white p-3.5">
+                    <h4 class="m-0 text-sm font-semibold text-surface-900">{{ t('sources.slack.recentDeliveries') }}</h4>
+                    <Message v-if="chatDeliveryError" severity="warn" :closable="false" class="mt-3">{{ chatDeliveryError }}</Message>
+                    <div v-if="deliveriesForConnection(connection.id).length" class="mt-3 grid gap-2">
+                      <div
+                        v-for="delivery in deliveriesForConnection(connection.id)"
+                        :key="delivery.id"
+                        class="rounded-xl border border-surface-200 p-3 text-xs"
+                      >
+                        <div class="flex items-start justify-between gap-3">
+                          <div class="min-w-0">
+                            <div class="font-semibold text-surface-800">{{ slackChannelName(connection, delivery.channelId) }}</div>
+                            <div class="mt-1 text-surface-400">{{ formatDate(delivery.updatedAt) }}</div>
+                          </div>
+                          <Tag :value="t(`sources.slack.delivery.${delivery.status}`)" :severity="chatDeliverySeverity(delivery.status)" rounded />
+                        </div>
+                        <p v-if="delivery.error" class="m-0 mt-2 break-words text-amber-800">{{ delivery.error }}</p>
+                        <div class="mt-2 flex justify-end gap-2">
+                          <a v-if="delivery.permalink" :href="delivery.permalink" target="_blank" rel="noopener noreferrer" class="self-center font-semibold text-emerald-800 no-underline">
+                            {{ t('sources.slack.openMessage') }}
+                          </a>
+                          <Button
+                            v-if="delivery.status === 'failed_safe_to_retry'"
+                            :label="t('sources.slack.retry')"
+                            icon="pi pi-replay"
+                            severity="warn"
+                            text
+                            size="small"
+                            :loading="retryingChatApprovalId === delivery.approvalId"
+                            @click="retryChatDelivery(delivery)"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <p v-else class="m-0 mt-3 text-sm text-surface-400">{{ t('sources.slack.noDeliveries') }}</p>
+                  </section>
                 </div>
               </template>
 

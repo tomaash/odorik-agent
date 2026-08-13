@@ -344,6 +344,7 @@ export type ActionApprovalItem = {
   approverName: string
   decisionStatus?: 'pending' | 'approved' | 'rejected'
   executionStatus?: 'not_started' | 'executing' | 'succeeded' | 'failed_safe_to_retry' | 'outcome_unknown'
+  chatNotifications?: ChatNotificationDelivery[]
   scope?: {
     contactId?: string | null
     callId?: string | null
@@ -486,7 +487,7 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type ConnectorId = 'odorik' | 'google_workspace' | 'github' | 'grok_subscription'
+export type ConnectorId = 'odorik' | 'google_workspace' | 'github' | 'slack' | 'grok_subscription'
 export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
@@ -494,12 +495,14 @@ export type SourceCapabilityId =
   | 'context.mail.read_scoped'
   | 'context.github.issue.read'
   | 'action.mail.draft.create'
+  | 'action.chat.notify'
+  | 'context.chat.direct'
 
 export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId
-  serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'mail_draft' | 'issues'
+  serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'mail_draft' | 'issues' | 'chat_notify' | 'chat_direct'
   direction: 'observe' | 'act'
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox' | 'channel'
   requiredScopes: string[]
   syncMode: 'webhook' | 'incremental' | 'reconcile' | 'manual'
   requiresApproval: boolean
@@ -525,7 +528,7 @@ export type SourceSyncState = {
 }
 
 export type SourceCapability = {
-  id: 'calls' | 'calendar' | 'drive' | 'issues'
+  id: 'calls' | 'calendar' | 'drive' | 'issues' | 'chat_notify' | 'chat_direct'
   capabilityId: SourceCapabilityId
   status: 'active' | 'attention' | 'reauthorization_required' | 'disabled'
   grantedScopes: string[]
@@ -542,7 +545,7 @@ export type SourceResource = {
   id: string
   connectionId: string
   capabilityId: SourceCapabilityId
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository' | 'channel'
   externalId: string
   displayName: string
   status: 'enabled' | 'disabled'
@@ -563,7 +566,7 @@ export type SourceConnection = {
   id: string
   companyId: string
   connectorId: ConnectorId
-  providerId: 'odorik' | 'google' | 'github' | 'grok'
+  providerId: 'odorik' | 'google' | 'github' | 'slack' | 'grok'
   providerAccountId?: string
   tenantId?: string
   displayName: string
@@ -886,6 +889,10 @@ export async function listActionApprovals(input?: {
   return trpc.approvals.list.query({ ...(input || {}), limit: 200 }) as Promise<ActionApprovalItem[]>
 }
 
+export async function getActionApproval(approvalId: string): Promise<ActionApprovalItem> {
+  return trpc.approvals.get.query({ approvalId }) as Promise<ActionApprovalItem>
+}
+
 export async function approveAction(approvalId: string) {
   return trpc.approvals.approve.mutate({ approvalId })
 }
@@ -1105,6 +1112,63 @@ export type SelectableMailLabel = {
   type: string
   messageCount: number | null
   selected: boolean
+}
+
+export type SelectableSlackChannel = {
+  id: string
+  displayName: string
+  isPrivate: boolean
+}
+
+export type ChatNotificationDelivery = {
+  id: string
+  companyId: string
+  approvalId: string
+  connectionId: string
+  channelId: string
+  status: 'sending' | 'succeeded' | 'failed_safe_to_retry' | 'outcome_unknown'
+  messageTs?: string | null
+  permalink?: string | null
+  error?: string | null
+  createdAt: string | null
+  updatedAt: string | null
+}
+
+export async function startSlackAuthorization() {
+  return trpc.sources.slack.authorizationUrl.mutate({
+    capabilityIds: ['action.chat.notify'],
+    returnOrigin: window.location.origin,
+  })
+}
+
+export async function getSlackChannels(connectionId: string): Promise<SelectableSlackChannel[]> {
+  return trpc.sources.slack.channels.query({ connectionId }) as Promise<SelectableSlackChannel[]>
+}
+
+export async function selectSlackChannels(connectionId: string, channelIds: string[]) {
+  return trpc.sources.slack.select.mutate({ connectionId, channelIds })
+}
+
+export async function listChatNotificationDeliveries(): Promise<ChatNotificationDelivery[]> {
+  return trpc.sources.slack.deliveries.query({ limit: 100 }) as Promise<ChatNotificationDelivery[]>
+}
+
+export async function retryChatNotificationDelivery(approvalId: string) {
+  return trpc.sources.slack.retryDelivery.mutate({ approvalId })
+}
+
+export type SlackLinkPreview = {
+  teamId: string
+  slackUserId: string
+  expiresAt: string
+}
+
+export async function inspectSlackIdentityLink(token: string): Promise<SlackLinkPreview> {
+  return trpc.sources.slack.linkPreview.query({ token }) as Promise<SlackLinkPreview>
+}
+
+export async function linkSlackIdentity(token: string) {
+  return trpc.sources.slack.linkIdentity.mutate({ token })
 }
 
 export async function startGoogleWorkspaceAuthorization(

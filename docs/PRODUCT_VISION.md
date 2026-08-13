@@ -3,7 +3,9 @@
 ## End state
 
 The product is the smallest useful interface between people, AI agents, and a
-company's operating systems.
+company's operating systems. Erik should feel like one dependable colleague
+whose context and responsibility survive across days and interfaces, not like
+a collection of unrelated chatbots attached to connectors.
 
 People should not have to learn a separate screen for every process. They
 should be able to tell an agent what they need, inspect what the agent proposes,
@@ -23,6 +25,36 @@ The product is not a chatbot placed in front of a fixed CRM. It is a governed
 agent workspace in which workflows can be described conversationally,
 proposed as versioned specifications, approved, and then executed through a
 small set of safe application capabilities.
+
+The Agent Erik application is the control and inspection surface: it owns
+identity linking, source configuration, evidence, proposal cards, decisions,
+execution recovery, and audit. Slack and future chat or email integrations are
+transport surfaces. They should make Erik available where work already happens
+without turning the external product into an authorization boundary or a
+second, inconsistent system of record.
+
+## Strategic product wedge
+
+The near-term product is one connected operating relationship, proved in
+increasingly valuable steps:
+
+```text
+notice me where I work
+→ answer a grounded question there
+→ remember what we are discussing
+→ prepare exact work from the discussion
+→ hand responsibility to the right person
+→ execute only the approved effect
+→ report and recover the real outcome
+```
+
+Approval notification is the entry point, not the destination. Read-only
+conversation makes the notification channel useful between decisions. The
+decisive product step is conversation-to-proposal handoff: a person should be
+able to discuss a customer or outcome in Slack, ask Erik to prepare the next
+step, and receive a typed proposal whose evidence and consequences are reviewed
+in the application. This joins the factual-agent and approval kernels into one
+daily loop without weakening either.
 
 ## Product promise
 
@@ -56,6 +88,19 @@ A person creates a thread with an agent, mentions company objects, asks a
 question, gives an instruction, or explains a desired recurring process. The
 thread is durable working context, but it is not itself authoritative company
 state.
+
+A logical conversation may be reached from the Agent Erik application or bound
+to an external surface such as one linked Slack direct message. The surface
+adapter authenticates the external identity, appends events to the same durable
+conversation protocol, and renders a channel-appropriate response. It does not
+own agent reasoning or memory policy.
+
+Conversation must support ordinary human turns as well as data questions. A
+greeting should receive a greeting; a capability question should explain what
+Erik can do; a contextual follow-up should resolve its references and retrieve
+fresh evidence; a consequential request should become a proposal rather than a
+side effect. Tool use is therefore selected by the meaning of the turn, not
+forced merely because the message arrived at an agent endpoint.
 
 ### 3. Propose
 
@@ -103,6 +148,50 @@ is not blindly repeated.
 The system measures approvals, rejections, requested changes, edits, execution
 outcomes, and source evidence. This improves prompts and workflow templates
 without quietly expanding an agent's authority.
+
+It also measures conversation quality: repeated answers, wrong response mode,
+lost references, out-of-order replies, memory retrieval, abstention, latency,
+and whether a conversation successfully reaches a useful cited answer or typed
+proposal. A fluent answer is not evidence of a correct conversation runtime.
+
+## Conversation, memory, and authority
+
+Long-duration conversation requires several memory classes with different
+authority. They must not be collapsed into one vector index or one ever-growing
+prompt.
+
+| Memory class | Purpose | Authority |
+| --- | --- | --- |
+| Event journal | Immutable inbound and outbound turns, provider IDs, timestamps, delivery state | Exact record of the conversation transport |
+| Working context | Recent ordered turns and the currently discussed objects or task | Temporary conversational state |
+| Episodic memory | Versioned summaries of completed sessions, decisions, corrections, and unresolved topics | Derived and provenance-bound; useful for recall, never company evidence |
+| Member preferences | Explicit durable preferences or instructions accepted from that member | Scoped to that member and revocable; never silently inferred from agent text |
+| Company knowledge | Current permission-filtered calls, mail, documents, cases, tasks, and other connected records | Authoritative evidence for factual answers and proposals |
+
+The default context assembly is recent raw turns plus a compact session state
+plus relevant older memories. Older memory is retrieved by subject, entities,
+time, and recency rather than appended indiscriminately. Session summaries cite
+the exact message range they compress and can be rebuilt when the summarizer or
+policy changes.
+
+Assistant answers are never promoted into company truth. When a later turn
+depends on a company fact, Erik retrieves the current source again even if an
+older answer or summary remembers it. User corrections are retained as
+conversation state with timestamp and authorship, but they do not overwrite a
+connected system of record. Revoked source access immediately removes that
+source from new prompts and memory retrieval.
+
+External events are asynchronous and at-least-once. Each conversation therefore
+has an idempotent inbox, provider ordering key, single active processing lease,
+and durable cursor. The user turn is recorded before generation. Only the
+oldest eligible event is processed; retries reuse the same event and response
+identity. This is product behavior, not invisible infrastructure: people must
+not receive duplicated, missing, or causally reversed replies.
+
+A period of inactivity or an explicit “new topic” closes a working session.
+The durable conversation remains available, but old sessions enter prompts
+only when relevant. People can inspect, correct, forget, or start fresh; memory
+must not become an inescapable hidden profile.
 
 ## Human responsibility boundary
 
@@ -211,8 +300,20 @@ abstraction is real rather than an Odorik adapter with a generic name.
   “continue” button or a conversational reply.
 - **Accessible without gestures:** swiping can accelerate a decision but never
   be the only way to make it.
-- **Shared accountability:** threads, decisions, and outcomes are visible to
-  authorized colleagues and carry named ownership.
+- **Private conversation, shared accountability:** member threads are private
+  by default; proposals, decisions, and outcomes become visible to exactly the
+  authorized people who own or review that work.
+- **Continuity without captivity:** a conversation can resume across time and
+  surfaces, while the person can start a new topic or clear remembered context.
+- **Right response mode:** social turns, factual questions, proposals, and
+  decisions are visibly different and use only the capabilities they require.
+- **Channel-appropriate disclosure:** external messages reveal the minimum
+  useful content; sensitive evidence and consequential decisions return to the
+  authenticated application unless that surface has an explicitly proven
+  equivalent boundary.
+- **Graceful handoff:** when a compact chat response is insufficient, one link
+  opens the exact thread, evidence, proposal, or recovery state—not merely a
+  generic page.
 
 ## Non-goals for the next releases
 
@@ -222,8 +323,14 @@ abstraction is real rather than an Odorik adapter with a generic name.
 - full replacement of document, calendar, accounting, or messaging products;
 - a general CRM schema;
 - photo-specific intake;
-- multi-agent theatre without a measurable operating outcome; and
-- loading all company data into every model prompt.
+- multi-agent theatre without a measurable operating outcome;
+- loading all company data into every model prompt;
+- treating every incoming message as a company-data query;
+- treating an assistant's prior answer or a conversation summary as factual
+  evidence;
+- ingesting broad chat history merely to make the assistant appear more aware;
+  and
+- hidden permanent memory that a member cannot inspect, correct, or delete.
 
 ## Success measures
 
@@ -236,6 +343,12 @@ of company work without obscuring responsibility. Early measures are:
 - time spent per decision;
 - unsupported or uncited claims in proposals;
 - duplicate or unauthorized action rate;
-- execution and reconciliation outcomes; and
+- execution and reconciliation outcomes;
 - number of distinct workflows and source types using the same kernel without
-  changes to its core contracts.
+  changes to its core contracts;
+- percentage of turns assigned the correct response mode;
+- repeated-answer and out-of-order-reply rate;
+- contextual follow-up resolution and long-term memory recall;
+- stale or unauthorized memory use—the target is zero; and
+- time from an external conversation to a useful cited answer, exact proposal,
+  and completed human decision.

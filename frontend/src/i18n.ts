@@ -49,6 +49,10 @@ const messages = {
     },
     approvals: {
       title: 'Schválení',
+      deepLinkEyebrow: 'Rozhodnutí vyžaduje pozornost',
+      deepLinkTitle: 'Zkontrolovat schválení',
+      deepLinkSubtitle: 'Toto je přesná akce odkazovaná z upozornění. Rozhodnutí se zaznamená pod vaším přihlášeným účtem.',
+      backToWork: 'Zpět na schválení',
       taskAction: 'Vytvoření úkolu',
       createCaseAction: 'Vytvoření případu',
       moveCaseAction: 'Posun případu',
@@ -86,6 +90,13 @@ const messages = {
       retry: 'Zkusit provést znovu',
       waitingFor: 'Čeká na: {approver}',
       workflowSource: 'Workflow · verze {version}',
+      chatNotification: 'Upozornění ve Slacku',
+      chatNotificationStatus: {
+        sending: 'Odesílá se',
+        succeeded: 'Doručeno',
+        failed_safe_to_retry: 'Doručení selhalo',
+        outcome_unknown: 'Výsledek neznámý',
+      },
       rejectionReason: 'Důvod zamítnutí: {reason}',
       rejectTitle: 'Zamítnout navrženou akci?',
       rejectReason: 'Důvod',
@@ -563,6 +574,7 @@ const messages = {
         odorik: 'Přijímá nové nahrávky hovorů na zabezpečenou adresu. Žádné přihlášení k Odoriku není potřeba.',
         google_workspace: 'Jedno připojení účtu pro kalendář a dokumenty. Každou službu můžete povolit a nastavit samostatně.',
         github: 'Issues a komentáře pouze z repozitářů, které výslovně zahrnete. Pozorování je pouze pro čtení; po schválení může oddělený publisher zapsat větev a vytvořit draft PR.',
+        slack: 'Odesílá upozornění na schválení do vybraných kanálů a odpovídá aktivním členům v přímých zprávách po bezpečném propojení účtu.',
         grok_subscription: 'Připojí vaše placené předplatné Grok pomocí přihlášení k xAI. Nepoužívá ani nevyžaduje API klíč.',
       },
       capabilities: {
@@ -599,8 +611,20 @@ const messages = {
               },
             },
           },
+          chat: {
+            direct: {
+              name: 'Přímé zprávy',
+              description: 'Číst pouze zprávy odeslané přímo botovi a odpovídat pomocí stejného asistenta pouze pro čtení. Historii kanálů Erik nečte.',
+            },
+          },
         },
         action: {
+          chat: {
+            notify: {
+              name: 'Upozornění na schválení',
+              description: 'Odeslat do vybraného kanálu pouze typ akce, jméno schvalovatele a odkaz. Obsah konceptu ani důkazy se neposílají.',
+            },
+          },
           mail: {
             draft: {
               create: {
@@ -617,6 +641,9 @@ const messages = {
         drive: 'Číst dokumenty ve vybraných složkách',
         gmail: 'Číst poštu v celé schránce',
         gmailCompose: 'Vytvářet a upravovat koncepty (Google scope umí i odeslat; Erik odeslání nepoužívá)',
+        slackChatWrite: 'Odesílat zprávy do vybraných kanálů',
+        slackChannelsRead: 'Zobrazit kanály, do kterých byl Erik pozván',
+        slackImHistory: 'Číst pouze přímé zprávy odeslané botovi',
         githubContents: 'Číst obsah repozitáře',
         githubContentsWrite: 'Číst a zapisovat větve repozitáře',
         githubIssues: 'Číst issues a komentáře',
@@ -676,6 +703,33 @@ const messages = {
         sessionExpires: 'Platnost relace',
         team: 'xAI tým',
         lastRun: 'Poslední úspěšný běh',
+      },
+      slack: {
+        notificationsOnly: 'Upozornění + bezpečné DM',
+        connectTitle: 'Připojte Slack workspace',
+        connectHint: 'Slack požádá o odesílání zpráv, seznam kanálů, do kterých byl Erik pozván, a čtení pouze přímých zpráv odeslaných botovi.',
+        connect: 'Připojit Slack',
+        connectionKind: 'Slack workspace',
+        pickerTitle: 'Vybrat cílové kanály',
+        privacy: 'Do kanálu se odešle jen typ čekající akce, jméno schvalovatele a odkaz do Eriku. Obsah konceptu, příjemce, přepis ani důkazy se nikdy neposílají.',
+        privateChannel: 'Soukromý kanál — Erik už v něm musí být členem.',
+        noChannels: 'Erik zatím není členem žádného dostupného kanálu. Nejprve ho ve Slacku pozvěte.',
+        saveChannels: 'Uložit kanály',
+        destinations: 'Cílové kanály',
+        destinationsHint: 'Upozornění chodí pouze sem. Výběr může změnit jen správce.',
+        chooseChannels: 'Vybrat kanály',
+        noDestinations: 'Není vybraný žádný cílový kanál.',
+        recentDeliveries: 'Poslední doručení',
+        noDeliveries: 'Zatím nebylo odesláno žádné upozornění.',
+        disconnectDescription: 'Zrušíme botovi přístup ve Slacku a odstraníme výběr kanálů. Záznamy o minulých doručeních zůstanou v auditu Eriku a zprávy, které už Slack přijal, zůstanou ve Slacku.',
+        openMessage: 'Otevřít ve Slacku',
+        retry: 'Zkusit znovu',
+        delivery: {
+          sending: 'Odesílá se',
+          succeeded: 'Doručeno',
+          failed_safe_to_retry: 'Bezpečně opakovatelné',
+          outcome_unknown: 'Výsledek neznámý',
+        },
       },
       workspace: {
         services: 'Kalendář + Disk',
@@ -882,6 +936,10 @@ const messages = {
     },
     approvals: {
       title: 'Approvals',
+      deepLinkEyebrow: 'Decision needs attention',
+      deepLinkTitle: 'Review approval',
+      deepLinkSubtitle: 'This is the exact action referenced by the notification. Your decision is recorded under your signed-in account.',
+      backToWork: 'Back to approvals',
       taskAction: 'Task creation',
       createCaseAction: 'Case creation',
       moveCaseAction: 'Case movement',
@@ -919,6 +977,13 @@ const messages = {
       retry: 'Retry execution',
       waitingFor: 'Waiting for: {approver}',
       workflowSource: 'Workflow · version {version}',
+      chatNotification: 'Slack notification',
+      chatNotificationStatus: {
+        sending: 'Sending',
+        succeeded: 'Delivered',
+        failed_safe_to_retry: 'Delivery failed',
+        outcome_unknown: 'Outcome unknown',
+      },
       rejectionReason: 'Rejection reason: {reason}',
       rejectTitle: 'Reject this proposed action?',
       rejectReason: 'Reason',
@@ -1396,6 +1461,7 @@ const messages = {
         odorik: 'Receives new call recordings at a secure address. No Odorik sign-in is required.',
         google_workspace: 'One account connection for Calendar and documents. Enable and configure each service independently.',
         github: 'Issues and comments only from repositories you explicitly include. Observation is read-only; after approval, a separate publisher can write a branch and create a draft PR.',
+        slack: 'Posts approval notices to selected channels and answers active members in direct messages after secure account linking.',
         grok_subscription: 'Connects your paid Grok subscription through xAI sign-in. It does not use or request an API key.',
       },
       capabilities: {
@@ -1432,8 +1498,20 @@ const messages = {
               },
             },
           },
+          chat: {
+            direct: {
+              name: 'Direct messages',
+              description: 'Read only messages sent directly to the bot and answer through the same read-only assistant. Erik does not read channel history.',
+            },
+          },
         },
         action: {
+          chat: {
+            notify: {
+              name: 'Approval notifications',
+              description: 'Post only the action type, approver name, and link to a selected channel. Draft contents and evidence are never posted.',
+            },
+          },
           mail: {
             draft: {
               create: {
@@ -1451,6 +1529,9 @@ const messages = {
         drive: 'Read documents in selected folders',
         gmail: 'Read mail across the entire mailbox',
         gmailCompose: 'Create and update drafts (Google’s scope can also send; Erik never sends)',
+        slackChatWrite: 'Post messages to selected channels',
+        slackChannelsRead: 'List channels Erik has been invited to',
+        slackImHistory: 'Read only direct messages sent to the bot',
         githubContents: 'Read repository contents',
         githubContentsWrite: 'Read repository contents and write result branches',
         githubIssues: 'Read issues and comments',
@@ -1510,6 +1591,33 @@ const messages = {
         sessionExpires: 'Session expires',
         team: 'xAI team',
         lastRun: 'Last successful run',
+      },
+      slack: {
+        notificationsOnly: 'Notifications + secure DMs',
+        connectTitle: 'Connect a Slack workspace',
+        connectHint: 'Slack requests message posting, the list of channels Erik has joined, and access only to direct messages sent to the bot.',
+        connect: 'Connect Slack',
+        connectionKind: 'Slack workspace',
+        pickerTitle: 'Choose destination channels',
+        privacy: 'The channel receives only the pending action type, approver name, and a link to Erik. Draft content, recipients, transcripts, and evidence are never posted.',
+        privateChannel: 'Private channel — Erik must already be a member.',
+        noChannels: 'Erik is not a member of any available channel yet. Invite it in Slack first.',
+        saveChannels: 'Save channels',
+        destinations: 'Destination channels',
+        destinationsHint: 'Notifications are posted only here. Only an administrator can change this selection.',
+        chooseChannels: 'Choose channels',
+        noDestinations: 'No destination channel is selected.',
+        recentDeliveries: 'Recent deliveries',
+        noDeliveries: 'No approval notification has been sent yet.',
+        disconnectDescription: 'The bot token will be revoked in Slack and the channel selection removed. Past delivery records remain in Erik’s audit history, and messages Slack already accepted remain in Slack.',
+        openMessage: 'Open in Slack',
+        retry: 'Retry safely',
+        delivery: {
+          sending: 'Sending',
+          succeeded: 'Delivered',
+          failed_safe_to_retry: 'Safe to retry',
+          outcome_unknown: 'Outcome unknown',
+        },
       },
       workspace: {
         services: 'Calendar + Drive',

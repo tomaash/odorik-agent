@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Timestamp } from "firebase-admin/firestore";
 
 import { MemoryFirestore } from "./firestore-harness.js";
-import { chatNotificationPath, deliverApprovalNotifications } from "../chat/deliver.js";
+import {
+  chatNotificationPath,
+  chatNotificationsForApprovals,
+  deliverApprovalNotifications,
+  listChatNotifications,
+} from "../chat/deliver.js";
 import { SlackApiError } from "../chat/slack.js";
 import { SlackNotifyGrantMissingError } from "../connectors/slack-oauth.js";
 
@@ -77,6 +83,107 @@ test("one approval posts once per destination, however often the trigger fires",
   const record = memory.read(chatNotificationPath(companyId, "approval-1", channelId));
   assert.equal(record?.status, "succeeded");
   assert.equal(record?.messageTs, "1717.0001");
+});
+
+test("overlapping duplicate trigger deliveries acquire only one posting claim", async () => {
+  const memory = new MemoryFirestore();
+  seedDestination(memory);
+  let releasePost!: () => void;
+  const postBlocked = new Promise<void>((resolve) => { releasePost = resolve; });
+  let postStarted!: () => void;
+  const started = new Promise<void>((resolve) => { postStarted = resolve; });
+  const posts = { count: 0 };
+  const input = {
+    companyId,
+    approval: pendingApproval(),
+    appOrigin,
+    credentialKey,
+    database: memory.asFirestore(),
+    authorize: async () => ({ botToken: "xoxb-test", teamId: "T1" }),
+    post: async () => {
+      posts.count += 1;
+      postStarted();
+      await postBlocked;
+      return {
+        channelId,
+        messageTs: "1717.0001",
+        permalink: "https://acme.slack.com/archives/C123/p17170001",
+      };
+    },
+  };
+
+  const first = deliverApprovalNotifications(input);
+  await started;
+  const second = deliverApprovalNotifications(input);
+  await second;
+  assert.equal(posts.count, 1, "the overlapping invocation must observe the atomic claim");
+  releasePost();
+  await first;
+  assert.equal(memory.read(chatNotificationPath(companyId, "approval-1", channelId))?.status, "succeeded");
+});
+
+test("delivery status is public on Sources and approvals without exposing the claim token", async () => {
+  const memory = new MemoryFirestore();
+  seedDestination(memory);
+  const posts = { count: 0 };
+  await deliverApprovalNotifications({
+    companyId,
+    approval: pendingApproval(),
+    appOrigin,
+    credentialKey,
+    database: memory.asFirestore(),
+    ...deliveryDependencies(posts),
+  });
+
+  const recent = await listChatNotifications({
+    companyId,
+    database: memory.asFirestore(),
+  });
+  assert.equal(recent.length, 1);
+  assert.equal(recent[0]?.status, "succeeded");
+  assert.equal("executionAttemptId" in (recent[0] || {}), false);
+  assert.equal("executionLeaseExpiresAt" in (recent[0] || {}), false);
+
+  const byApproval = await chatNotificationsForApprovals({
+    companyId,
+    approvalIds: ["approval-1"],
+    database: memory.asFirestore(),
+  });
+  assert.equal(byApproval.get("approval-1")?.[0]?.permalink, "https://acme.slack.com/archives/C123/p17170001");
+});
+
+test("an abandoned posting claim becomes visibly unknown and is never made retryable", async () => {
+  const memory = new MemoryFirestore();
+  const path = chatNotificationPath(companyId, "approval-1", channelId);
+  memory.seed(path, {
+    companyId,
+    approvalId: "approval-1",
+    connectionId,
+    channelId,
+    status: "sending",
+    executionAttemptId: "abandoned",
+    executionLeaseExpiresAt: Timestamp.fromMillis(Date.now() - 1),
+    createdAt: Timestamp.now(),
+    updatedAt: Timestamp.now(),
+  });
+  const [delivery] = await listChatNotifications({
+    companyId,
+    database: memory.asFirestore(),
+  });
+  assert.equal(delivery?.status, "outcome_unknown");
+  assert.match(delivery?.error || "", /without recording Slack's outcome/);
+
+  seedDestination(memory);
+  const posts = { count: 0 };
+  await deliverApprovalNotifications({
+    companyId,
+    approval: pendingApproval(),
+    appOrigin,
+    credentialKey,
+    database: memory.asFirestore(),
+    ...deliveryDependencies(posts),
+  });
+  assert.equal(posts.count, 0, "an abandoned claim may already have posted and must not retry");
 });
 
 test("a restricted approval reaches no channel at all", async () => {

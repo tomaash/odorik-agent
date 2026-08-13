@@ -199,6 +199,30 @@ npm --prefix functions run qdrant:reindex
 
 ## Evaluation harness
 
+The existing harness evaluates factual questions, not general conversation.
+The first-turn `ANY` tool requirement is useful only when a turn is already
+known to require company evidence. A Slack dogfood sequence on 2026-08-09–10
+showed the failure outside that boundary: after a company-summary question, the
+social turn “hello” was forced into another company-overview search and repeated
+the summary. Conversation routing must therefore precede the factual loop.
+
+Conversational evaluation is sequence-based rather than a bag of independent
+questions. At minimum it must cover:
+
+- greeting after a factual answer without tool use or repetition;
+- pronoun and ellipsis resolution followed by fresh evidence retrieval;
+- two rapid provider events processed in causal order;
+- duplicate and out-of-order delivery;
+- return after a session boundary;
+- explicit correction, later recall, and deletion;
+- source fact updates and source-access revocation between turns; and
+- action requests becoming typed proposals rather than direct effects.
+
+Store route, context revision, selected memory IDs, tool policy, tool trace,
+answer, and delivery identity for each evaluated turn. Score response-mode
+accuracy, retrieval/citation correctness, memory recall, appropriate
+abstention, repetition, ordering, latency, and unauthorized recall separately.
+
 Run deterministic unit and retrieval checks:
 
 ```bash
@@ -238,3 +262,7 @@ confidence on abstention, and an aggregate pass-rate threshold.
 6. Track cost, latency, tool count, abstention, and index freshness by prompt,
    model, embedding, and corpus version.
 7. Make deployment fail when the held-out regression thresholds fall.
+8. Add multi-turn and multi-session suites inspired by
+   [LongMemEval](https://arxiv.org/abs/2410.10813)'s extraction, temporal
+   reasoning, knowledge-update, and abstention categories; keep a smaller
+   product-specific acceptance set as the release gate.

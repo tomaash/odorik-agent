@@ -5,6 +5,7 @@ import { useAuthStore } from '../stores/auth'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Message from 'primevue/message'
+import { takeAppReturnPath } from '../pending-return'
 
 const authStore = useAuthStore()
 const router = useRouter()
@@ -16,9 +17,14 @@ async function signIn() {
   error.value = ''
   try {
     await authStore.signIn()
+    const pendingReturn = takeAppReturnPath()
     await router.push(
       sessionStorage.getItem('pendingInvitationToken')
         ? '/join'
+        : sessionStorage.getItem('pendingSlackLinkToken')
+          ? '/slack/link'
+        : pendingReturn
+          ? pendingReturn
         : authStore.isEnabled
           ? '/'
           : '/pending',

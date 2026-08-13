@@ -385,6 +385,7 @@ class MemoryWriteBatch {
 export class MemoryFirestore {
   private readonly documents = new Map<string, DocumentData>();
   private autoId = 0;
+  private transactionTail: Promise<void> = Promise.resolve();
 
   seed(path: string, data: DocumentData): void {
     this.documents.set(path, clone(data));
@@ -441,12 +442,20 @@ export class MemoryFirestore {
   async runTransaction<T>(
     updateFunction: (transaction: FirebaseFirestore.Transaction) => Promise<T>,
   ): Promise<T> {
-    const transaction = new MemoryTransaction(this);
-    const result = await updateFunction(
-      transaction as unknown as FirebaseFirestore.Transaction,
-    );
-    await transaction.commit();
-    return result;
+    const previous = this.transactionTail;
+    let release!: () => void;
+    this.transactionTail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      const transaction = new MemoryTransaction(this);
+      const result = await updateFunction(
+        transaction as unknown as FirebaseFirestore.Transaction,
+      );
+      await transaction.commit();
+      return result;
+    } finally {
+      release();
+    }
   }
 
   asFirestore(): FirebaseFirestore.Firestore {

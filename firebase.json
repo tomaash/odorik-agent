@@ -59,6 +59,13 @@
           }
         },
         {
+          "source": "/webhooks/slack",
+          "function": {
+            "functionId": "slackEventsWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/api/**",
           "function": {
             "functionId": "api",
@@ -127,6 +134,13 @@
           "source": "/oauth/slack/callback",
           "function": {
             "functionId": "slackOAuthCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
+          "source": "/webhooks/slack",
+          "function": {
+            "functionId": "slackEventsWebhook",
             "region": "europe-west3"
           }
         },

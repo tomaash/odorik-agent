@@ -5,8 +5,10 @@ import { MemoryFirestore } from "./firestore-harness.js";
 import { sha256Hex } from "../hash.js";
 import {
   authorizedSlackNotify,
+  authorizedSlackDirect,
   completeSlackAuthorization,
   createSlackAuthorization,
+  revokeSlackAuthorization,
   slackConnectionId,
   SlackAuthorizationError,
   SlackNotifyGrantMissingError,
@@ -32,19 +34,23 @@ function stubSlackOAuth(respond: () => { status: number; body: unknown }): () =>
   };
 }
 
-async function startAuthorization(memory: MemoryFirestore): Promise<string> {
+async function startAuthorization(
+  memory: MemoryFirestore,
+  capabilityIds?: Array<"action.chat.notify" | "context.chat.direct">,
+): Promise<string> {
   const { authorizationUrl } = await createSlackAuthorization({
     companyId,
     uid: "member-1",
     email: "tom@acme.cz",
     displayName: "Tomáš",
     clientId: "client-id",
+    capabilityIds,
     database: memory.asFirestore(),
   });
   return new URL(authorizationUrl).searchParams.get("state") || "";
 }
 
-test("the install asks for two bot scopes and nothing on behalf of a person", async () => {
+test("the public install asks only for notification bot scopes", async () => {
   const memory = new MemoryFirestore();
   const { authorizationUrl } = await createSlackAuthorization({
     companyId,
@@ -72,6 +78,7 @@ test("the install asks for two bot scopes and nothing on behalf of a person", as
   assert.ok(state.length >= 32, "state must be unguessable");
   const stored = memory.read(`oauthStates/${sha256Hex(state)}`);
   assert.equal(stored?.provider, "slack");
+  assert.deepEqual(stored?.requestedCapabilityIds, ["action.chat.notify"]);
   assert.equal(
     memory.read(`oauthStates/${state}`),
     undefined,
@@ -79,7 +86,7 @@ test("the install asks for two bot scopes and nothing on behalf of a person", as
   );
 });
 
-test("an installed workspace stores an encrypted envelope and an active grant", async () => {
+test("a notification-only install stores an encrypted envelope and only the active notify grant", async () => {
   const memory = new MemoryFirestore();
   const state = await startAuthorization(memory);
   const restore = stubSlackOAuth(() => ({
@@ -119,6 +126,9 @@ test("an installed workspace stores an encrypted envelope and an active grant", 
     assert.equal(capability?.capabilityId, "action.chat.notify");
     assert.equal(capability?.status, "active");
     assert.deepEqual(capability?.missingScopes, []);
+    const directCapability = memory.read(`${connectionPath}/capabilities/chat_direct`);
+    assert.equal(directCapability, undefined);
+    assert.equal(memory.read(`slackWorkspaces/${teamId}`), undefined);
 
     assert.equal(
       memory.read(`oauthStates/${sha256Hex(state)}`),
@@ -156,6 +166,8 @@ test("a partial grant is recorded as attention rather than silently accepted", a
     const capability = memory.read(`${connectionPath}/capabilities/chat_notify`);
     assert.equal(capability?.status, "attention");
     assert.deepEqual(capability?.missingScopes, ["channels:read"]);
+    const directCapability = memory.read(`${connectionPath}/capabilities/chat_direct`);
+    assert.equal(directCapability, undefined);
   } finally {
     restore();
   }
@@ -215,15 +227,15 @@ test("an unknown or expired state is refused before any token exchange", async (
   }
 });
 
-test("the notify grant is proven before a token is handed out", async () => {
+test("notification and direct grants are proven independently before a token is handed out", async () => {
   const memory = new MemoryFirestore();
-  const state = await startAuthorization(memory);
+  const state = await startAuthorization(memory, ["action.chat.notify", "context.chat.direct"]);
   const restore = stubSlackOAuth(() => ({
     status: 200,
     body: {
       ok: true,
       access_token: botToken,
-      scope: "chat:write,channels:read",
+      scope: "chat:write,channels:read,im:history",
       team: { id: teamId, name: "Headstart" },
     },
   }));
@@ -249,6 +261,13 @@ test("the notify grant is proven before a token is handed out", async () => {
   });
   assert.equal(authorized.botToken, botToken);
   assert.equal(authorized.teamId, teamId);
+  const direct = await authorizedSlackDirect({
+    companyId,
+    connectionId,
+    credentialKey,
+    database: memory.asFirestore(),
+  });
+  assert.equal(direct.botToken, botToken);
 
   await assert.rejects(
     () => authorizedSlackNotify({
@@ -276,16 +295,63 @@ test("the notify grant is proven before a token is handed out", async () => {
   );
 });
 
-test("the catalog offers Slack as a write-only notifier", () => {
+test("the public catalog exposes only the accepted Slack notification capability", () => {
   const slack = connectorCatalog().find((connector) => connector.id === "slack");
   assert.ok(slack, "Slack must appear in the connector catalog");
   assert.deepEqual(
     slack.capabilities.map((capability) => capability.id),
     ["action.chat.notify"],
-    "H1 grants no reading capability of any kind",
   );
   const notify = slack.capabilities[0];
   assert.equal(notify?.direction, "act");
   assert.equal(notify?.resourceType, "channel");
   assert.deepEqual(notify?.requiredScopes, ["chat:write", "channels:read"]);
+});
+
+test("disconnect revokes the installed bot token with Slack", async () => {
+  const memory = new MemoryFirestore();
+  const state = await startAuthorization(memory);
+  const installRestore = stubSlackOAuth(() => ({
+    status: 200,
+    body: {
+      ok: true,
+      access_token: botToken,
+      scope: "chat:write,channels:read",
+      team: { id: teamId, name: "Headstart" },
+    },
+  }));
+  let connectionId = "";
+  try {
+    connectionId = (await completeSlackAuthorization({
+      code: "code-1",
+      state,
+      clientId: "client-id",
+      clientSecret: "client-secret",
+      credentialKey,
+      database: memory.asFirestore(),
+    })).connectionId;
+  } finally {
+    installRestore();
+  }
+
+  let authorization = "";
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async (_url, init) => {
+    authorization = new Headers(init?.headers).get("authorization") || "";
+    return new Response(JSON.stringify({ ok: true }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+  try {
+    assert.equal(await revokeSlackAuthorization({
+      companyId,
+      connectionId,
+      credentialKey,
+      database: memory.asFirestore(),
+    }), true);
+    assert.equal(authorization, `Bearer ${botToken}`);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

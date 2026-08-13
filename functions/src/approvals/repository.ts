@@ -15,6 +15,7 @@ import {
   type RegisteredAction,
 } from "../actions/registry.js";
 import { db, jsonSafe } from "../firestore.js";
+import { chatNotificationsForApprovals } from "../chat/deliver.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
 import { canMemberAccess, canMemberAccessSourceData, type ResourceAudience } from "../access.js";
@@ -210,12 +211,53 @@ export async function listActionApprovals(input: {
     .orderBy("createdAt", "desc")
     .limit(Math.min(input.limit || 100, 200))
     .get();
-  return jsonSafe(snapshot.docs
+  const approvals = snapshot.docs
     .filter((document) => (
       document.data().objectType === "action_approval"
       && (!input.memberUid || canMemberAccessSourceData(document.data(), input.memberUid))
-    ))
-    .map((document) => ({ id: document.id, ...document.data() })));
+    ));
+  const notifications = await chatNotificationsForApprovals({
+    companyId: input.companyId,
+    approvalIds: approvals.map((document) => document.id),
+    database,
+  });
+  return jsonSafe(approvals.map((document) => ({
+    id: document.id,
+    ...document.data(),
+    chatNotifications: notifications.get(document.id) || [],
+  })));
+}
+
+export async function getActionApproval(input: {
+  companyId: string;
+  memberUid: string;
+  approvalId: string;
+  database?: FirebaseFirestore.Firestore;
+}) {
+  const database = input.database || db;
+  const document = await database.doc(companyDocumentPath(
+    input.companyId,
+    "actionApprovals",
+    input.approvalId,
+  )).get();
+  if (
+    !document.exists
+    || document.data()?.objectType !== "action_approval"
+    || !canMemberAccessSourceData(document.data()!, input.memberUid)
+  ) {
+    // Do not distinguish an inaccessible approval from a missing one.
+    throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
+  }
+  const notifications = await chatNotificationsForApprovals({
+    companyId: input.companyId,
+    approvalIds: [document.id],
+    database,
+  });
+  return jsonSafe({
+    id: document.id,
+    ...document.data(),
+    chatNotifications: notifications.get(document.id) || [],
+  });
 }
 
 async function claimApproval(input: {

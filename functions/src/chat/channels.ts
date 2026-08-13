@@ -31,6 +31,18 @@ type SlackConversationsListResponse = {
   response_metadata?: { next_cursor?: string };
 };
 
+export function slackConversationsListUrl(cursor = ""): URL {
+  const url = new URL("https://slack.com/api/conversations.list");
+  // `channels:read` covers public channels only. Including `private_channel`
+  // makes Slack reject the whole request unless the app also holds
+  // `groups:read`, which H1 deliberately does not request.
+  url.searchParams.set("types", "public_channel");
+  url.searchParams.set("exclude_archived", "true");
+  url.searchParams.set("limit", "200");
+  if (cursor) url.searchParams.set("cursor", cursor);
+  return url;
+}
+
 /**
  * List the channels Erik could actually post to.
  *
@@ -53,11 +65,7 @@ export async function listSlackChannels(input: {
   // Bounded: an operator picking a destination does not need an unbounded walk of a
   // very large workspace, and an unbounded loop here is a rate-limit incident.
   for (let page = 0; page < 10; page += 1) {
-    const url = new URL("https://slack.com/api/conversations.list");
-    url.searchParams.set("types", "public_channel,private_channel");
-    url.searchParams.set("exclude_archived", "true");
-    url.searchParams.set("limit", "200");
-    if (cursor) url.searchParams.set("cursor", cursor);
+    const url = slackConversationsListUrl(cursor);
     const response = await fetch(url, {
       headers: { authorization: `Bearer ${botToken}` },
       signal: AbortSignal.timeout(30_000),

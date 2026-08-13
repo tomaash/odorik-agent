@@ -61,6 +61,9 @@ companies/{companyId}
   contextItems/{contextItemId}
   agentThreads/{memberThreadDocumentId}
     messages/{messageId}
+    sessions/{sessionId}
+  externalConversationBindings/{bindingId}
+  conversationEvents/{eventId}
   workflows/{workflowId}
     versions/{versionId}
   workflowRuns/{runId}
@@ -147,6 +150,76 @@ create and switch among their own chats. Messages distinguish `human`, `agent`,
 and `system` authors and can reference context items, workflow runs, proposals,
 and decisions. A message can request agent work but cannot masquerade as an
 approval.
+
+A logical thread is independent of a delivery surface. An
+`ExternalConversationBinding` maps one authenticated provider conversation—for
+example a Slack workspace, DM channel, and linked Slack user—to one member-owned
+Erik thread. Binding is explicit and revocable; matching an email address or
+display name is not identity proof.
+
+Inbound and outbound provider events first enter an immutable conversation
+journal. Each record retains provider event ID, provider timestamp, received
+timestamp, direction, delivery state, binding, member, and the message or run it
+caused. The provider event ID is the idempotency boundary. Events wait for a
+small explicit reorder window, then provider time plus a stable event-ID
+tie-breaker defines processing order; Firestore trigger arrival order does not.
+An event that arrives older than an already advanced cursor is retained and
+marked late, then processed against current state rather than rewriting already
+delivered history.
+
+### Conversation runtime and memory
+
+Each thread owns a sequence of working sessions. A session retains its message
+range, active or closed state, compact current subject, discussed entity
+references, unresolved questions, and summary version. A session closes after
+an explicit new-topic request or a product-defined inactivity threshold; it is
+not kept alive by an open model process.
+
+Context assembly has separate inputs:
+
+```text
+current inbound event
++ recent ordered raw turns under a token budget
++ compact state for the active session
++ relevant provenance-bound summaries from older sessions
++ freshly authorized company evidence when the turn requires it
+```
+
+Conversation summaries are derived workspace records, not `ContextItem`
+evidence. A summary records the exact first and last message IDs it compresses,
+summarizer and prompt versions, source-access envelope, and creation time. It may
+help resolve “that customer” or recall an unresolved task, but it cannot satisfy
+a citation or authorize an effect. It also retains the source dependencies of
+the messages it summarizes so revoked evidence can exclude or rebuild the
+derived memory. Explicit member preferences are stored separately, with scope,
+authorship, timestamp, and deletion controls; assistant claims are never
+promoted as preferences or company facts.
+
+Every conversation has one durable processing cursor and at most one active
+lease with a fencing token. A worker claims the oldest eligible inbound event,
+records the user message before generation, assembles context from a fixed
+revision, persists the run and response, advances the cursor, and then delivers
+the response. A stale worker cannot commit over a newer lease. Delivery retries
+reuse the persisted response instead of running the model again. The worker
+drains all eligible queued events before releasing the lease; a scheduled
+recovery path reclaims expired leases and events whose reorder window elapsed
+without another trigger.
+
+The turn router chooses an application-owned response policy before the factual
+loop:
+
+- `social`: no company-data tools;
+- `capability`: no evidence lookup unless the answer depends on live account
+  configuration;
+- `company_fact`: one or more fresh read tools and citations;
+- `contextual_followup`: resolve references from conversation state, then use
+  fresh tools for factual claims; and
+- `action_request`: prepare or explain a typed proposal, never execute directly.
+
+Routing may use deterministic rules plus a structured classifier, but its
+result, confidence, prompt version, and chosen tool policy are persisted and
+evaluated. Low-confidence consequential routing fails toward clarification or
+read-only behavior.
 
 ### Workflow and WorkflowVersion
 
@@ -311,11 +384,19 @@ The current read-only loop exposes four application-owned tools:
 - `list_company_records`: exact filtered relationships and recent records; and
 - `aggregate_company_records`: exact totals and supported groupings.
 
-The first model turn is forced to select a tool. Subsequent turns may compose
-more tools or produce a structured final response. Tool calls are bounded,
-arguments are validated with Zod, record kinds and fields are allowlisted, and
-unknown citation IDs are removed. Retrieval content is explicitly treated as
-untrusted evidence rather than instructions.
+The currently deployed factual endpoint forces the first model turn to select a
+tool. Subsequent turns may compose more tools or produce a structured final
+response. Tool calls are bounded, arguments are validated with Zod, record
+kinds and fields are allowlisted, and unknown citation IDs are removed.
+Retrieval content is explicitly treated as untrusted evidence rather than
+instructions.
+
+Forced first-tool use remains correct only after a turn has been classified as
+requiring company evidence. It is not the entry policy for general
+conversation: production Slack dogfood showed that forcing the social message
+“hello” through the factual loop repeated the previous company-summary search.
+The target runtime routes first, then requires tools for factual modes and
+prohibits them for ordinary social turns.
 
 Qdrant provides the preferred `gemini-embedding-2` dense plus BM25 candidate
 rankings and fuses them with RRF. Its 1,536-dimensional dense vectors use
@@ -408,3 +489,13 @@ not a supported fallback.
 8. Raw sources and evidence retain provenance and retention rules.
 9. Secrets and unrestricted source content never reach the browser.
 10. Direct browser Firestore access remains denied.
+11. External conversation events are idempotent, durably ordered, and processed
+    by one fenced worker per logical conversation.
+12. The inbound human turn is persisted before model generation; delivery retry
+    never regenerates a different answer for the same provider event.
+13. Conversation summaries and previous assistant answers are never accepted as
+    company evidence or action authority.
+14. Memory retrieval rechecks current member and source access, and deletion or
+    revocation propagates to future context assembly.
+15. Social, factual, proposal, decision, and execution messages retain distinct
+    types and cannot be mistaken for one another across transport surfaces.

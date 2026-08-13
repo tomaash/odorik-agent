@@ -83,7 +83,7 @@ test("a decided approval is never announced", () => {
 
 test("the link points where the approval card actually renders", () => {
   const withCase = composeApprovalNotification(pendingMailDraftApproval(), { appOrigin });
-  assert.equal(withCase?.linkUrl, "https://app.agenterik.cz/cases/case-9");
+  assert.equal(withCase?.linkUrl, "https://app.agenterik.cz/approvals/approval-1");
 
   const withoutCase = composeApprovalNotification(
     pendingMailDraftApproval({
@@ -91,11 +91,11 @@ test("the link points where the approval card actually renders", () => {
     }),
     { appOrigin },
   );
-  assert.equal(withoutCase?.linkUrl, "https://app.agenterik.cz/tasks");
+  assert.equal(withoutCase?.linkUrl, "https://app.agenterik.cz/approvals/approval-1");
 
   assert.equal(
-    approvalNotificationLink({ appOrigin: "https://app.agenterik.cz/", caseId: "c 1" }),
-    "https://app.agenterik.cz/cases/c%201",
+    approvalNotificationLink({ appOrigin: "https://app.agenterik.cz/", approvalId: "a 1" }),
+    "https://app.agenterik.cz/approvals/a%201",
   );
 });
 

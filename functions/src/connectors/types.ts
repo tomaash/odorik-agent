@@ -45,9 +45,10 @@ export const sourceCapabilityIds = [
   "context.github.issue.read",
   // Write grant only: creates Gmail drafts after approval. No observe/sync resources.
   "action.mail.draft.create",
-  // Write grant only: posts pending-approval notices to selected channels. Erik
-  // never reads chat, so this grants no view of any conversation.
+  // Write grant only: posts pending-approval notices to selected channels.
   "action.chat.notify",
+  // Observe only the messages a person sends directly to the Slack bot.
+  "context.chat.direct",
 ] as const;
 
 export type SourceCapabilityId = typeof sourceCapabilityIds[number];
@@ -58,6 +59,7 @@ export type CapabilityServiceId =
   | "mail"
   | "mail_draft"
   | "chat_notify"
+  | "chat_direct"
   | "issues";
 export type ResourceType =
   | "phone_line"
@@ -66,7 +68,8 @@ export type ResourceType =
   | "label"
   | "repository"
   | "mailbox"
-  | "channel";
+  | "channel"
+  | "direct_message";
 export type CapabilityDirection = "observe" | "act";
 
 export type SourceCapabilityDescriptor = {

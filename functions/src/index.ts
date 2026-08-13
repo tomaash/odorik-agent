@@ -54,6 +54,7 @@ import {
 import { queueCodingPublisher } from "./coding/service.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { slackOAuthCallback } from "./connectors/slack-oauth-callback.js";
+export { slackEventsWebhook, processSlackDm } from "./slack-events-webhook.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
 export { grokAuthCallback } from "./grok-auth-callback.js";

@@ -6,13 +6,46 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { decryptCredentials, encryptCredentials } from "./credentials.js";
 import { capabilityConfigRef, connectionRef } from "./google-oauth.js";
-import { chatNotifyScopes } from "./registry.js";
+import { chatDirectScopes, chatNotifyScopes } from "./registry.js";
 import { slackOAuthRedirectUri, slackOAuthReturnUrl } from "./slack-oauth-return.js";
 
 export const slackConnectorClientId = defineSecret("SLACK_CLIENT_ID");
 export const slackConnectorClientSecret = defineSecret("SLACK_CLIENT_SECRET");
 
 export const slackAuthorizationLifetimeMs = 60 * 60 * 1000;
+
+export const slackAuthorizationCapabilityIds = [
+  "action.chat.notify",
+  "context.chat.direct",
+] as const;
+export type SlackAuthorizationCapabilityId = typeof slackAuthorizationCapabilityIds[number];
+
+function requestedSlackCapabilities(
+  value?: readonly SlackAuthorizationCapabilityId[],
+): SlackAuthorizationCapabilityId[] {
+  const allowed = new Set<string>(slackAuthorizationCapabilityIds);
+  const requested = [...new Set(value || ["action.chat.notify"])]
+    .filter((capabilityId): capabilityId is SlackAuthorizationCapabilityId => (
+      allowed.has(capabilityId)
+    ));
+  if (requested.length === 0) {
+    throw new SlackAuthorizationError("At least one Slack capability is required");
+  }
+  return requested;
+}
+
+function scopesForSlackCapabilities(
+  capabilityIds: readonly SlackAuthorizationCapabilityId[],
+): string[] {
+  const scopes = new Set<string>();
+  if (capabilityIds.includes("action.chat.notify")) {
+    chatNotifyScopes.forEach((scope) => scopes.add(scope));
+  }
+  if (capabilityIds.includes("context.chat.direct")) {
+    chatDirectScopes.forEach((scope) => scopes.add(scope));
+  }
+  return [...scopes];
+}
 
 /**
  * What Erik keeps after an install.
@@ -58,6 +91,7 @@ export async function createSlackAuthorization(input: {
   email: string;
   displayName: string;
   clientId: string;
+  capabilityIds?: SlackAuthorizationCapabilityId[];
   returnOrigin?: string;
   database?: FirebaseFirestore.Firestore;
 }): Promise<{ authorizationUrl: string }> {
@@ -65,10 +99,12 @@ export async function createSlackAuthorization(input: {
   const state = randomBytes(32).toString("base64url");
   const now = Timestamp.now();
   const redirectUri = slackOAuthRedirectUri();
+  const requestedCapabilityIds = requestedSlackCapabilities(input.capabilityIds);
+  const requestedScopes = scopesForSlackCapabilities(requestedCapabilityIds);
   await database.doc(`oauthStates/${sha256Hex(state)}`).set({
     companyId: input.companyId,
     provider: "slack",
-    requestedCapabilityIds: ["action.chat.notify"],
+    requestedCapabilityIds,
     uid: input.uid,
     email: input.email,
     displayName: input.displayName,
@@ -82,7 +118,7 @@ export async function createSlackAuthorization(input: {
   // as the installing person.
   const query = new URLSearchParams({
     client_id: input.clientId,
-    scope: chatNotifyScopes.join(","),
+    scope: requestedScopes.join(","),
     redirect_uri: redirectUri,
     state,
   });
@@ -98,7 +134,12 @@ export async function completeSlackAuthorization(input: {
   clientSecret: string;
   credentialKey: string;
   database?: FirebaseFirestore.Firestore;
-}): Promise<{ connectionId: string; teamName: string; grantedScopes: string[] }> {
+}): Promise<{
+  connectionId: string;
+  teamName: string;
+  grantedScopes: string[];
+  requestedScopes: string[];
+}> {
   const database = input.database || db;
   const stateRef = database.doc(`oauthStates/${sha256Hex(input.state)}`);
   const stateSnapshot = await stateRef.get();
@@ -144,7 +185,18 @@ export async function completeSlackAuthorization(input: {
   }
 
   const grantedScopes = String(body.scope || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const missingScopes = chatNotifyScopes.filter((scope) => !grantedScopes.includes(scope));
+  const stateCapabilityIds = Array.isArray(stateData.requestedCapabilityIds)
+    ? stateData.requestedCapabilityIds.filter((value): value is SlackAuthorizationCapabilityId => (
+      typeof value === "string"
+      && slackAuthorizationCapabilityIds.includes(value as SlackAuthorizationCapabilityId)
+    ))
+    : [];
+  const requestedCapabilityIds = requestedSlackCapabilities(
+    stateCapabilityIds.length ? stateCapabilityIds : undefined,
+  );
+  const requestedScopes = scopesForSlackCapabilities(requestedCapabilityIds);
+  const missingScopes = requestedScopes.filter((scope) => !grantedScopes.includes(scope));
+  const missingNotifyScopes = chatNotifyScopes.filter((scope) => !grantedScopes.includes(scope));
   const companyId = String(stateData.companyId);
   const connectionId = slackConnectionId(teamId);
   const connection = connectionRef(companyId, connectionId, database);
@@ -165,7 +217,17 @@ export async function completeSlackAuthorization(input: {
     "chat_notify",
     database,
   );
-  const capabilityExisted = (await capabilityRef.get()).exists;
+  const directCapabilityRef = capabilityConfigRef(
+    companyId,
+    connectionId,
+    "chat_direct",
+    database,
+  );
+  const [capabilitySnapshot, directCapabilitySnapshot] = await Promise.all([
+    capabilityRef.get(),
+    directCapabilityRef.get(),
+  ]);
+  const capabilityExisted = capabilitySnapshot.exists;
   const batch = database.batch();
   batch.delete(stateRef);
   batch.set(connection, {
@@ -199,22 +261,49 @@ export async function completeSlackAuthorization(input: {
     ...(!existing.exists ? { createdAt: now } : { reauthorizedAt: now }),
     updatedAt: now,
   }, { merge: true });
-  batch.set(capabilityRef, {
-    capabilityId: "action.chat.notify",
-    serviceId: "chat_notify",
-    direction: "act",
-    status: missingScopes.length === 0 ? "active" : "attention",
-    grantedScopes: chatNotifyScopes.filter((scope) => grantedScopes.includes(scope)),
-    requiredScopes: [...chatNotifyScopes],
-    missingScopes,
-    stats: missingScopes.length === 0 ? { lastError: null } : {
-      lastError: "Slack did not grant every required permission",
-    },
-    ...(!capabilityExisted ? { createdAt: now } : {}),
-    updatedAt: now,
-  }, { merge: true });
+  if (requestedCapabilityIds.includes("action.chat.notify") || capabilitySnapshot.exists) {
+    batch.set(capabilityRef, {
+      capabilityId: "action.chat.notify",
+      serviceId: "chat_notify",
+      direction: "act",
+      status: missingNotifyScopes.length === 0 ? "active" : "attention",
+      grantedScopes: chatNotifyScopes.filter((scope) => grantedScopes.includes(scope)),
+      requiredScopes: [...chatNotifyScopes],
+      missingScopes: missingNotifyScopes,
+      stats: missingNotifyScopes.length === 0 ? { lastError: null } : {
+        lastError: "Slack did not grant every required permission",
+      },
+      ...(!capabilityExisted ? { createdAt: now } : {}),
+      updatedAt: now,
+    }, { merge: true });
+  }
+  const missingDirectScopes = chatDirectScopes.filter((scope) => !grantedScopes.includes(scope));
+  if (requestedCapabilityIds.includes("context.chat.direct") || directCapabilitySnapshot.exists) {
+    batch.set(directCapabilityRef, {
+      capabilityId: "context.chat.direct",
+      serviceId: "chat_direct",
+      direction: "observe",
+      status: missingDirectScopes.length === 0 ? "active" : "attention",
+      grantedScopes: chatDirectScopes.filter((scope) => grantedScopes.includes(scope)),
+      requiredScopes: [...chatDirectScopes],
+      missingScopes: missingDirectScopes,
+      stats: missingDirectScopes.length === 0 ? { lastError: null } : {
+        lastError: "Slack did not grant direct-message access",
+      },
+      ...(!directCapabilitySnapshot.exists ? { createdAt: now } : {}),
+      updatedAt: now,
+    }, { merge: true });
+    batch.set(database.doc(`slackWorkspaces/${teamId}`), {
+      teamId,
+      companyId,
+      connectionId,
+      status: missingDirectScopes.length === 0 ? "active" : "attention",
+      updatedAt: now,
+      ...(!existing.exists ? { createdAt: now } : {}),
+    }, { merge: true });
+  }
   await batch.commit();
-  return { connectionId, teamName, grantedScopes };
+  return { connectionId, teamName, grantedScopes, requestedScopes };
 }
 
 export class SlackNotifyGrantMissingError extends Error {
@@ -268,6 +357,40 @@ export async function authorizedSlackNotify(input: {
   }
   if (!credentials.botToken) throw new SlackNotifyGrantMissingError();
   return { botToken: credentials.botToken, teamId: credentials.teamId };
+}
+
+export async function authorizedSlackDirect(input: {
+  companyId: string;
+  connectionId: string;
+  credentialKey: string;
+  database?: FirebaseFirestore.Firestore;
+}): Promise<{ botToken: string; teamId: string; botUserId: string }> {
+  const database = input.database || db;
+  const [connection, capability] = await Promise.all([
+    connectionRef(input.companyId, input.connectionId, database).get(),
+    capabilityConfigRef(input.companyId, input.connectionId, "chat_direct", database).get(),
+  ]);
+  const data = connection.data();
+  const capabilityData = capability.data();
+  if (
+    !connection.exists
+    || data?.connectorId !== "slack"
+    || !["active", "attention"].includes(String(data?.status))
+    || !capability.exists
+    || capabilityData?.capabilityId !== "context.chat.direct"
+    || capabilityData?.status !== "active"
+    || typeof data.credentialCiphertext !== "string"
+  ) throw new SlackNotifyGrantMissingError();
+  const credentials = decryptCredentials(data.credentialCiphertext, input.credentialKey) as SlackCredential;
+  const granted = new Set(credentials.scope.split(",").map((scope) => scope.trim()).filter(Boolean));
+  if (!chatDirectScopes.every((scope) => granted.has(scope)) || !credentials.botToken) {
+    throw new SlackNotifyGrantMissingError();
+  }
+  return {
+    botToken: credentials.botToken,
+    teamId: credentials.teamId,
+    botUserId: credentials.botUserId,
+  };
 }
 
 /** Revoke the bot token so disconnecting actually ends Slack's side of the grant. */

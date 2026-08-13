@@ -10,7 +10,7 @@ import {
 import { FirestoreCompanyData } from "../agent/knowledge.js";
 import { memberThreadDocumentId } from "../agent/threads.js";
 import { listTasks } from "../tasks/repository.js";
-import { listActionApprovals } from "../approvals/repository.js";
+import { getActionApproval, listActionApprovals } from "../approvals/repository.js";
 import { MemoryFirestore } from "./firestore-harness.js";
 
 test("audiences are canonical, backward compatible, and detect access broadening", () => {
@@ -127,4 +127,21 @@ test("direct task and approval APIs hide restricted and disabled evidence", asyn
     ["approval-alice", "approval-public"]);
   assert.deepEqual(ids(await listActionApprovals({ companyId: "company-a", memberUid: "bob" }, database)),
     ["approval-public"]);
+
+  assert.equal((await getActionApproval({
+    companyId: "company-a",
+    memberUid: "alice",
+    approvalId: "approval-alice",
+    database,
+  }) as { id: string }).id, "approval-alice");
+  await assert.rejects(
+    () => getActionApproval({
+      companyId: "company-a",
+      memberUid: "bob",
+      approvalId: "approval-alice",
+      database,
+    }),
+    /Approval request not found/,
+    "an exact deep link must not reveal a restricted approval",
+  );
 });

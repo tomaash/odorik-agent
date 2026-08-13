@@ -40,6 +40,11 @@ export const chatNotifyScopes = [
   "channels:read",
 ] as const;
 
+/** Receives only messages sent directly to the bot, never channel history. */
+export const chatDirectScopes = ["im:history"] as const;
+
+export const slackScopes = [...chatNotifyScopes, ...chatDirectScopes] as const;
+
 export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDescriptor> = {
   "context.call.read": {
     id: "context.call.read",
@@ -95,6 +100,15 @@ export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDesc
     syncMode: "manual",
     // Delivery is authorized once, when the destination is configured. Approving
     // each notice about a pending approval would be circular.
+    requiresApproval: false,
+  },
+  "context.chat.direct": {
+    id: "context.chat.direct",
+    serviceId: "chat_direct",
+    direction: "observe",
+    resourceType: "direct_message",
+    requiredScopes: [...chatDirectScopes],
+    syncMode: "webhook",
     requiresApproval: false,
   },
   "context.github.issue.read": {
@@ -166,8 +180,10 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
     id: "slack",
     name: "Slack",
     description:
-      "Posts a pending-approval notice to explicitly selected channels. Erik never reads chat.",
+      "Posts pending-approval notices to explicitly selected Slack channels.",
     availability: "available",
+    // H2 direct conversation remains a prototype. Do not expose its read grant
+    // in the connector setup until the ordered conversation runtime is accepted.
     capabilities: [sourceCapabilities["action.chat.notify"]],
   },
   grok_subscription: {
