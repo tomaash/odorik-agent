@@ -269,7 +269,7 @@ Every action capability must define:
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
 | H1 | Post pending-approval notifications to one selected Slack channel | Completed | Accepted in test production 2026-08-13 |
-| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Conversational correctness accepted; 9A implemented, live acceptance pending | Slice 9A session/retention controls pass |
+| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Slice 8 and 9A accepted in test production | Older-session retrieval is proven useful before 9B |
 | H2B | Resume one logical conversation across Slack and Erik | Gated | H2A is useful and memory/retention controls pass |
 | H2C | Read selected mentions or shared channels | Gated | A named group loop and audience/privacy model are accepted |
 
@@ -2210,5 +2210,20 @@ YYYY-MM-DD — Slice
   per inbound message, matching the existing stable reply and run identities.
 - **Scope decision:** semantic/lexical/entity retrieval across older sessions is
   9B. It is not required before Slice 10 proves conversation-to-proposal.
-- **Automated checkpoint:** focused session and Slack suites pass. Full suite,
-  deployment, and real Slack acceptance remain before 9A is accepted.
+- **Automated acceptance:** all 204 Functions tests and 22 frontend tests pass;
+  both TypeScript projects and the production frontend build pass.
+- **Live acceptance:** the linked Explorers member asked for the open-task title,
+  inspected memory, asked “What about its status?”, started fresh, inspected
+  again, forgot the conversation, and inspected once more. The visible replies
+  named the authorized task, disclosed the active topic/record, answered the
+  pronoun follow-up with a fresh task citation, and reported empty memory after
+  both reset and forget.
+- **Trace proof:** the first factual run used two tools; the contextual status
+  turn used one fresh tool. Both recorded `slack-conversation-v2`, exact recent
+  message IDs, token estimates, selected state version, successful Slack
+  delivery identity, and `fresh_authorized_tools_required`. `start fresh`
+  closed `session_1_000001`; forget marked the next session forgotten and moved
+  the active session to memory generation 2. No earlier message or entity
+  appeared in the post-forget context.
+- **Decision:** Slice 9A is accepted. Continue to Slice 10 conversation-to-
+  proposal before investing in 9B older-session retrieval.

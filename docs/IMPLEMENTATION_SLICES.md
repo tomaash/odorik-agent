@@ -317,7 +317,7 @@ tool call was forced.
 
 ### Slice 9A: bounded durable conversation sessions
 
-**Implemented; test-production acceptance pending:** Slack DM threads now use a
+**Completed and accepted:** 2026-08-13. Slack DM threads now use a
 six-hour inactivity boundary and explicit `new topic` / `start fresh` controls.
 Recent raw turns are assembled under a 6,000-token estimate rather than a fixed
 message count. Each session stores versioned compact state with exact first and
@@ -339,6 +339,13 @@ Exit criterion: a real Slack discussion persists across a later follow-up,
 `what do you remember?` reports only the current session, updated facts are
 retrieved again, `start fresh` removes prior discussion state, and membership or
 source revocation fails closed on the next turn.
+
+Test production proved the open-task title, inspectable remembered record,
+pronoun-based status follow-up with a fresh citation, explicit session reset,
+generation-fenced forget, and empty post-forget inspection. Firestore recorded
+three sessions, memory generation `1 → 2`, exact message selections, and fresh
+tool traces for both factual turns. Automated acceptance is 204 Functions tests
+and 22 frontend tests.
 
 ### Slice 9B: relevant older-session recall
 
