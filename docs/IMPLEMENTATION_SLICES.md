@@ -33,10 +33,10 @@ below suggests:
   delivery outcome classification, exact authenticated approval links, and
   operator recovery have passed automated and live test-production acceptance;
   H1 is complete; and
-- a Slack direct-message assistant prototype is deployed and present in the
-  working tree. It verifies Slack requests, links a Slack identity to an Erik
-  member, reuses the factual agent, and persists Slack-origin runs. It is not an
-  accepted H2 slice.
+- Slack direct-message conversational correctness is deployed and accepted. It
+  verifies Slack requests, links a Slack identity to an Erik member, routes
+  before tools, persists inbound events first, serializes each DM, and records
+  idempotent reply identities. Durable multi-session memory remains Slice 9.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -276,6 +276,22 @@ destination across duplicate trigger delivery, and disconnect stops further
 delivery. Record the observation in `CONNECTOR_EPIC.md` before calling H1 done.
 
 ### Slice 8: conversational correctness in one Slack DM
+
+**Completed and accepted:** 2026-08-13. Slack events now append to one durable
+per-DM inbox, are ordered by provider timestamp plus event id, and drain under a
+six-minute fenced lease after a short reorder window. Each inbound message is
+persisted before generation; replies and runs use the Slack event id as their
+stable identity and safe delivery retries reuse the stored reply. A deterministic
+router separates `social`, `capability`, `company_fact`,
+`contextual_followup`, and `action_request`; only the two factual routes can use
+company tools. Late events are retained and flagged without moving the committed
+cursor backward.
+
+Test-production acceptance covered a greeting, grounded task count,
+pronoun-based task-title follow-up, capability question, and rapid capability +
+social messages. All five replies were visible once and in causal order. Run
+traces showed zero tools for social/capability turns and two tools for both
+factual turns.
 
 **Usable outcome:** a linked member can hold a short, natural, read-only Slack
 conversation without repeated, missing, duplicated, or reversed replies.

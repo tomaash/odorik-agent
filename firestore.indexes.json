@@ -1,6 +1,14 @@
 {
   "indexes": [
     {
+      "collectionGroup": "events",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "pending", "order": "ASCENDING" },
+        { "fieldPath": "orderKey", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "contextItems",
       "queryScope": "COLLECTION",
       "fields": [

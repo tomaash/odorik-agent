@@ -1,20 +1,17 @@
-import { FieldValue } from "firebase-admin/firestore";
 import { defineSecret } from "firebase-functions/params";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onRequest } from "firebase-functions/v2/https";
 
 import {
-  markSlackEventAttempt,
+  drainSlackConversation,
   parseSlackDmEvent,
-  processSlackDmEvent,
   queueSlackDmEvent,
   SlackEventRequestError,
+  SlackConversationBusyError,
   verifySlackRequestSignature,
-  type QueuedSlackDmEvent,
 } from "./chat/slack-events.js";
 import { productionAppOrigin } from "./connectors/google-oauth-return.js";
 import { connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl } from "./router.js";
-import { SlackApiError, SlackDeliveryOutcomeUnknownError } from "./chat/slack.js";
 
 export const slackSigningSecret = defineSecret("SLACK_SIGNING_SECRET");
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
@@ -73,7 +70,7 @@ export const slackEventsWebhook = onRequest(
 
 export const processSlackDm = onDocumentCreated(
   {
-    document: "slackEventDeliveries/{deliveryId}",
+    document: "slackConversations/{conversationId}/events/{deliveryId}",
     database: "odorik",
     region: "europe-west3",
     timeoutSeconds: 300,
@@ -84,45 +81,15 @@ export const processSlackDm = onDocumentCreated(
     secrets: [connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl],
   },
   async (event) => {
-    const ref = event.data?.ref;
-    if (!ref) return;
-    const snapshot = await ref.get();
-    const data = snapshot.data();
-    if (!snapshot.exists || data?.status === "processed") return;
-    await markSlackEventAttempt(ref);
-    try {
-      const outcome = await processSlackDmEvent({
-        event: {
-          eventId: String(data?.eventId || ""),
-          teamId: String(data?.teamId || ""),
-          slackUserId: String(data?.slackUserId || ""),
-          channelId: String(data?.channelId || ""),
-          text: String(data?.text || ""),
-          eventTs: String(data?.eventTs || ""),
-        } satisfies QueuedSlackDmEvent,
-        credentialKey: connectorCredentialKey.value(),
-        geminiApiKey: geminiApiKey.value(),
-        appOrigin: productionAppOrigin,
-      });
-      await ref.set({
-        status: "processed",
-        outcome,
-        processedAt: FieldValue.serverTimestamp(),
-        lastError: null,
-      }, { merge: true });
-    } catch (error) {
-      const providerOutcomeUnknown = error instanceof SlackDeliveryOutcomeUnknownError
-        || (error instanceof SlackApiError
-          && !["ratelimited", "server_error"].includes(error.slackError));
-      await ref.set({
-        status: providerOutcomeUnknown ? "outcome_unknown" : "failed",
-        lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1_000),
-        failedAt: FieldValue.serverTimestamp(),
-      }, { merge: true });
-      // Never blindly retry a DM reply that Slack may already have accepted. A
-      // rate limit/server failure is known not to have posted and may retry.
-      if (providerOutcomeUnknown) return;
-      throw error;
-    }
+    const result = await drainSlackConversation({
+      conversationId: event.params.conversationId,
+      credentialKey: connectorCredentialKey.value(),
+      geminiApiKey: geminiApiKey.value(),
+      appOrigin: productionAppOrigin,
+    });
+    // Firestore retries this trigger. Contention must be retried rather than
+    // acknowledged, otherwise an event arriving at the lease boundary can be
+    // left queued with no future wake-up.
+    if (!result.acquired) throw new SlackConversationBusyError();
   },
 );

@@ -1,12 +1,20 @@
-import { createHmac, timingSafeEqual } from "node:crypto";
-import { FieldValue, Timestamp } from "firebase-admin/firestore";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
+import { Timestamp } from "firebase-admin/firestore";
 
-import { askCompanyFactAgent } from "../agent/service.js";
+import {
+  askCompanyFactAgent,
+  persistCompanyAgentInbound,
+  persistCompanyConversationReply,
+} from "../agent/service.js";
 import { authorizedSlackDirect } from "../connectors/slack-oauth.js";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
+import { companyDocumentPath } from "../tenancy.js";
 import { createSlackLink, slackIdentityPath } from "./slack-link.js";
-import { postSlackText } from "./slack.js";
+import {
+  classifySlackDeliveryFailure,
+  postSlackText,
+} from "./slack.js";
 
 export class SlackEventRequestError extends Error {
   constructor(message: string, readonly statusCode = 400) {
@@ -48,6 +56,68 @@ export type QueuedSlackDmEvent = {
   eventTs: string;
 };
 
+export type SlackTurnRoute =
+  | "social"
+  | "capability"
+  | "company_fact"
+  | "contextual_followup"
+  | "action_request";
+
+export const slackConversationContextVersion = "slack-conversation-v1";
+// Longer than the five-minute function timeout: a live worker cannot be
+// reclaimed merely because one grounded answer is slow.
+export const slackConversationLeaseMs = 6 * 60 * 1000;
+export const slackReorderWindowMs = 750;
+
+export class SlackConversationBusyError extends Error {
+  constructor() {
+    super("Slack conversation is already being processed");
+    this.name = "SlackConversationBusyError";
+  }
+}
+
+export function routeSlackTurn(text: string, hasPriorTurn = false): SlackTurnRoute {
+  const normalized = text.trim().toLocaleLowerCase("en").replace(/\s+/g, " ");
+  if (/^(hi|hello|hey|ahoj|čau|dobrý den|good (morning|afternoon|evening))( erik)?[!.?]*$/u.test(normalized)
+    || /^(thanks|thank you|díky|děkuji|bye|goodbye|nashledanou)[!.?]*$/u.test(normalized)) {
+    return "social";
+  }
+  if (/\b(what can you do|how can you help|what are your capabilities|co umíš|s čím (mi )?můžeš pomoct)\b/u.test(normalized)) {
+    return "capability";
+  }
+  const request = normalized.replace(
+    /^(?:hi|hello|hey|ahoj|čau|dobrý den)[,! ]+/u,
+    "",
+  );
+  if (
+    /^(?:(?:can|could|would) you |please |prosím )?(?:approve|reject|delete|move|assign|schedule|schval|odmítni|smaž|přesuň|přiřaď|naplánuj)\b/u.test(request)
+    || /^(?:(?:can|could|would) you |please |prosím )?(?:send|draft|pošli)\b.{0,80}\b(?:email|message|mail|e-mail|zpráv)/u.test(request)
+    || /^(?:(?:can|could|would) you |please |prosím )?(?:(?:create|make|vytvoř)\b|(?:update|uprav)\b(?! me\b)).{0,80}\b(?:task|case|contact|record|draft|email|event|calendar|úkol|případ|kontakt|záznam|koncept|událost|kalendář)/u.test(request)
+  ) {
+    return "action_request";
+  }
+  if (hasPriorTurn && (
+    /^(and |also |what about|how about|why |when |where |who |which |a co|a jak|proč|kdy|kde|kdo|kter)/u.test(normalized)
+    || /\b(it|its|that|those|them|they|this|he|she|his|her|to|jeho|její|oni|ten|ta|ty)\b/u.test(normalized)
+  )) return "contextual_followup";
+  return "company_fact";
+}
+
+export function slackEventOrderKey(eventTs: string, eventId: string): string {
+  const micros = Math.max(0, Math.round(Number(eventTs) * 1_000_000));
+  return `${String(micros).padStart(20, "0")}:${eventId}`;
+}
+
+export function slackConversationId(event: Pick<QueuedSlackDmEvent,
+  "teamId" | "channelId" | "slackUserId"
+>): string {
+  return sha256Hex(`${event.teamId}:${event.channelId}:${event.slackUserId}`).slice(0, 48);
+}
+
+export function slackConversationEventPath(event: QueuedSlackDmEvent): string {
+  return `slackConversations/${slackConversationId(event)}/events/${sha256Hex(event.eventId)}`;
+}
+
 export function parseSlackDmEvent(body: unknown): QueuedSlackDmEvent | null {
   if (!body || typeof body !== "object") throw new SlackEventRequestError("Invalid Slack payload");
   const envelope = body as Record<string, unknown>;
@@ -68,7 +138,10 @@ export function parseSlackDmEvent(body: unknown): QueuedSlackDmEvent | null {
   const channelId = String(message.channel || "").trim();
   const text = String(message.text || "").trim();
   const eventTs = String(message.event_ts || message.ts || "").trim();
-  if (!eventId || !teamId || !slackUserId || !channelId || !text || !eventTs) return null;
+  if (
+    !eventId || !teamId || !slackUserId || !channelId || !text || !eventTs
+    || !Number.isFinite(Number(eventTs))
+  ) return null;
   return { eventId, teamId, slackUserId, channelId, text: text.slice(0, 3000), eventTs };
 }
 
@@ -77,13 +150,28 @@ export async function queueSlackDmEvent(input: {
   database?: FirebaseFirestore.Firestore;
 }): Promise<"queued" | "duplicate"> {
   const database = input.database || db;
-  const ref = database.doc(`slackEventDeliveries/${sha256Hex(input.event.eventId)}`);
+  const conversationId = slackConversationId(input.event);
+  const conversationRef = database.doc(`slackConversations/${conversationId}`);
+  const ref = database.doc(slackConversationEventPath(input.event));
   return database.runTransaction(async (transaction) => {
     const existing = await transaction.get(ref);
     if (existing.exists) return "duplicate";
+    const conversation = await transaction.get(conversationRef);
+    const generation = Number(conversation.data()?.enqueueGeneration || 0) + 1;
+    transaction.set(conversationRef, {
+      conversationId,
+      teamId: input.event.teamId,
+      slackUserId: input.event.slackUserId,
+      channelId: input.event.channelId,
+      enqueueGeneration: generation,
+      ...(!conversation.exists ? { createdAt: Timestamp.now() } : {}),
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
     transaction.create(ref, {
       ...input.event,
       status: "queued",
+      pending: true,
+      orderKey: slackEventOrderKey(input.event.eventTs, input.event.eventId),
       attempts: 0,
       createdAt: Timestamp.now(),
     });
@@ -123,12 +211,18 @@ async function resolveSlackWorkspace(
   return { companyId, connectionId };
 }
 
-function slackAnswerText(answer: Awaited<ReturnType<typeof askCompanyFactAgent>>): string {
+function slackAnswerText(
+  answer: Awaited<ReturnType<typeof askCompanyFactAgent>>,
+  appOrigin: string,
+): string {
   const citations = answer.citations
     .filter((citation) => citation.externalUrl || citation.internalRoute)
     .slice(0, 8)
     .map((citation) => {
-      const url = citation.externalUrl || citation.internalRoute;
+      const internalRoute = citation.internalRoute || "";
+      const url = citation.externalUrl || (internalRoute
+        ? `${appOrigin.replace(/\/+$/, "")}/${internalRoute.replace(/^\/+/, "")}`
+        : "");
       return `<${url}|${citation.citationId}: ${citation.title}>`;
     });
   return [answer.answer, citations.length ? `\nSources:\n${citations.join("\n")}` : ""]
@@ -137,22 +231,63 @@ function slackAnswerText(answer: Awaited<ReturnType<typeof askCompanyFactAgent>>
     .slice(0, 39_000);
 }
 
+function socialReply(text: string): string {
+  if (/thank|thanks|díky|děkuji/i.test(text)) return "You’re welcome.";
+  if (/bye|goodbye|nashledanou/i.test(text)) return "Goodbye — message me whenever you need company context.";
+  return "Hello! Ask me about your company’s calls, contacts, cases, tasks, documents, mail, or recent work.";
+}
+
+const capabilityReply = "I can answer read-only questions about the company data you’re allowed to access and show the supporting sources. I won’t approve or execute consequential actions from an ordinary Slack reply.";
+const actionRequestReply = "I won’t execute or approve an action from an ordinary Slack message. I can help verify the relevant company context here; use Agent Erik’s authenticated approval surface for consequential actions.";
+
+type PreparedSlackReply = {
+  outcome: "answered" | "link_requested" | "ignored";
+  replyText: string | null;
+  route: SlackTurnRoute | "identity_link" | "ignored";
+  companyId?: string;
+  connectionId?: string;
+  botToken?: string;
+  uid?: string;
+  threadId?: string;
+  runId?: string;
+};
+
+export type SlackConversationDependencies = {
+  ask?: typeof askCompanyFactAgent;
+  persistInbound?: typeof persistCompanyAgentInbound;
+  persistReply?: typeof persistCompanyConversationReply;
+  post?: typeof postSlackText;
+  authorize?: typeof authorizedSlackDirect;
+  createLink?: typeof createSlackLink;
+  wait?: (milliseconds: number) => Promise<void>;
+};
+
 export async function processSlackDmEvent(input: {
   event: QueuedSlackDmEvent;
   credentialKey: string;
   geminiApiKey: string;
   appOrigin: string;
+  hasPriorTurn?: boolean;
+  lateArrival?: boolean;
+  dependencies?: SlackConversationDependencies;
   database?: FirebaseFirestore.Firestore;
-}): Promise<"answered" | "link_requested" | "ignored"> {
+}): Promise<PreparedSlackReply> {
   const database = input.database || db;
+  const ask = input.dependencies?.ask || askCompanyFactAgent;
+  const persistInbound = input.dependencies?.persistInbound || persistCompanyAgentInbound;
+  const persistReply = input.dependencies?.persistReply || persistCompanyConversationReply;
+  const authorize = input.dependencies?.authorize || authorizedSlackDirect;
+  const createLink = input.dependencies?.createLink || createSlackLink;
   const workspace = await resolveSlackWorkspace(input.event.teamId, database);
-  if (!workspace) return "ignored";
-  const authorization = await authorizedSlackDirect({
+  if (!workspace) return { outcome: "ignored", replyText: null, route: "ignored" };
+  const authorization = await authorize({
     ...workspace,
     credentialKey: input.credentialKey,
     database,
   });
-  if (authorization.botUserId && authorization.botUserId === input.event.slackUserId) return "ignored";
+  if (authorization.botUserId && authorization.botUserId === input.event.slackUserId) {
+    return { outcome: "ignored", replyText: null, route: "ignored" };
+  }
   const identity = await database.doc(slackIdentityPath({
     ...workspace,
     slackUserId: input.event.slackUserId,
@@ -162,52 +297,327 @@ export async function processSlackDmEvent(input: {
     ? await database.doc(`companies/${workspace.companyId}/memberships/${uid}`).get()
     : null;
   if (!uid || !membership?.exists || membership.data()?.status !== "active") {
-    const link = await createSlackLink({
+    const link = await createLink({
       ...workspace,
       teamId: input.event.teamId,
       slackUserId: input.event.slackUserId,
       appOrigin: input.appOrigin,
       database,
     });
-    await postSlackText({
-      token: authorization.botToken,
-      channelId: input.event.channelId,
-      text: `To protect company data, link this Slack account to your Agent Erik account first:\n${link.url}\n\nThe link expires in 15 minutes.`,
-      clientMessageId: input.event.eventId,
-    });
-    return "link_requested";
+    return {
+      outcome: "link_requested",
+      replyText: `To protect company data, link this Slack account to your Agent Erik account first:\n${link.url}\n\nThe link expires in 15 minutes.`,
+      route: "identity_link",
+      ...workspace,
+      botToken: authorization.botToken,
+    };
   }
   const threadId = `slack_${sha256Hex(`${input.event.teamId}:${input.event.channelId}:${uid}`).slice(0, 40)}`;
-  const answer = await askCompanyFactAgent({
+  const inboundMessageId = `slack_${sha256Hex(input.event.eventId).slice(0, 40)}`;
+  const originMetadata = {
+    teamId: input.event.teamId,
+    slackUserId: input.event.slackUserId,
+    channelId: input.event.channelId,
+    eventId: input.event.eventId,
+    eventTs: input.event.eventTs,
+    ...(input.lateArrival ? { lateArrival: true } : {}),
+  };
+  await persistInbound({
     companyId: workspace.companyId,
     actorUid: uid,
     threadId,
     question: input.event.text,
-    geminiApiKey: input.geminiApiKey,
+    messageId: inboundMessageId,
+    createdAtMs: input.lateArrival
+      ? Date.now()
+      : Math.round(Number(input.event.eventTs) * 1000),
     origin: "slack_dm",
-    originMetadata: {
-      teamId: input.event.teamId,
-      slackUserId: input.event.slackUserId,
-      channelId: input.event.channelId,
-      eventId: input.event.eventId,
-      eventTs: input.event.eventTs,
-    },
+    originMetadata,
     database,
   });
-  await postSlackText({
-    token: authorization.botToken,
-    channelId: input.event.channelId,
-    text: slackAnswerText(answer),
-    clientMessageId: input.event.eventId,
-  });
-  return "answered";
+  const route = routeSlackTurn(input.event.text, input.hasPriorTurn);
+  const turnMetadata = {
+    route,
+    contextVersion: slackConversationContextVersion,
+    toolPolicy: ["company_fact", "contextual_followup"].includes(route)
+      ? "fresh_company_evidence_required"
+      : "no_company_tools",
+    replyIdentity: { slackEventId: input.event.eventId, clientMessageId: input.event.eventId },
+  };
+  let replyText = "";
+  let runId = "";
+  if (route === "company_fact" || route === "contextual_followup") {
+    const answer = await ask({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      question: input.event.text,
+      geminiApiKey: input.geminiApiKey,
+      origin: "slack_dm",
+      originMetadata,
+      inboundMessageId,
+      idempotencyKey: input.event.eventId,
+      turnMetadata,
+      database,
+    });
+    replyText = slackAnswerText(answer, input.appOrigin);
+    runId = answer.runId;
+  } else {
+    replyText = route === "social"
+      ? socialReply(input.event.text)
+      : route === "capability" ? capabilityReply : actionRequestReply;
+    const persisted = await persistReply({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      inboundMessageId,
+      idempotencyKey: input.event.eventId,
+      question: input.event.text,
+      answer: replyText,
+      origin: "slack_dm",
+      originMetadata,
+      turnMetadata,
+      database,
+    });
+    runId = persisted.runId;
+  }
+  return {
+    outcome: "answered",
+    replyText,
+    route,
+    ...workspace,
+    botToken: authorization.botToken,
+    uid,
+    threadId,
+    runId,
+  };
 }
 
-export async function markSlackEventAttempt(
-  ref: FirebaseFirestore.DocumentReference,
-): Promise<void> {
-  await ref.set({
-    attempts: FieldValue.increment(1),
-    lastAttemptAt: FieldValue.serverTimestamp(),
-  }, { merge: true });
+async function claimSlackConversation(input: {
+  conversationId: string;
+  database: FirebaseFirestore.Firestore;
+}): Promise<{ leaseId: string; generation: number } | null> {
+  const ref = input.database.doc(`slackConversations/${input.conversationId}`);
+  const leaseId = randomBytes(16).toString("hex");
+  return input.database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists) return null;
+    const data = snapshot.data() || {};
+    const leaseExpiresAt = data.executionLeaseExpiresAt?.toMillis?.() || 0;
+    if (data.executionLeaseId && leaseExpiresAt > Date.now()) return null;
+    transaction.set(ref, {
+      executionLeaseId: leaseId,
+      executionLeaseExpiresAt: Timestamp.fromMillis(Date.now() + slackConversationLeaseMs),
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
+    return { leaseId, generation: Number(data.enqueueGeneration || 0) };
+  });
+}
+
+async function finishSlackConversationLease(input: {
+  conversationId: string;
+  leaseId: string;
+  database: FirebaseFirestore.Firestore;
+  lastCommittedOrderKey?: string;
+}): Promise<void> {
+  const ref = input.database.doc(`slackConversations/${input.conversationId}`);
+  await input.database.runTransaction(async (transaction) => {
+    const current = await transaction.get(ref);
+    if (current.data()?.executionLeaseId !== input.leaseId) return;
+    const currentOrderKey = String(current.data()?.lastCommittedOrderKey || "");
+    const nextOrderKey = input.lastCommittedOrderKey
+      && input.lastCommittedOrderKey > currentOrderKey
+      ? input.lastCommittedOrderKey
+      : currentOrderKey;
+    transaction.set(ref, {
+      executionLeaseId: null,
+      executionLeaseExpiresAt: null,
+      ...(nextOrderKey ? { lastCommittedOrderKey: nextOrderKey } : {}),
+      updatedAt: Timestamp.now(),
+    }, { merge: true });
+  });
+}
+
+async function assertSlackConversationLease(input: {
+  conversationId: string;
+  leaseId: string;
+  database: FirebaseFirestore.Firestore;
+}): Promise<void> {
+  const current = await input.database.doc(`slackConversations/${input.conversationId}`).get();
+  if (current.data()?.executionLeaseId !== input.leaseId) {
+    throw new SlackConversationBusyError();
+  }
+}
+
+export async function drainSlackConversation(input: {
+  conversationId: string;
+  credentialKey: string;
+  geminiApiKey: string;
+  appOrigin: string;
+  database?: FirebaseFirestore.Firestore;
+  dependencies?: SlackConversationDependencies;
+}): Promise<{ processed: number; acquired: boolean }> {
+  const database = input.database || db;
+  const wait = input.dependencies?.wait || ((milliseconds: number) => new Promise(
+    (resolve) => setTimeout(resolve, milliseconds),
+  ));
+  await wait(slackReorderWindowMs);
+  const claim = await claimSlackConversation({ conversationId: input.conversationId, database });
+  if (!claim) return { processed: 0, acquired: false };
+  const conversationRef = database.doc(`slackConversations/${input.conversationId}`);
+  const eventsRef = conversationRef.collection("events");
+  const conversation = await conversationRef.get();
+  const committedBeforeRun = String(conversation.data()?.lastCommittedOrderKey || "");
+  let processed = 0;
+  let lastCommittedOrderKey = "";
+  try {
+    while (processed < 100) {
+      const pending = await eventsRef.where("pending", "==", true)
+        .orderBy("orderKey", "asc").limit(1).get();
+      const document = pending.docs[0];
+      if (!document) break;
+      const event = document.data() as QueuedSlackDmEvent & Record<string, unknown>;
+      const orderKey = String(event.orderKey || "");
+      const lateArrival = Boolean(committedBeforeRun && orderKey <= committedBeforeRun);
+      await document.ref.set({
+        status: "processing",
+        attempts: Number(event.attempts || 0) + 1,
+        lastAttemptAt: Timestamp.now(),
+        executionLeaseId: claim.leaseId,
+        ...(lateArrival ? { lateArrival: true } : {}),
+      }, { merge: true });
+      let deliveryStarted = false;
+      try {
+        let prepared: PreparedSlackReply;
+        const storedReply = typeof event.replyText === "string" ? event.replyText : "";
+        if (storedReply) {
+          const workspace = await resolveSlackWorkspace(event.teamId, database);
+          if (!workspace) {
+            prepared = { outcome: "ignored", replyText: null, route: "ignored" };
+          } else {
+            const authorize = input.dependencies?.authorize || authorizedSlackDirect;
+            const authorization = await authorize({
+              ...workspace,
+              credentialKey: input.credentialKey,
+              database,
+            });
+            prepared = {
+              outcome: String(event.outcome || "answered") as "answered" | "link_requested",
+              replyText: storedReply,
+              route: String(event.route || "company_fact") as SlackTurnRoute,
+              ...workspace,
+              botToken: authorization.botToken,
+              runId: String(event.runId || ""),
+            };
+          }
+        } else {
+          prepared = await processSlackDmEvent({
+            event,
+            credentialKey: input.credentialKey,
+            geminiApiKey: input.geminiApiKey,
+            appOrigin: input.appOrigin,
+            hasPriorTurn: Boolean(lastCommittedOrderKey
+              || (await conversationRef.get()).data()?.lastCommittedOrderKey),
+            lateArrival,
+            dependencies: input.dependencies,
+            database,
+          });
+          await document.ref.set({
+            outcome: prepared.outcome,
+            route: prepared.route,
+            replyText: prepared.replyText,
+            runId: prepared.runId || null,
+            status: prepared.replyText ? "reply_ready" : "processed",
+            pending: Boolean(prepared.replyText),
+            preparedAt: Timestamp.now(),
+          }, { merge: true });
+        }
+        if (prepared.replyText && prepared.botToken) {
+          await assertSlackConversationLease({
+            conversationId: input.conversationId,
+            leaseId: claim.leaseId,
+            database,
+          });
+          deliveryStarted = true;
+          const post = input.dependencies?.post || postSlackText;
+          const posted = await post({
+            token: prepared.botToken,
+            channelId: event.channelId,
+            text: prepared.replyText,
+            clientMessageId: event.eventId,
+          });
+          await document.ref.set({
+            status: "processed",
+            pending: false,
+            messageTs: posted.messageTs,
+            processedAt: Timestamp.now(),
+            lastError: null,
+            executionLeaseId: null,
+          }, { merge: true });
+          if (prepared.companyId && prepared.runId) {
+            await database.doc(companyDocumentPath(
+              prepared.companyId,
+              "agentRuns",
+              prepared.runId,
+            )).set({
+              replyIdentity: {
+                slackEventId: event.eventId,
+                clientMessageId: event.eventId,
+                messageTs: posted.messageTs,
+                channelId: event.channelId,
+                deliveryStatus: "succeeded",
+              },
+              deliveredAt: Timestamp.now(),
+            }, { merge: true });
+          }
+        } else {
+          await document.ref.set({
+            status: "processed",
+            pending: false,
+            processedAt: Timestamp.now(),
+            executionLeaseId: null,
+          }, { merge: true });
+        }
+        processed += 1;
+        lastCommittedOrderKey = String(event.orderKey || "");
+      } catch (error) {
+        if (!deliveryStarted) {
+          const attempts = Number(event.attempts || 0) + 1;
+          const retryable = attempts < 4;
+          await document.ref.set({
+            status: retryable ? "failed_safe_to_retry" : "failed",
+            pending: retryable,
+            lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1_000),
+            failedAt: Timestamp.now(),
+            executionLeaseId: null,
+          }, { merge: true });
+          if (retryable) throw error;
+          processed += 1;
+          lastCommittedOrderKey = orderKey;
+          continue;
+        }
+        const status = classifySlackDeliveryFailure(error);
+        const attempts = Number(event.attempts || 0) + 1;
+        const retryable = status === "failed_safe_to_retry" && attempts < 4;
+        await document.ref.set({
+          status: retryable ? status : status === "failed_safe_to_retry" ? "failed" : status,
+          pending: retryable,
+          lastError: (error instanceof Error ? error.message : String(error)).slice(0, 1_000),
+          failedAt: Timestamp.now(),
+          executionLeaseId: null,
+        }, { merge: true });
+        if (retryable) throw error;
+        processed += 1;
+        lastCommittedOrderKey = String(event.orderKey || "");
+      }
+    }
+    return { processed, acquired: true };
+  } finally {
+    await finishSlackConversationLease({
+      conversationId: input.conversationId,
+      leaseId: claim.leaseId,
+      database,
+      lastCommittedOrderKey,
+    });
+  }
 }

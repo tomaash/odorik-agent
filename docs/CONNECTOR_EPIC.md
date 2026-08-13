@@ -2,9 +2,9 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** H2A conversational correctness for the
-existing Slack direct-message assistant prototype. H1 outbound approval
-notification is complete and accepted.
+**Current implementation slice:** durable conversation sessions and memory
+(Slice 9 / H2A continuity). H1 notification and Slice 8 Slack conversational
+correctness are complete and accepted.
 The core epic (C0–C5, G1–G3) is complete and accepted.
 
 **Last plan revision:** 2026-08-13
@@ -269,7 +269,7 @@ Every action capability must define:
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
 | H1 | Post pending-approval notifications to one selected Slack channel | Completed | Accepted in test production 2026-08-13 |
-| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Prototype; not accepted | H1 closes and conversational correctness passes |
+| H2A | Answer a linked member in one Slack DM with ordered, grounded conversation | Conversational correctness accepted; durable continuity pending | Slice 9 memory/retention controls pass |
 | H2B | Resume one logical conversation across Slack and Erik | Gated | H2A is useful and memory/retention controls pass |
 | H2C | Read selected mentions or shared channels | Gated | A named group loop and audience/privacy model are accepted |
 
@@ -1480,7 +1480,7 @@ dependency.
 in Slack, receive a concise grounded answer, ask a contextual follow-up, and
 return later without the conversation losing or inventing its state.
 
-**Current prototype:** the deployed and working-tree implementation verifies
+**Current implementation:** the deployed implementation verifies
 Slack signatures, deduplicates event IDs, queues DM events, maps one Slack
 workspace to one company connection, issues a short-lived account-link token,
 binds the Slack identity to an active Erik member, reuses the member-filtered
@@ -1488,14 +1488,14 @@ factual agent, persists Slack-origin messages and runs, and posts citations back
 to the DM. The direct-message grant remains modeled independently; the normal
 H1 connector setup no longer requests `im:history`.
 
-This is implementation evidence, not slice acceptance. Test-production dogfood
-recorded a company-summary question followed the next day by “hello.” Although
-the previous thread was loaded, the factual loop forced a tool call, searched
-for another company overview, and repeated the summary. The prototype also
-processes event documents independently, persists the inbound message only
-after generation, uses a fixed eight-message history, and has no session summary
-or long-term retrieval. Rapid messages may therefore read the same stale
-history or complete out of causal order.
+Slice 8 replaces the original independent-event prototype with route-before-tools,
+inbound-first persistence, one ordered per-DM inbox, a fenced single worker,
+stable reply identities, and stored-reply delivery retry. Test-production
+acceptance confirms that a greeting no longer repeats the prior company answer,
+factual and contextual turns retrieve fresh evidence, and rapid social/capability
+turns remain causal. The remaining H2A gap is deliberate: history still uses a
+fixed recent window and has no session summary, older-memory retrieval, or
+inspect/correct/forget controls. Those belong to Slice 9.
 
 Contract decisions:
 
@@ -2143,3 +2143,45 @@ YYYY-MM-DD — Slice
   timestamp. The live workspace was left connected after acceptance; token
   revocation and post-disconnect refusal are covered by contract tests rather
   than destructively repeated against the shared dogfood workspace.
+
+### 2026-08-13 — Slice 8 Slack conversational-correctness acceptance
+
+- **Ordered durable inbox:** Slack Events now write beneath
+  `slackConversations/{conversationId}/events/{eventIdHash}`. Event identity is
+  idempotent; provider microsecond timestamp plus event id is the stable order.
+  One six-minute fenced lease drains a DM after a 750 ms reorder window. A
+  contending trigger retries rather than stranding its event, and late arrivals
+  remain inspectable without rolling the committed cursor backward.
+- **Inbound before generation:** each linked member message is persisted to the
+  private Erik thread before route-specific work starts. Factual assistant and
+  deterministic conversational replies use event-derived message/run ids, so a
+  crash after persistence cannot create a second logical reply.
+- **Route before tools:** the stored routes are `social`, `capability`,
+  `company_fact`, `contextual_followup`, and `action_request`. Social,
+  capability, and action-request turns declare `no_company_tools`; factual and
+  contextual turns declare `fresh_company_evidence_required`. Ordinary Slack
+  action requests remain non-executing.
+- **Honest delivery:** reply text is stored before `chat.postMessage`. Known-safe
+  provider failures retry the stored reply up to a bounded four attempts;
+  ambiguous post outcomes remain `outcome_unknown` and are not blindly retried.
+  Each completed run records Slack event id, `client_msg_id`, channel, message
+  timestamp, and delivery status.
+- **Live conversation:** the linked Explorers member sent `hello`, “How many
+  open tasks do we have?”, “What about their titles?”, “What can you do?”, and
+  `Thanks`; the final two were sent rapidly. Visible replies were respectively a
+  short greeting, one grounded open-task count, the current task title with a
+  valid absolute Erik source link, a capability boundary, and an acknowledgement.
+  All five appeared once and in order.
+- **Trace proof:** social/capability runs used zero tools. The company-fact and
+  contextual-follow-up runs each used two tools and recorded
+  `slack-conversation-v1`, route, tool policy, and a terminal Slack timestamp.
+  The original company-summary answer was not repeated.
+- **Automated proof:** all 200 function tests and 22 frontend tests pass.
+  Contracts cover signatures, human-DM filtering, event deduplication, routing,
+  out-of-order rapid messages, factual-then-social regression, late arrivals,
+  persisted-reply retry, OAuth capability isolation, and the existing connector,
+  approval, access, retrieval, action, and workflow suites.
+- **Next:** Slice 9 adds explicit session boundaries, token-budgeted recent
+  context, versioned summaries, relevant older-session retrieval, and
+  inspect/correct/forget/start-fresh controls. It must continue to re-fetch
+  company truth and recheck authorization on every factual turn.
