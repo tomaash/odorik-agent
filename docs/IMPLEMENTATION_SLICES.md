@@ -38,8 +38,10 @@ below suggests:
   before tools, persists inbound events first, serializes each DM, and records
   idempotent reply identities. Slice 9A adds bounded durable sessions and
   explicit memory controls; retrieval across older sessions remains 9B.
-- Slice 10 is implemented with automated acceptance; live acceptance follows
-  deployment. A linked private Slack DM can prepare either a fresh-evidence
+- Slice 10 is implemented and deployed. Automated acceptance is complete and
+  live task acceptance passed on 2026-08-14; the Gmail live case is waiting only
+  for the existing Google connection to be explicitly reauthorized. A linked
+  private Slack DM can prepare either a fresh-evidence
   `task.create` proposal or a one-recipient `mail.draft.create` proposal. Exact
   Block Kit cards support approve, reject, and request changes. Every control is
   bound to workspace, Slack user, channel, message, named Erik member, proposal
@@ -395,7 +397,8 @@ is accepted as a citation.
 
 ### Slice 10: conversation-to-proposal handoff
 
-**Implemented with automated acceptance; live acceptance pending deployment.**
+**Implemented and deployed. Task path accepted live; Gmail live acceptance is
+waiting for explicit Google reauthorization.**
 After discussing a customer or desired result, a linked person can ask Erik to
 prepare an internal task or one Gmail draft, review the exact proposal in the
 same private Slack DM, approve or reject it, request a fresh revision, and see
@@ -428,6 +431,15 @@ draft proposal. Approve, reject, and request-changes each work in Slack;
 request-changes produces a linked version 2; a web decision refreshes its Slack
 card; duplicate delivery executes no second effect. Wrong-user, stale-digest,
 expired-ticket, revoked-link, and message-tampering attempts fail closed.
+
+Live task acceptance on 2026-08-14 proved all three decision paths without a
+new task side effect: a legacy web-approved card converged from its old active
+button to the canonical `Task created` receipt; a new v1 proposal accepted
+request-changes feedback; a distinct v2 appeared with a new digest and lineage;
+and rejection closed v2 with its reason while the Slack modal cleared normally.
+The live Google Workspace connection is currently `reauthorization_required`,
+so Gmail proposal/approval acceptance remains an environment prerequisite, not
+an untested-code claim.
 
 ### Slice 11: Microsoft 365 connection foundation
 
