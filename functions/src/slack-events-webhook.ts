@@ -136,8 +136,12 @@ export const slackInteractionsWebhook = onRequest(
           appOrigin: productionAppOrigin,
         });
       }
+      if (payload.type === "view_submission") {
+        response.status(200).json({ response_action: "clear" });
+        return;
+      }
       response.status(200).json({
-        ...(payload.type === "view_submission" ? { response_action: "clear" } : { response_type: "ephemeral" }),
+        response_type: "ephemeral",
         text: result.status === "queued"
           ? "Decision accepted. Erik is processing the exact proposal."
           : result.status === "resolved"
