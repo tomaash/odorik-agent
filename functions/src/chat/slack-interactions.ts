@@ -20,6 +20,7 @@ import { slackIdentityPath } from "./slack-link.js";
 import { openSlackModal, postSlackText, updateSlackMessage } from "./slack.js";
 
 export const slackTaskApproveActionId = "erik_proposal_approve_v1";
+export const slackLegacyTaskApproveActionId = "erik_task_approve_v1";
 export const slackProposalRejectActionId = "erik_proposal_reject_v1";
 export const slackProposalRequestChangesActionId = "erik_proposal_request_changes_v1";
 export const slackProposalDecisionModalCallbackId = "erik_proposal_decision_v1";
@@ -99,7 +100,7 @@ function actionIdForDecision(decision: SlackDecision): string {
 }
 
 function decisionForActionId(actionId: string): SlackDecision | null {
-  if (actionId === slackTaskApproveActionId) return "approve";
+  if (actionId === slackTaskApproveActionId || actionId === slackLegacyTaskApproveActionId) return "approve";
   if (actionId === slackProposalRejectActionId) return "reject";
   if (actionId === slackProposalRequestChangesActionId) return "request_changes";
   return null;

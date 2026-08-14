@@ -12,6 +12,7 @@ import {
   parseSlackInteraction,
   processSlackApprovalInteraction,
   queueSlackApprovalInteraction,
+  slackLegacyTaskApproveActionId,
   slackProposalDecisionModalCallbackId,
   slackProposalRejectActionId,
   slackProposalRequestChangesActionId,
@@ -123,6 +124,9 @@ test("Slack proposal cards disclose the exact effect and all three structured de
 
 test("Slack interaction payload parsing accepts only one Block Kit action", () => {
   assert.deepEqual(parseSlackInteraction(JSON.stringify(interaction("token"))).type, "block_actions");
+  assert.deepEqual(parseSlackInteraction(JSON.stringify(interaction("legacy-token", {
+    actions: [{ action_id: slackLegacyTaskApproveActionId, value: "legacy-token", action_ts: "10.02" }],
+  }))).type, "block_actions");
   assert.throws(() => parseSlackInteraction("not-json"), /Invalid/);
   assert.throws(() => parseSlackInteraction(JSON.stringify({ type: "view_submission" })), /Unsupported/);
 });
