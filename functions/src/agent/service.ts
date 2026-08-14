@@ -23,6 +23,9 @@ export type ConversationTurnMetadata = {
   toolPolicy?: string;
   replyIdentity?: Record<string, unknown>;
   contextUsed?: Record<string, unknown>;
+  proposal?: Record<string, unknown>;
+  toolTrace?: Array<Record<string, unknown>>;
+  usage?: Record<string, unknown>;
 };
 
 function conversationRefs(input: {

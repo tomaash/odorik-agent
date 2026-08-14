@@ -403,6 +403,87 @@ test("a safe Slack retry reuses the persisted reply and never regenerates it", a
   assert.equal(memory.read(slackConversationEventPath(event))?.status, "processed");
 });
 
+test("an action request produces one Slack decision card and binds its ticket after delivery", async () => {
+  const memory = new MemoryFirestore();
+  seedLinkedSlackMember(memory);
+  const event = {
+    eventId: "Ev-proposal", teamId: "T1", slackUserId: "U1", channelId: "D1",
+    text: "Create a task to call Acme back", eventTs: "8.001",
+  };
+  await queueSlackDmEvent({ event, database: memory.asFirestore() });
+  let prepareCalls = 0;
+  let issueCalls = 0;
+  let bindCalls = 0;
+  let postedBlocks: unknown[] | undefined;
+  await drainSlackConversation({
+    conversationId: slackConversationId(event),
+    credentialKey: "credential-key",
+    geminiApiKey: "unused",
+    appOrigin: "https://example.test",
+    database: memory.asFirestore(),
+    dependencies: {
+      wait: async () => undefined,
+      authorize: async () => ({ botToken: "token", teamId: "T1", botUserId: "B1" }),
+      prepareTaskProposal: async () => {
+        prepareCalls += 1;
+        return {
+          approvalId: "approval-1",
+          approval: { effectDigest: "digest-1" },
+          action: {
+            kind: "task.create" as const,
+            taskId: "task-1",
+            title: "Call Acme back",
+            instructions: "Discuss pricing",
+            assigneeUid: "member-1",
+            assigneeName: "Tom",
+            dueAt: null,
+            contactId: null,
+            caseId: null,
+            caseTitle: null,
+            callId: "call-1",
+            subject: { kind: "internal" as const },
+            context: {
+              callerName: null, callerPhone: null, callSummary: null, transcriptExcerpt: null,
+            },
+            citationIds: ["C1"],
+            assumptions: [],
+          },
+          citations: [{
+            citationId: "C1", kind: "call" as const, recordId: "call-1",
+            sourcePath: "companies/acme/calls/call-1", title: "Acme call",
+            excerpt: "Discuss pricing", occurredAt: null,
+          }],
+          assumptions: [],
+          run: {
+            usage: { promptTokens: 1, outputTokens: 1, thinkingTokens: 0, totalTokens: 2 },
+            toolTrace: [{ name: "get_company_record" }],
+          },
+        };
+      },
+      issueApprovalTicket: async () => {
+        issueCalls += 1;
+        return { token: "opaque-ticket", ticketId: "ticket-1" };
+      },
+      bindApprovalTicket: async (input) => {
+        bindCalls += 1;
+        assert.equal(input.ticketId, "ticket-1");
+        assert.equal(input.messageTs, "8.100");
+      },
+      persistInbound: async () => undefined,
+      persistReply: async () => ({ runId: "proposal-run", messageId: "proposal-message" }),
+      post: async (input) => {
+        postedBlocks = input.blocks;
+        return { channelId: input.channelId, messageTs: "8.100" };
+      },
+    },
+  });
+  assert.equal(prepareCalls, 1);
+  assert.equal(issueCalls, 1);
+  assert.equal(bindCalls, 1);
+  assert.match(JSON.stringify(postedBlocks), /Approve and create task/);
+  assert.equal(memory.read(slackConversationEventPath(event))?.approvalTicketId, "ticket-1");
+});
+
 test("a short-lived Slack bearer link binds one Slack identity to an active member", async () => {
   const memory = new MemoryFirestore();
   memory.seed("companies/acme/memberships/member-1", { status: "active" });

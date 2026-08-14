@@ -93,7 +93,8 @@ onMounted(load)
               <div class="font-semibold break-all mt-1">{{ auth.user?.email }}</div>
             </div>
             <Message severity="info" :closable="false" class="mb-4">
-              Answers respect this member’s source access. Slack cannot approve or execute actions.
+              Answers respect this member’s source access. Ordinary replies cannot approve actions;
+              structured approval cards can authorize one exact disclosed proposal.
             </Message>
             <Message v-if="error" severity="error" :closable="false" class="mb-4">{{ error }}</Message>
             <div class="grid sm:flex gap-3">

@@ -86,7 +86,7 @@ GOOGLE_CONNECTOR_CLIENT_ID=...
 GOOGLE_CONNECTOR_CLIENT_SECRET=...
 SLACK_CLIENT_ID=...
 SLACK_CLIENT_SECRET=...
-SLACK_SIGNING_SECRET=...       # verifies Slack Events API requests
+SLACK_SIGNING_SECRET=...       # verifies Slack Events and Block Kit interactions
 RESEND_API_KEY=...
 # GITHUB_APP_PRIVATE_KEY=...
 ```
@@ -95,6 +95,10 @@ With ADC logged into the project, the emulator may also pull secrets from
 Secret Manager. Google connector OAuth on emulators needs
 `http://127.0.0.1:5173/oauth/google/callback` registered on the connectors
 OAuth client; Vite proxies it into the Functions emulator.
+
+For Slack direct conversation and Slack-native task approval, configure the
+Slack app's Event Subscriptions request URL as `/webhooks/slack` and its
+Interactivity request URL as `/interactions/slack` on the same public origin.
 
 | | Prod backend (default) | Emulators |
 | --- | --- | --- |

@@ -34,6 +34,7 @@ export interface AgentModel {
     contents: GeminiContent[];
     tools: unknown[];
     toolMode: "AUTO" | "ANY" | "NONE";
+    responseSchema?: unknown;
   }): Promise<ModelTurn>;
 }
 
@@ -70,6 +71,7 @@ export class GeminiRestAgentModel implements AgentModel {
     contents: GeminiContent[];
     tools: unknown[];
     toolMode: "AUTO" | "ANY" | "NONE";
+    responseSchema?: unknown;
   }): Promise<ModelTurn> {
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent`,
@@ -85,9 +87,9 @@ export class GeminiRestAgentModel implements AgentModel {
           } : {}),
           generationConfig: {
             temperature: 0,
-            ...(input.toolMode === "ANY" ? {} : {
+            ...(input.toolMode === "ANY" && !input.responseSchema ? {} : {
               responseMimeType: "application/json",
-              responseSchema: finalResponseSchema,
+              responseSchema: input.responseSchema || finalResponseSchema,
             }),
           },
         }),

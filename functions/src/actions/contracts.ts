@@ -144,6 +144,22 @@ export type WorkflowActionSource = WorkflowSourceBase & (
   | { issueContextItemId: string; callId?: never }
 );
 
+/**
+ * A proposal prepared from a member-owned conversation rather than a saved
+ * workflow. The message and session identities are immutable provenance; they
+ * do not authorize execution. The normal named-approver decision still does.
+ */
+export type ConversationActionSource = {
+  kind: "conversation";
+  surface: "slack_dm";
+  threadId: string;
+  sessionId: string;
+  messageId: string;
+  callId: string;
+};
+
+export type ActionSource = WorkflowActionSource | ConversationActionSource;
+
 function canonicalValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(canonicalValue);
   if (!value || typeof value !== "object") return value;

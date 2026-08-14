@@ -251,7 +251,12 @@ function confirmReject() {
       </div>
 
       <p class="text-xs text-surface-500 mt-2 mb-0">
-        <i class="pi pi-sitemap mr-1" />{{ t('approvals.workflowSource', { version: approval.source.workflowVersion }) }}
+        <template v-if="approval.source.kind === 'workflow'">
+          <i class="pi pi-sitemap mr-1" />{{ t('approvals.workflowSource', { version: approval.source.workflowVersion }) }}
+        </template>
+        <template v-else>
+          <i class="pi pi-comments mr-1" />{{ t('approvals.conversationSource') }}
+        </template>
       </p>
 
       <div v-if="approval.chatNotifications?.length" class="mt-2 flex flex-wrap items-center gap-2 text-xs">

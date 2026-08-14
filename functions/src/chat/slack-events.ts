@@ -17,11 +17,17 @@ import { authorizedSlackDirect } from "../connectors/slack-oauth.js";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyDocumentPath } from "../tenancy.js";
+import { prepareConversationTaskProposal } from "../agent/task-proposal.js";
 import { createSlackLink, slackIdentityPath } from "./slack-link.js";
 import {
   classifySlackDeliveryFailure,
   postSlackText,
 } from "./slack.js";
+import {
+  bindSlackApprovalTicketMessage,
+  issueSlackApprovalTicket,
+  taskProposalBlocks,
+} from "./slack-interactions.js";
 
 export class SlackEventRequestError extends Error {
   constructor(message: string, readonly statusCode = 400) {
@@ -271,6 +277,8 @@ type PreparedSlackReply = {
   uid?: string;
   threadId?: string;
   runId?: string;
+  blocks?: unknown[];
+  approvalTicketId?: string;
 };
 
 export type SlackConversationDependencies = {
@@ -280,6 +288,9 @@ export type SlackConversationDependencies = {
   post?: typeof postSlackText;
   authorize?: typeof authorizedSlackDirect;
   createLink?: typeof createSlackLink;
+  prepareTaskProposal?: typeof prepareConversationTaskProposal;
+  issueApprovalTicket?: typeof issueSlackApprovalTicket;
+  bindApprovalTicket?: typeof bindSlackApprovalTicketMessage;
   wait?: (milliseconds: number) => Promise<void>;
 };
 
@@ -299,6 +310,8 @@ export async function processSlackDmEvent(input: {
   const persistReply = input.dependencies?.persistReply || persistCompanyConversationReply;
   const authorize = input.dependencies?.authorize || authorizedSlackDirect;
   const createLink = input.dependencies?.createLink || createSlackLink;
+  const prepareTaskProposal = input.dependencies?.prepareTaskProposal || prepareConversationTaskProposal;
+  const issueApprovalTicket = input.dependencies?.issueApprovalTicket || issueSlackApprovalTicket;
   const workspace = await resolveSlackWorkspace(input.event.teamId, database);
   if (!workspace) return { outcome: "ignored", replyText: null, route: "ignored" };
   const authorization = await authorize({
@@ -404,6 +417,8 @@ export async function processSlackDmEvent(input: {
   let citations: Awaited<ReturnType<typeof askCompanyFactAgent>>["citations"] = [];
   let confidence: "high" | "medium" | "low" = "high";
   let limitations: string[] = [];
+  let replyBlocks: unknown[] | undefined;
+  let approvalTicketId: string | undefined;
   if (route === "company_fact" || route === "contextual_followup") {
     const answer = await ask({
       companyId: workspace.companyId,
@@ -425,6 +440,75 @@ export async function processSlackDmEvent(input: {
     citations = answer.citations;
     confidence = answer.confidence;
     limitations = answer.limitations;
+  } else if (route === "action_request") {
+    const proposed = await prepareTaskProposal({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      sessionId: session.sessionId,
+      inboundMessageId,
+      request: input.event.text,
+      context,
+      geminiApiKey: input.geminiApiKey,
+      database,
+    });
+    const effectDigest = String(proposed.approval.effectDigest || "");
+    const ticket = await issueApprovalTicket({
+      credentialKey: input.credentialKey,
+      companyId: workspace.companyId,
+      connectionId: workspace.connectionId,
+      teamId: input.event.teamId,
+      slackUserId: input.event.slackUserId,
+      uid,
+      channelId: input.event.channelId,
+      approvalId: proposed.approvalId,
+      effectDigest,
+      database,
+    });
+    const approvalUrl = `${input.appOrigin.replace(/\/+$/, "")}/approvals/${encodeURIComponent(proposed.approvalId)}`;
+    replyText = `Proposed task: ${proposed.action.title}. Review and approve the exact task in this private message.`;
+    replyBlocks = taskProposalBlocks({
+      approvalId: proposed.approvalId,
+      title: proposed.action.title,
+      assigneeName: proposed.action.assigneeName,
+      instructions: proposed.action.instructions,
+      dueAt: proposed.action.dueAt,
+      evidenceTitles: proposed.citations.map((citation) => citation.title),
+      assumptions: proposed.assumptions,
+      effectDigest,
+      approvalUrl,
+      ticketToken: ticket.token,
+    });
+    const persisted = await persistReply({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      inboundMessageId,
+      idempotencyKey: input.event.eventId,
+      question: input.event.text,
+      answer: replyText,
+      origin: "slack_dm",
+      originMetadata: { ...originMetadata, approvalId: proposed.approvalId },
+      turnMetadata: {
+        ...turnMetadata,
+        toolPolicy: "fresh_company_evidence_then_typed_proposal",
+        proposal: {
+          approvalId: proposed.approvalId,
+          effectDigest,
+          actionKind: "task.create",
+          evidenceCitationIds: proposed.citations.map((citation) => citation.citationId),
+        },
+        toolTrace: proposed.run.toolTrace,
+        usage: proposed.run.usage,
+      },
+      sessionId: session.sessionId,
+      memoryGeneration: session.memoryGeneration,
+      database,
+    });
+    runId = persisted.runId;
+    assistantMessageId = persisted.messageId;
+    citations = proposed.citations;
+    approvalTicketId = ticket.ticketId;
   } else {
     replyText = route === "social"
       ? socialReply(input.event.text)
@@ -481,6 +565,8 @@ export async function processSlackDmEvent(input: {
     uid,
     threadId,
     runId,
+    blocks: replyBlocks,
+    approvalTicketId,
   };
 }
 
@@ -599,6 +685,9 @@ export async function drainSlackConversation(input: {
               ...workspace,
               botToken: authorization.botToken,
               runId: String(event.runId || ""),
+              blocks: Array.isArray(event.replyBlocks) ? event.replyBlocks : undefined,
+              approvalTicketId: typeof event.approvalTicketId === "string"
+                ? event.approvalTicketId : undefined,
             };
           }
         } else {
@@ -618,6 +707,8 @@ export async function drainSlackConversation(input: {
             route: prepared.route,
             replyText: prepared.replyText,
             runId: prepared.runId || null,
+            replyBlocks: prepared.blocks || null,
+            approvalTicketId: prepared.approvalTicketId || null,
             status: prepared.replyText ? "reply_ready" : "processed",
             pending: Boolean(prepared.replyText),
             preparedAt: Timestamp.now(),
@@ -636,7 +727,17 @@ export async function drainSlackConversation(input: {
             channelId: event.channelId,
             text: prepared.replyText,
             clientMessageId: event.eventId,
+            blocks: prepared.blocks,
           });
+          if (prepared.approvalTicketId) {
+            const bind = input.dependencies?.bindApprovalTicket || bindSlackApprovalTicketMessage;
+            await bind({
+              ticketId: prepared.approvalTicketId,
+              channelId: posted.channelId,
+              messageTs: posted.messageTs,
+              database,
+            });
+          }
           await document.ref.set({
             status: "processed",
             pending: false,

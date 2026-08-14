@@ -11,13 +11,17 @@ import {
 export type TaskStatus = "open" | "completed" | "dismissed";
 
 export type TaskSource = {
-  kind: "manual" | "call" | "case" | "workflow";
+  kind: "manual" | "call" | "case" | "workflow" | "conversation";
   callId?: string;
   caseId?: string;
   workflowId?: string;
   workflowVersion?: number;
   runId?: string;
   blockId?: string;
+  surface?: "slack_dm";
+  threadId?: string;
+  sessionId?: string;
+  messageId?: string;
   approvalId?: string;
   approvedBy?: string;
 };

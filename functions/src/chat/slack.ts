@@ -101,6 +101,7 @@ export async function postSlackText(input: {
   channelId: string;
   text: string;
   clientMessageId?: string;
+  blocks?: unknown[];
 }): Promise<{ channelId: string; messageTs: string }> {
   const posted = await slackPost("Slack chat.postMessage", "chat.postMessage", input.token, {
     channel: input.channelId,
@@ -108,6 +109,7 @@ export async function postSlackText(input: {
     unfurl_links: false,
     unfurl_media: false,
     ...(input.clientMessageId ? { client_msg_id: input.clientMessageId } : {}),
+    ...(input.blocks?.length ? { blocks: input.blocks } : {}),
   });
   const messageTs = String(posted.ts || "").trim();
   if (!messageTs) {
@@ -119,6 +121,21 @@ export async function postSlackText(input: {
     channelId: String(posted.channel || input.channelId).trim(),
     messageTs,
   };
+}
+
+export async function updateSlackMessage(input: {
+  token: string;
+  channelId: string;
+  messageTs: string;
+  text: string;
+  blocks?: unknown[];
+}): Promise<void> {
+  await slackPost("Slack chat.update", "chat.update", input.token, {
+    channel: input.channelId,
+    ts: input.messageTs,
+    text: input.text.slice(0, 39_000),
+    ...(input.blocks ? { blocks: input.blocks } : {}),
+  });
 }
 
 export type SlackDeliveryResult = {

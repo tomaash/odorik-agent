@@ -38,6 +38,13 @@ below suggests:
   before tools, persists inbound events first, serializes each DM, and records
   idempotent reply identities. Slice 9A adds bounded durable sessions and
   explicit memory controls; retrieval across older sessions remains 9B.
+- Slice 10A is implemented locally: an action request in one linked private
+  Slack DM prepares a fresh-evidence, conversation-sourced `task.create`
+  approval, posts its exact Block Kit decision card, and accepts one structured
+  Slack approval through an opaque ticket bound to workspace, Slack user,
+  channel, message, named Erik member, proposal digest, and expiry. The click
+  queues the existing approval/execution kernel; it does not add a Slack
+  executor. Live Slack acceptance is still required.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -369,23 +376,33 @@ is accepted as a citation.
 
 ### Slice 10: conversation-to-proposal handoff
 
-**Usable outcome:** after discussing a customer or desired result, a person can
-ask Erik to prepare one existing typed action and receive an exact decision
-card in the application.
+**Slice 10A implemented locally; live acceptance pending. Usable outcome:**
+after discussing a customer or desired result, a linked person can ask Erik to
+prepare an internal task, review the exact proposal in the same private Slack
+DM, approve it with a structured Slack interaction, and see one task created by
+the canonical approval kernel.
 
 - begin with an already proven effect such as `task.create` or
   `mail.draft.create` rather than a new action;
 - resolve conversational references to exact records and current evidence;
 - disclose the proposed payload, assumptions, approver, and effects before any
   decision;
-- post only a pointer and proposal status into Slack;
-- perform approval, edits, evidence inspection, execution, and recovery in the
-  authenticated Erik application; and
+- company-channel notifications remain pointer-only, while the linked private
+  DM can disclose the proposal and host its bounded approval control;
+- bind each control to the exact workspace, linked user, DM, Slack message,
+  named Erik approver, action digest, and expiry, and recheck all of them before
+  queuing the decision;
+- keep evidence inspection and recovery available in the authenticated Erik
+  application; and
 - resume the conversation with the observed result.
 
-Exit criterion: one Slack discussion produces one immutable proposal, the named
-person approves it in Erik, exactly one effect occurs, and both surfaces show
-the same factual outcome.
+10A exit criterion: one real Slack discussion produces one immutable
+`task.create` proposal, the named person approves it in Slack, exactly one task
+occurs across duplicate interaction delivery, and both surfaces show the same
+factual outcome. Wrong-user, stale-digest, expired-ticket, revoked-link, and
+message-tampering attempts must fail closed. 10B adds reject/request-changes
+modals and immutable superseding versions; 10C adds per-action risk policy and
+another bounded action such as Gmail draft creation.
 
 ### Slice 11: intentional multi-surface continuity
 

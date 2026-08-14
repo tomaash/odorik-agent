@@ -1,5 +1,5 @@
 import type { ZodType } from "zod";
-import type { WorkflowActionSource } from "./contracts.js";
+import type { ActionSource } from "./contracts.js";
 import type { ResourceAudience } from "../access.js";
 import { internalActionDescriptors } from "./internal-actions.js";
 import { codingActionDescriptors } from "../coding/action.js";
@@ -48,7 +48,7 @@ export type ApprovedActionExecutionContext = {
   approvalId: string;
   approvedBy: string;
   attemptId: string;
-  source: WorkflowActionSource;
+  source: ActionSource;
   access?: ResourceAudience;
 };
 
@@ -185,8 +185,8 @@ function assertApprovedExecution(
   requiredText(context.approvalId, "Approval ID");
   requiredText(context.approvedBy, "Named approver");
   requiredText(context.attemptId, "Execution attempt ID");
-  if (!context.source || context.source.kind !== "workflow") {
-    throw new Error("Immutable workflow provenance is required");
+  if (!context.source || !["workflow", "conversation"].includes(context.source.kind)) {
+    throw new Error("Immutable action provenance is required");
   }
 }
 

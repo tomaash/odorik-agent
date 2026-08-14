@@ -4,7 +4,7 @@ import { TRPCError } from "@trpc/server";
 import {
   actionEffectDigest,
   legacyActionEffectDigest,
-  type WorkflowActionSource,
+  type ActionSource,
 } from "../actions/contracts.js";
 import {
   actionRegistry,
@@ -106,7 +106,7 @@ export async function requestWorkflowActionApproval(input: {
   approverUid: string;
   approverName: string;
   action: unknown;
-  source: WorkflowActionSource;
+  source: ActionSource;
   access?: ResourceAudience;
 }, overrides?: Partial<ApprovalDependencies>) {
   const deps = dependencies(overrides);
@@ -453,7 +453,7 @@ export async function approveAction(input: {
         approvalId: input.approvalId,
         approvedBy: claimed.data.approvedBy || input.actorUid,
         attemptId: claimed.attemptId!,
-        source: claimed.data.source as WorkflowActionSource,
+        source: claimed.data.source as ActionSource,
         access: claimed.data.access || { visibility: "company" },
       },
     });

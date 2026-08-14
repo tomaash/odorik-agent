@@ -4,7 +4,7 @@ import {
   caseCreateActionSchema,
   caseMoveActionSchema,
   taskCreateActionSchema,
-  type WorkflowActionSource,
+  type ActionSource,
 } from "./contracts.js";
 import type {
   ActionDescriptor,
@@ -53,12 +53,21 @@ function scope(input: {
 
 function approvedSource(
   context: ApprovedActionExecutionContext,
-): WorkflowActionSource & { approvalId: string; approvedBy: string } {
+): ActionSource & { approvalId: string; approvedBy: string } {
   return {
     ...context.source,
     approvalId: context.approvalId,
     approvedBy: context.approvedBy,
   };
+}
+
+function workflowApprovedSource(
+  context: ApprovedActionExecutionContext,
+): Extract<ActionSource, { kind: "workflow" }> & { approvalId: string; approvedBy: string } {
+  if (context.source.kind !== "workflow") {
+    throw new Error("This action requires workflow provenance.");
+  }
+  return { ...context.source, approvalId: context.approvalId, approvedBy: context.approvedBy };
 }
 
 async function assertTaskPreconditions(
@@ -226,7 +235,7 @@ export const caseCreateDescriptor: ActionDescriptor<
       ownerUid: action.ownerUid,
       stageId: action.stageId,
       callId: action.callId,
-      source: approvedSource(context),
+      source: workflowApprovedSource(context),
       access: context.access,
       deterministicId: action.caseId,
     });

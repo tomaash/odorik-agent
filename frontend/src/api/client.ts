@@ -472,6 +472,13 @@ export type ActionApprovalItem = {
     workflowVersion: number
     runId: string
     blockId: string
+  } | {
+    kind: 'conversation'
+    surface: 'slack_dm'
+    threadId: string
+    sessionId: string
+    messageId: string
+    callId: string
   }
   actionCapabilityId?: string
   actionContractVersion?: number
@@ -1136,7 +1143,7 @@ export type ChatNotificationDelivery = {
 
 export async function startSlackAuthorization() {
   return trpc.sources.slack.authorizationUrl.mutate({
-    capabilityIds: ['action.chat.notify'],
+    capabilityIds: ['action.chat.notify', 'context.chat.direct'],
     returnOrigin: window.location.origin,
   })
 }

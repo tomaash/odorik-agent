@@ -90,6 +90,7 @@ const messages = {
       retry: 'Zkusit provést znovu',
       waitingFor: 'Čeká na: {approver}',
       workflowSource: 'Workflow · verze {version}',
+      conversationSource: 'Navrženo v soukromé konverzaci ve Slacku',
       chatNotification: 'Upozornění ve Slacku',
       chatNotificationStatus: {
         sending: 'Odesílá se',
@@ -977,6 +978,7 @@ const messages = {
       retry: 'Retry execution',
       waitingFor: 'Waiting for: {approver}',
       workflowSource: 'Workflow · version {version}',
+      conversationSource: 'Proposed in a private Slack conversation',
       chatNotification: 'Slack notification',
       chatNotificationStatus: {
         sending: 'Sending',
