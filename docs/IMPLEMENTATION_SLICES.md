@@ -17,7 +17,7 @@ The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
 CRM-specific customer intake are not platform priorities.
 
-## Current product position — 2026-08-13
+## Current product position — 2026-08-14
 
 The repository has proved more of the kernel than the historical numbering
 below suggests:
@@ -38,13 +38,16 @@ below suggests:
   before tools, persists inbound events first, serializes each DM, and records
   idempotent reply identities. Slice 9A adds bounded durable sessions and
   explicit memory controls; retrieval across older sessions remains 9B.
-- Slice 10A is implemented locally: an action request in one linked private
-  Slack DM prepares a fresh-evidence, conversation-sourced `task.create`
-  approval, posts its exact Block Kit decision card, and accepts one structured
-  Slack approval through an opaque ticket bound to workspace, Slack user,
-  channel, message, named Erik member, proposal digest, and expiry. The click
-  queues the existing approval/execution kernel; it does not add a Slack
-  executor. Live Slack acceptance is still required.
+- Slice 10 is implemented with automated acceptance; live acceptance follows
+  deployment. A linked private Slack DM can prepare either a fresh-evidence
+  `task.create` proposal or a one-recipient `mail.draft.create` proposal. Exact
+  Block Kit cards support approve, reject, and request changes. Every control is
+  bound to workspace, Slack user, channel, message, named Erik member, proposal
+  digest, action policy, and expiry. Requested changes close the old version and
+  create a new immutable version from fresh evidence. Decisions on either the
+  Erik page or Slack converge the Slack card to the canonical receipt; clicking
+  a stale-but-untampered card is an idempotent success, not a conflicting second
+  action. Slack still has no executor of its own.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -53,6 +56,22 @@ loop's unconditional first-tool rule selected the wrong behavior for a social
 turn. The prototype also has no per-conversation serialization, only eight
 recent message documents, and no durable session memory. These are now explicit
 roadmap requirements rather than prompt-tuning follow-ups.
+
+### Priority decision after Slice 10
+
+1. Deploy and complete Slice 10 live acceptance; do not widen its actions.
+2. Build the Microsoft 365 foundation, then Outlook Mail and Calendar as
+   provider loops on the existing source/action kernel.
+3. Add Teams personal conversation only after Entra identity, tenant isolation,
+   and Graph lifecycle behavior are proven. Reuse the Slack conversation and
+   proposal protocols rather than create a Teams-specific agent.
+4. Make cross-surface thread binding explicit, then measure coordination before
+   adding initiative or shared-channel scope.
+
+Slice 9B older-session recall remains a deliberately deferred horizontal
+capability. Pull it forward only if evaluations show that Microsoft dogfood is
+blocked by returning after the six-hour session boundary. It must not delay the
+Microsoft connector foundation merely to create more ambient memory.
 
 ## Slice 1: factual company agent — implemented
 
@@ -376,14 +395,13 @@ is accepted as a citation.
 
 ### Slice 10: conversation-to-proposal handoff
 
-**Slice 10A implemented locally; live acceptance pending. Usable outcome:**
-after discussing a customer or desired result, a linked person can ask Erik to
-prepare an internal task, review the exact proposal in the same private Slack
-DM, approve it with a structured Slack interaction, and see one task created by
-the canonical approval kernel.
+**Implemented with automated acceptance; live acceptance pending deployment.**
+After discussing a customer or desired result, a linked person can ask Erik to
+prepare an internal task or one Gmail draft, review the exact proposal in the
+same private Slack DM, approve or reject it, request a fresh revision, and see
+the canonical outcome on both Slack and Erik.
 
-- begin with an already proven effect such as `task.create` or
-  `mail.draft.create` rather than a new action;
+- use only the already-proven `task.create` and `mail.draft.create` effects;
 - resolve conversational references to exact records and current evidence;
 - disclose the proposed payload, assumptions, approver, and effects before any
   decision;
@@ -394,34 +412,134 @@ the canonical approval kernel.
   queuing the decision;
 - keep evidence inspection and recovery available in the authenticated Erik
   application; and
-- resume the conversation with the observed result.
+- converge every decision and execution transition to an outcome receipt on all
+  known proposal cards; an exact already-resolved click returns that receipt,
+  while identity, message, digest, policy, or expiry tampering still fails;
+- treat reject as terminal and request changes as terminal for that immutable
+  version; generate the successor from the original request, explicit feedback,
+  active session, fresh company tools, and a new effect digest;
+- snapshot an application-owned policy on each proposal. The task boundary is
+  exactly one internal task. The mail boundary is exactly one Gmail draft to one
+  validated literal or cited-contact recipient and never sends; and
+- keep evidence inspection and recovery available in Erik.
 
-10A exit criterion: one real Slack discussion produces one immutable
-`task.create` proposal, the named person approves it in Slack, exactly one task
-occurs across duplicate interaction delivery, and both surfaces show the same
-factual outcome. Wrong-user, stale-digest, expired-ticket, revoked-link, and
-message-tampering attempts must fail closed. 10B adds reject/request-changes
-modals and immutable superseding versions; 10C adds per-action risk policy and
-another bounded action such as Gmail draft creation.
+Exit criterion: real Slack discussions produce one task proposal and one Gmail
+draft proposal. Approve, reject, and request-changes each work in Slack;
+request-changes produces a linked version 2; a web decision refreshes its Slack
+card; duplicate delivery executes no second effect. Wrong-user, stale-digest,
+expired-ticket, revoked-link, and message-tampering attempts fail closed.
 
-### Slice 11: intentional multi-surface continuity
+### Slice 11: Microsoft 365 connection foundation
+
+**Usable outcome:** an administrator connects one Microsoft 365 account and can
+see exactly which tenant, member, delegated permissions, resources, and
+capabilities Erik may use, with reliable refresh, health, and disconnect.
+
+- add a `microsoft_365` adapter using server-side authorization-code flow with
+  PKCE/OIDC, encrypted rotating refresh tokens, tenant ID, Entra object ID, and
+  provider account identity;
+- request least privilege incrementally: connection identity first, then a
+  separate grant per Outlook read or draft capability; never request mail send;
+- model admin consent required, user consent denied, conditional-access failure,
+  revoked grant, expired refresh, and tenant mismatch as explicit connection
+  states with recovery actions;
+- keep the delegated Microsoft 365 data connection separate from a future Teams
+  bot installation even when both belong to the same Entra tenant; and
+- prove connect, refresh-token replacement, capability enable/disable,
+  disconnect/revocation, and cross-company tenant isolation in test production.
+
+Microsoft Graph recommends least-privileged access and authorization-code flow
+with PKCE. Refresh tokens must be treated as replaceable secrets; the old token
+is securely discarded after a new one is stored. This foundation is therefore
+the next slice, not an Outlook UI shortcut.
+
+### Slice 12: Outlook evidence and draft loop
+
+**Usable outcome:** Erik can answer a permission-aware question from one Outlook
+mailbox and, from that grounded conversation, propose exactly one Outlook draft
+that appears in Drafts only after approval.
+
+- ingest a deliberately narrow mailbox resource with stable Graph IDs,
+  provenance, audience, and selected fields; start with read-only mail evidence;
+- combine Graph change notifications with durable queueing and delta queries.
+  A webhook is a wake-up signal, not the ledger: acknowledge quickly, validate
+  `clientState`, expect replays, renew subscriptions, and use delta/full sync to
+  recover missed, removed, or expired subscriptions;
+- reuse the existing `mail.draft.create` action envelope through a provider
+  adapter, or introduce a provider-neutral draft action version only if the
+  current Gmail-specific result contract cannot remain honest;
+- use Graph's create-message operation, which saves to Drafts. Do not grant or
+  call the separate send operation; and
+- prove exact recipient, mailbox, body, digest, provider reconciliation,
+  `outcome_unknown`, disconnect, and no-send invariants live.
+
+### Slice 13: Outlook calendar continuity
+
+**Usable outcome:** one connected Microsoft account contributes current,
+permission-aware calendar context to the same Erik conversation and proposal
+evidence model.
+
+- add selected-calendar discovery and explicit resource enablement;
+- sync events with the same notification-plus-delta recovery protocol;
+- preserve organizer/attendee semantics, recurrence, time zones, cancellations,
+  and restricted visibility without flattening them into model text; and
+- remain read-only until a specific calendar mutation loop justifies its own
+  typed action, policy, approval, idempotency, and reconciliation contract.
+
+### Slice 14: Teams personal conversation and decision parity
+
+**Usable outcome:** a linked member can talk to the same Erik runtime in a
+Teams personal chat and receive the same versioned proposal decisions and
+canonical receipts already proven in Slack.
+
+- create a separate Teams bot-installation connection and verify every inbound
+  Bot/Teams activity; map tenant ID plus Entra object ID through an explicit,
+  revocable Erik identity link;
+- persist the Teams conversation reference once and treat app installation as a
+  prerequisite for proactive personal messages;
+- adapt the existing event journal, reorder/idempotency, session, router,
+  proposal ticket, and convergence contracts rather than fork reasoning;
+- use Adaptive Cards with approve, reject, and request-changes input, keeping
+  the canonical decision transaction and executor in Erik; and
+- test desktop and mobile card behavior, duplicate invokes, stale cards,
+  revoked installation/link, and web/Slack/Teams convergence.
+
+Teams comes after the Graph and identity foundation. It is a new interaction
+adapter, not a shortcut for broad Teams history ingestion. Shared chats and
+channels remain out of scope until their participant-audience intersection and
+membership-change semantics are explicit.
+
+Current Microsoft implementation references:
+
+- [Microsoft identity authorization-code flow with PKCE](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
+- [Microsoft Graph authentication and least privilege](https://learn.microsoft.com/en-us/graph/auth/auth-concepts)
+- [Microsoft identity refresh-token lifecycle](https://learn.microsoft.com/en-us/entra/identity-platform/refresh-tokens)
+- [Graph change-notification webhook delivery](https://learn.microsoft.com/en-us/graph/change-notifications-delivery-webhooks)
+- [Graph lifecycle notifications and recovery](https://learn.microsoft.com/en-us/graph/change-notifications-lifecycle-events)
+- [Graph delta synchronization](https://learn.microsoft.com/en-us/graph/delta-query-overview)
+- [Create an Outlook draft message](https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0)
+- [Teams proactive personal messages](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
+- [Teams card capabilities and constraints](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
+
+### Slice 15: intentional multi-surface continuity
 
 **Usable outcome:** a person can deliberately continue the same conversation
-between Slack and the Erik application without accidental history merging.
+between Slack, Teams, and the Erik application without accidental history
+merging.
 
 - model external bindings separately from logical threads and sessions;
 - make “continue in Erik,” “new topic,” and binding state visible;
 - add exact deep links to the thread, proposal, and approval being discussed;
 - define retention and deletion behavior for provider events and derived
   memory; and
-- add mentions, shared channels, or another provider only when a named loop and
-  privacy model require them.
+- add mentions or shared channels only when a named loop and privacy model
+  require them.
 
 Direct messages do not justify reading general channel history. A future shared
 conversation must define audience intersection, participant identity, mention
 semantics, and what happens when membership changes before implementation.
 
-### Slice 12: measured coordination and carefully bounded initiative
+### Slice 16: measured coordination and carefully bounded initiative
 
 **Usable outcome:** Erik helps work progress without becoming noisy or silently
 autonomous.

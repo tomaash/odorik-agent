@@ -1,5 +1,5 @@
 import { defineSecret } from "firebase-functions/params";
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { onRequest } from "firebase-functions/v2/https";
 
 import {
@@ -12,9 +12,12 @@ import {
 } from "./chat/slack-events.js";
 import {
   parseSlackInteraction,
+  openSlackDecisionModal,
   processSlackApprovalInteraction,
   queueSlackApprovalInteraction,
+  slackInteractionNeedsModal,
   SlackInteractionError,
+  syncSlackApprovalOutcome,
 } from "./chat/slack-interactions.js";
 import { productionAppOrigin } from "./connectors/google-oauth-return.js";
 import { connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl } from "./router.js";
@@ -87,7 +90,7 @@ export const slackInteractionsWebhook = onRequest(
     minInstances: 0,
     maxInstances: 5,
     serviceAccount: runtimeServiceAccount,
-    secrets: [slackSigningSecret],
+    secrets: [slackSigningSecret, connectorCredentialKey],
     cors: false,
   },
   async (request, response) => {
@@ -103,12 +106,43 @@ export const slackInteractionsWebhook = onRequest(
         signingSecret: slackSigningSecret.value(),
       });
       const payload = parseSlackInteraction(request.body?.payload);
+      if (slackInteractionNeedsModal(payload)) {
+        const result = await openSlackDecisionModal({
+          payload,
+          credentialKey: connectorCredentialKey.value(),
+        });
+        if (result.status === "resolved") {
+          await syncSlackApprovalOutcome({
+            companyId: result.companyId,
+            approvalId: result.approvalId,
+            credentialKey: connectorCredentialKey.value(),
+            appOrigin: productionAppOrigin,
+          });
+        }
+        response.status(200).json({
+          response_type: "ephemeral",
+          text: result.status === "opened"
+            ? "Decision form opened."
+            : "This proposal was already resolved. Erik is refreshing the card.",
+        });
+        return;
+      }
       const result = await queueSlackApprovalInteraction({ payload });
+      if (result.status === "resolved") {
+        await syncSlackApprovalOutcome({
+          companyId: result.companyId,
+          approvalId: result.approvalId,
+          credentialKey: connectorCredentialKey.value(),
+          appOrigin: productionAppOrigin,
+        });
+      }
       response.status(200).json({
-        response_type: "ephemeral",
+        ...(payload.type === "view_submission" ? { response_action: "clear" } : { response_type: "ephemeral" }),
         text: result.status === "queued"
-          ? "Approval accepted. Erik is creating the task."
-          : "This decision was already received.",
+          ? "Decision accepted. Erik is processing the exact proposal."
+          : result.status === "resolved"
+            ? "This proposal was already resolved. The card now shows the factual outcome."
+            : "This decision was already received.",
       });
     } catch (error) {
       const statusCode = error instanceof SlackEventRequestError
@@ -156,13 +190,14 @@ export const processSlackApproval = onDocumentCreated(
     maxInstances: 5,
     retry: false,
     serviceAccount: runtimeServiceAccount,
-    secrets: [connectorCredentialKey],
+    secrets: [connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl],
   },
   async (event) => {
     try {
       await processSlackApprovalInteraction({
         interactionId: event.params.interactionId,
         credentialKey: connectorCredentialKey.value(),
+        geminiApiKey: geminiApiKey.value(),
         appOrigin: productionAppOrigin,
       });
     } catch (error) {
@@ -173,5 +208,32 @@ export const processSlackApproval = onDocumentCreated(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  },
+);
+
+export const syncSlackApprovalDecision = onDocumentUpdated(
+  {
+    document: "companies/{companyId}/actionApprovals/{approvalId}",
+    database: "odorik",
+    region: "europe-west3",
+    timeoutSeconds: 120,
+    memory: "256MiB",
+    maxInstances: 5,
+    retry: false,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [connectorCredentialKey],
+  },
+  async (event) => {
+    const before = event.data?.before.data() || {};
+    const after = event.data?.after.data() || {};
+    const beforeState = `${String(before.decisionStatus || "pending")}:${String(before.executionStatus || "not_started")}:${String(before.supersededByApprovalId || "")}`;
+    const afterState = `${String(after.decisionStatus || "pending")}:${String(after.executionStatus || "not_started")}:${String(after.supersededByApprovalId || "")}`;
+    if (beforeState === afterState || after.decisionStatus === "pending") return;
+    await syncSlackApprovalOutcome({
+      companyId: event.params.companyId,
+      approvalId: event.params.approvalId,
+      credentialKey: connectorCredentialKey.value(),
+      appOrigin: productionAppOrigin,
+    });
   },
 );

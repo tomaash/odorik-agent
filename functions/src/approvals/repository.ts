@@ -19,6 +19,7 @@ import { chatNotificationsForApprovals } from "../chat/deliver.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { activeMember } from "../tasks/repository.js";
 import { canMemberAccess, canMemberAccessSourceData, type ResourceAudience } from "../access.js";
+import type { ConversationApprovalPolicy } from "../actions/conversation-policy.js";
 
 export type ApprovalStatus =
   | "pending"
@@ -108,6 +109,13 @@ export async function requestWorkflowActionApproval(input: {
   action: unknown;
   source: ActionSource;
   access?: ResourceAudience;
+  policy?: ConversationApprovalPolicy;
+  proposalLineage?: {
+    rootApprovalId: string;
+    version: number;
+    supersedesApprovalId: string | null;
+    revisionNote: string | null;
+  };
 }, overrides?: Partial<ApprovalDependencies>) {
   const deps = dependencies(overrides);
   const approver = await deps.resolveActiveMember(
@@ -140,7 +148,21 @@ export async function requestWorkflowActionApproval(input: {
   return deps.database.runTransaction(async (transaction) => {
     const existing = await transaction.get(approvalRef);
     if (existing.exists) {
-      return jsonSafe({ id: existing.id, ...existing.data(), duplicate: true });
+      const existingData = existing.data() || {};
+      const sameSource = JSON.stringify(existingData.source || null) === JSON.stringify(input.source);
+      const samePolicy = JSON.stringify(existingData.policy || null) === JSON.stringify(input.policy || null);
+      const sameLineage = JSON.stringify(existingData.proposalLineage || null)
+        === JSON.stringify(input.proposalLineage || null);
+      if (existingData.objectType !== "action_approval"
+        || existingData.approverUid !== approver.uid
+        || existingData.effectDigest !== digest
+        || !sameSource || !samePolicy || !sameLineage) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: "Approval identity already belongs to a different proposal.",
+        });
+      }
+      return jsonSafe({ id: existing.id, ...existingData, duplicate: true });
     }
     await resolved.descriptor.assertRequestPreconditions({
       companyId: input.companyId,
@@ -163,6 +185,8 @@ export async function requestWorkflowActionApproval(input: {
       effectDigest: digest,
       effectDigestVersion: "canonical-v1",
       source: input.source,
+      ...(input.policy ? { policy: input.policy } : {}),
+      ...(input.proposalLineage ? { proposalLineage: input.proposalLineage } : {}),
       access: input.access || { visibility: "company" },
       createdBy: input.actorUid,
       createdAt: now,
@@ -185,6 +209,8 @@ export async function requestWorkflowActionApproval(input: {
         actionContractVersion: resolved.descriptor.contractVersion,
         effectDigest: digest,
         source: input.source,
+        ...(input.policy ? { policy: input.policy } : {}),
+        ...(input.proposalLineage ? { proposalLineage: input.proposalLineage } : {}),
       },
       createdAt: now,
     });
@@ -575,6 +601,7 @@ export async function rejectAction(input: {
       status: "rejected",
       decisionStatus: "rejected",
       executionStatus: "not_started",
+      resolutionKind: "rejected",
       rejectedBy: input.actorUid,
       rejectedAt: now,
       rejectionNote: note,
@@ -605,6 +632,136 @@ export async function rejectAction(input: {
       rejectionNote: note,
       rejectedAt: now,
       duplicate: false,
+    });
+  });
+}
+
+export async function requestActionChanges(input: {
+  companyId: string;
+  actorUid: string;
+  approvalId: string;
+  note: string;
+}, overrides?: Partial<ApprovalDependencies>) {
+  const deps = dependencies(overrides);
+  const approvalRef = deps.database.doc(companyDocumentPath(
+    input.companyId, "actionApprovals", input.approvalId,
+  ));
+  const auditRef = deps.database.collection(
+    companyCollectionPath(input.companyId, "auditEvents"),
+  ).doc();
+  return deps.database.runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(approvalRef);
+    if (!snapshot.exists || !canMemberAccessSourceData(snapshot.data(), input.actorUid)) {
+      throw new TRPCError({ code: "NOT_FOUND", message: "Approval request not found." });
+    }
+    const data = snapshot.data() || {};
+    if (data.approverUid !== input.actorUid) {
+      throw new TRPCError({ code: "FORBIDDEN", message: "Only the named approver can request changes." });
+    }
+    if (data.resolutionKind === "changes_requested") {
+      return jsonSafe({ id: snapshot.id, ...data, duplicate: true });
+    }
+    if (inferredDecision(data) !== "pending") {
+      throw new TRPCError({
+        code: "PRECONDITION_FAILED",
+        message: "Changes can only be requested on a pending proposal.",
+      });
+    }
+    const note = String(input.note || "").trim().slice(0, 2_000);
+    if (!note) throw new TRPCError({ code: "BAD_REQUEST", message: "Describe the requested changes." });
+    const now = Timestamp.now();
+    const caseId = caseIdForApproval(data, deps.registry);
+    transaction.update(approvalRef, {
+      status: "rejected",
+      decisionStatus: "rejected",
+      executionStatus: "not_started",
+      resolutionKind: "changes_requested",
+      rejectedBy: input.actorUid,
+      rejectedAt: now,
+      rejectionNote: note,
+      updatedAt: now,
+    });
+    transaction.create(auditRef, {
+      aggregateType: "action_approval",
+      aggregateId: input.approvalId,
+      ...(caseId ? { caseId } : {}),
+      type: "approval_changes_requested",
+      access: data.access || { visibility: "company" },
+      actor: { kind: "user", id: input.actorUid },
+      before: { decisionStatus: "pending", executionStatus: "not_started" },
+      after: {
+        decisionStatus: "rejected",
+        executionStatus: "not_started",
+        resolutionKind: "changes_requested",
+        effectDigest: data.effectDigest || null,
+        note,
+      },
+      createdAt: now,
+    });
+    return jsonSafe({
+      id: input.approvalId,
+      ...data,
+      status: "rejected",
+      decisionStatus: "rejected",
+      executionStatus: "not_started",
+      resolutionKind: "changes_requested",
+      rejectionNote: note,
+      rejectedAt: now,
+      duplicate: false,
+    });
+  });
+}
+
+export async function linkSupersedingApproval(input: {
+  companyId: string;
+  actorUid: string;
+  previousApprovalId: string;
+  nextApprovalId: string;
+}, database: FirebaseFirestore.Firestore = db): Promise<void> {
+  const previousRef = database.doc(companyDocumentPath(
+    input.companyId, "actionApprovals", input.previousApprovalId,
+  ));
+  const nextRef = database.doc(companyDocumentPath(
+    input.companyId, "actionApprovals", input.nextApprovalId,
+  ));
+  const auditRef = database.collection(companyCollectionPath(input.companyId, "auditEvents")).doc();
+  await database.runTransaction(async (transaction) => {
+    const [previous, next] = await Promise.all([
+      transaction.get(previousRef),
+      transaction.get(nextRef),
+    ]);
+    const previousData = previous.data() || {};
+    const nextData = next.data() || {};
+    if (!previous.exists || previousData.resolutionKind !== "changes_requested") {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The previous proposal is not awaiting a revision." });
+    }
+    if (!next.exists
+      || nextData.decisionStatus !== "pending"
+      || nextData.proposalLineage?.supersedesApprovalId !== input.previousApprovalId) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "The replacement proposal lineage is invalid." });
+    }
+    if (previousData.supersededByApprovalId
+      && previousData.supersededByApprovalId !== input.nextApprovalId) {
+      throw new TRPCError({ code: "PRECONDITION_FAILED", message: "A different proposal already superseded this version." });
+    }
+    const now = Timestamp.now();
+    transaction.set(previousRef, {
+      supersededByApprovalId: input.nextApprovalId,
+      supersededAt: now,
+      updatedAt: now,
+    }, { merge: true });
+    transaction.create(auditRef, {
+      aggregateType: "action_approval",
+      aggregateId: input.previousApprovalId,
+      type: "approval_superseded",
+      access: previousData.access || { visibility: "company" },
+      actor: { kind: "user", id: input.actorUid },
+      after: {
+        supersededByApprovalId: input.nextApprovalId,
+        rootApprovalId: nextData.proposalLineage?.rootApprovalId || null,
+        version: nextData.proposalLineage?.version || null,
+      },
+      createdAt: now,
     });
   });
 }

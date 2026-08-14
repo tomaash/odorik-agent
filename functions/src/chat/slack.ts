@@ -138,6 +138,17 @@ export async function updateSlackMessage(input: {
   });
 }
 
+export async function openSlackModal(input: {
+  token: string;
+  triggerId: string;
+  view: Record<string, unknown>;
+}): Promise<void> {
+  await slackPost("Slack views.open", "views.open", input.token, {
+    trigger_id: input.triggerId,
+    view: input.view,
+  });
+}
+
 export type SlackDeliveryResult = {
   channelId: string;
   messageTs: string;

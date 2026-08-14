@@ -15,6 +15,7 @@ import {
 import { FirestoreCompanyData } from "./knowledge.js";
 import { qdrantFromEnvironment } from "./search.js";
 import { GeminiRestAgentModel } from "./gemini.js";
+import { conversationApprovalPolicy } from "../actions/conversation-policy.js";
 
 const proposalSchema = z.object({
   title: z.string().trim().min(1).max(300),
@@ -197,6 +198,12 @@ export async function prepareConversationTaskProposal(input: {
   context: ConversationContextSnapshot;
   geminiApiKey: string;
   database: FirebaseFirestore.Firestore;
+  lineage?: {
+    rootApprovalId: string;
+    version: number;
+    supersedesApprovalId: string;
+    revisionNote: string;
+  };
   dependencies?: TaskProposalDependencies;
 }): Promise<PreparedTaskProposal> {
   const repository = new FirestoreCompanyData(input.database, input.companyId, input.actorUid);
@@ -237,8 +244,14 @@ export async function prepareConversationTaskProposal(input: {
     throw new Error("The named approver is no longer active.");
   }
   const stableKey = `${input.companyId}:${input.threadId}:${input.sessionId}:${input.inboundMessageId}`;
-  const approvalId = deterministicId("approval", stableKey);
-  const taskId = deterministicId("task", stableKey);
+  const approvalId = input.lineage
+    ? deterministicId("approval", `${input.lineage.rootApprovalId}:v${input.lineage.version}`)
+    : deterministicId("approval", stableKey);
+  const rootApprovalId = input.lineage?.rootApprovalId || approvalId;
+  const proposalVersion = input.lineage?.version || 1;
+  const taskId = input.lineage
+    ? deterministicId("task", approvalId)
+    : deterministicId("task", stableKey);
   const callData = call.data() || {};
   const action = {
     kind: "task.create" as const,
@@ -275,6 +288,16 @@ export async function prepareConversationTaskProposal(input: {
       sessionId: input.sessionId,
       messageId: input.inboundMessageId,
       callId: generated.proposal.callId,
+      proposalRootId: rootApprovalId,
+      proposalVersion,
+      ...(input.lineage ? { supersedesApprovalId: input.lineage.supersedesApprovalId } : {}),
+    },
+    policy: conversationApprovalPolicy("task.create"),
+    proposalLineage: {
+      rootApprovalId,
+      version: proposalVersion,
+      supersedesApprovalId: input.lineage?.supersedesApprovalId || null,
+      revisionNote: input.lineage?.revisionNote || null,
     },
     access: normalizeResourceAudience(callData.access),
   }, {

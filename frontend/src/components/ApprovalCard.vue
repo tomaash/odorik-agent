@@ -194,6 +194,12 @@ function confirmReject() {
     <div class="min-w-0">
       <div class="flex items-center gap-2 flex-wrap mb-1.5">
         <Tag :value="t(`approvals.status.${approval.status}`)" :severity="severity(approval.status)" />
+        <Tag
+          v-if="approval.proposalLineage?.version"
+          :value="`v${approval.proposalLineage.version}`"
+          severity="secondary"
+          rounded
+        />
         <span class="eyebrow !text-violet-700">{{ actionLabel() }}</span>
       </div>
 
@@ -248,6 +254,7 @@ function confirmReject() {
           <i class="pi pi-calendar mr-1" />{{ approval.action.dueAt ? new Date(approval.action.dueAt).toLocaleDateString() : t('tasks.noDueDate') }}
         </span>
         <span><i class="pi pi-user-edit mr-1" />{{ t('approvals.approver', { approver: approval.approverName }) }}</span>
+        <span v-if="approval.policy?.effectBoundary"><i class="pi pi-shield mr-1" />{{ approval.policy.effectBoundary }}</span>
       </div>
 
       <p class="text-xs text-surface-500 mt-2 mb-0">
@@ -306,8 +313,17 @@ function confirmReject() {
         {{ t('approvals.mailDraftOutcomeUnknown') }}
       </p>
       <p v-if="approval.rejectionNote" class="text-xs text-rose-800 mt-2 mb-0">
-        {{ t('approvals.rejectionReason', { reason: approval.rejectionNote }) }}
+        {{ approval.resolutionKind === 'changes_requested'
+          ? t('approvals.changesRequestedReason', { reason: approval.rejectionNote })
+          : t('approvals.rejectionReason', { reason: approval.rejectionNote }) }}
       </p>
+      <router-link
+        v-if="approval.supersededByApprovalId"
+        :to="`/approvals/${approval.supersededByApprovalId}`"
+        class="mt-2 inline-flex items-center gap-1 text-xs font-semibold text-indigo-700 no-underline"
+      >
+        {{ t('approvals.reviewReplacement') }} <i class="pi pi-arrow-right text-[.65rem]" />
+      </router-link>
 
       <div
         v-if="mailDraftResult && approval.status === 'approved'"

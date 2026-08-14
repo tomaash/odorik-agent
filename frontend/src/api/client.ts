@@ -479,6 +479,9 @@ export type ActionApprovalItem = {
     sessionId: string
     messageId: string
     callId: string
+    proposalRootId?: string
+    proposalVersion?: number
+    supersedesApprovalId?: string
   }
   actionCapabilityId?: string
   actionContractVersion?: number
@@ -487,6 +490,22 @@ export type ActionApprovalItem = {
   executionResult?: unknown
   executionError?: string | null
   rejectionNote?: string | null
+  resolutionKind?: 'rejected' | 'changes_requested' | null
+  supersededByApprovalId?: string | null
+  proposalLineage?: {
+    rootApprovalId: string
+    version: number
+    supersedesApprovalId?: string | null
+    revisionNote?: string | null
+  } | null
+  policy?: {
+    version: string
+    riskTier: 'internal_write' | 'external_draft'
+    approvalMode: 'named_person_each_version'
+    surface: 'slack_dm'
+    allowedDecisions: Array<'approve' | 'reject' | 'request_changes'>
+    effectBoundary: string
+  } | null
   createdAt?: string | null
   updatedAt?: string | null
   approvedAt?: string | null

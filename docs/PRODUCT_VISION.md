@@ -27,11 +27,13 @@ proposed as versioned specifications, approved, and then executed through a
 small set of safe application capabilities.
 
 The Agent Erik application is the control and inspection surface: it owns
-identity linking, source configuration, evidence, proposal cards, decisions,
-execution recovery, and audit. Slack and future chat or email integrations are
-transport surfaces. They should make Erik available where work already happens
-without turning the external product into an authorization boundary or a
-second, inconsistent system of record.
+identity linking, source configuration, evidence, canonical proposal and
+decision records, execution recovery, and audit. Slack, Teams, and future chat
+or email integrations are interaction surfaces. A private surface may collect
+a structured decision only after its workspace, provider identity, linked Erik
+member, exact message, proposal digest, and expiry are revalidated. It never
+owns the authorization record or executor and must converge to the canonical
+outcome rather than becoming a second system of record.
 
 ## Strategic product wedge
 
@@ -51,10 +53,11 @@ notice me where I work
 Approval notification is the entry point, not the destination. Read-only
 conversation makes the notification channel useful between decisions. The
 decisive product step is conversation-to-proposal handoff: a person should be
-able to discuss a customer or outcome in Slack, ask Erik to prepare the next
-step, and receive a typed proposal whose evidence and consequences are reviewed
-in the application. This joins the factual-agent and approval kernels into one
-daily loop without weakening either.
+able to discuss a customer or outcome in Slack or Teams, ask Erik to prepare
+the next step, and receive a typed proposal whose evidence and consequences can
+be reviewed and decided in that authenticated private conversation or in the
+application. This joins the factual-agent and approval kernels into one daily
+loop without weakening either.
 
 ## Product promise
 
@@ -289,8 +292,12 @@ Initial source families are:
 3. documents and files; and
 4. messages or email.
 
-The platform should add a second independent connector early to prove that the
-abstraction is real rather than an Odorik adapter with a generic name.
+The platform should add independent provider families early to prove that the
+abstraction is real rather than an Odorik or Google adapter with a generic
+name. Microsoft 365 is the next family: delegated Outlook data/actions and a
+Teams bot installation share tenant identity concepts, but remain separate
+connections because their credentials, consent, lifecycle, and delivery
+semantics differ.
 
 ## Experience principles
 

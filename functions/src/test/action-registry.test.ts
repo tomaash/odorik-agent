@@ -16,6 +16,8 @@ import {
 import { caseMoveDescriptor } from "../actions/internal-actions.js";
 import {
   approveAction,
+  linkSupersedingApproval,
+  requestActionChanges,
   requestWorkflowActionApproval,
   type ApprovalDependencies,
 } from "../approvals/repository.js";
@@ -413,6 +415,11 @@ test("approval kernel dispatches once and retains typed registry metadata", asyn
   ) as Record<string, unknown>;
   assert.equal(duplicateRequest.duplicate, true);
   assert.equal(calls.count, 1);
+
+  await assert.rejects(() => requestWorkflowActionApproval({
+    ...input,
+    action: { ...input.action, operationId: "different-operation" },
+  }, harness.deps), /identity already belongs to a different proposal/);
 });
 
 test("legacy approvals without registry metadata retain their original digest contract", async () => {
@@ -627,4 +634,66 @@ test("case movement descriptor keeps exact stage and revision preconditions", as
   );
   assert.equal(memory.read(casePath)?.stageId, "new");
   assert.equal(memory.read(casePath)?.revision, 1);
+});
+
+test("requesting changes closes one immutable version and links a fresh pending successor", async () => {
+  const memory = new MemoryFirestore();
+  const previousPath = "companies/explorers/actionApprovals/approval-v1";
+  memory.seed(previousPath, {
+    objectType: "action_approval",
+    status: "pending",
+    decisionStatus: "pending",
+    executionStatus: "not_started",
+    approverUid: "approver-1",
+    effectDigest: "digest-v1",
+    action: taskAction,
+    access: { visibility: "company" },
+    proposalLineage: { rootApprovalId: "approval-v1", version: 1, supersedesApprovalId: null },
+  });
+  const decision = await requestActionChanges({
+    companyId: "explorers",
+    actorUid: "approver-1",
+    approvalId: "approval-v1",
+    note: "Move the due date to Friday.",
+  }, { database: memory.asFirestore() });
+  assert.equal((decision as { resolutionKind?: string }).resolutionKind, "changes_requested");
+  assert.equal(memory.read(previousPath)?.effectDigest, "digest-v1");
+  assert.deepEqual(memory.read(previousPath)?.action, taskAction);
+
+  const nextPath = "companies/explorers/actionApprovals/approval-v2";
+  memory.seed(nextPath, {
+    objectType: "action_approval",
+    status: "pending",
+    decisionStatus: "pending",
+    executionStatus: "not_started",
+    approverUid: "approver-1",
+    effectDigest: "digest-v2",
+    action: { ...taskAction, dueAt: "2026-08-21T12:00:00.000Z" },
+    access: { visibility: "company" },
+    proposalLineage: {
+      rootApprovalId: "approval-v1",
+      version: 2,
+      supersedesApprovalId: "approval-v1",
+    },
+  });
+  await linkSupersedingApproval({
+    companyId: "explorers",
+    actorUid: "approver-1",
+    previousApprovalId: "approval-v1",
+    nextApprovalId: "approval-v2",
+  }, memory.asFirestore());
+  assert.equal(memory.read(previousPath)?.supersededByApprovalId, "approval-v2");
+  assert.equal(memory.read(nextPath)?.decisionStatus, "pending");
+
+  memory.seed("companies/explorers/actionApprovals/approval-v3", {
+    objectType: "action_approval",
+    decisionStatus: "pending",
+    proposalLineage: { rootApprovalId: "approval-v1", version: 3, supersedesApprovalId: "approval-v1" },
+  });
+  await assert.rejects(() => linkSupersedingApproval({
+    companyId: "explorers",
+    actorUid: "approver-1",
+    previousApprovalId: "approval-v1",
+    nextApprovalId: "approval-v3",
+  }, memory.asFirestore()), /different proposal already superseded/);
 });

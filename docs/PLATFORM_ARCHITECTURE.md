@@ -153,9 +153,10 @@ approval.
 
 A logical thread is independent of a delivery surface. An
 `ExternalConversationBinding` maps one authenticated provider conversation—for
-example a Slack workspace, DM channel, and linked Slack user—to one member-owned
-Erik thread. Binding is explicit and revocable; matching an email address or
-display name is not identity proof.
+example a Slack workspace, DM channel, and linked Slack user, or a Teams tenant,
+personal conversation, and Entra object ID—to one member-owned Erik thread.
+Binding is explicit and revocable; matching an email address or display name is
+not identity proof.
 
 Inbound and outbound provider events first enter an immutable conversation
 journal. Each record retains provider event ID, provider timestamp, received
@@ -358,11 +359,12 @@ classification. The approval kernel remains generic: named actor, effect
 digest, execution lease, attempt identity, decision state, audit, and outcome
 state.
 
-The production registry contains `task.create`, `case.create`, and
-`case.move`. It rejects duplicate or approval-optional descriptors and is
-immutable after startup. It is not a runtime plugin system or a generic action
-API. Future external effects must declare the provider capability and
-reconciliation contract they require before they can be registered.
+The production registry contains `task.create`, `case.create`, `case.move`,
+`coding.issue.implement`, and `mail.draft.create`. It rejects duplicate or
+approval-optional descriptors and is immutable after startup. It is not a
+runtime plugin system or a generic action API. Future external effects must
+declare the provider capability and reconciliation contract they require before
+they can be registered.
 
 ## Agent execution
 

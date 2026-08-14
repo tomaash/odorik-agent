@@ -96,9 +96,12 @@ Secret Manager. Google connector OAuth on emulators needs
 `http://127.0.0.1:5173/oauth/google/callback` registered on the connectors
 OAuth client; Vite proxies it into the Functions emulator.
 
-For Slack direct conversation and Slack-native task approval, configure the
+For Slack direct conversation and Slack-native proposal decisions, configure the
 Slack app's Event Subscriptions request URL as `/webhooks/slack` and its
 Interactivity request URL as `/interactions/slack` on the same public origin.
+Private proposal cards support approve, reject, and request changes. Approved
+effects still execute only through Erik's canonical approval kernel; the first
+conversation actions are one internal task and one Gmail draft (never send).
 
 | | Prod backend (default) | Emulators |
 | --- | --- | --- |

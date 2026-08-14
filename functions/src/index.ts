@@ -59,6 +59,7 @@ export {
   slackInteractionsWebhook,
   processSlackDm,
   processSlackApproval,
+  syncSlackApprovalDecision,
 } from "./slack-events-webhook.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";

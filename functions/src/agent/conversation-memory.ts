@@ -338,6 +338,33 @@ export async function loadAuthorizedConversationContext(input: {
   };
 }
 
+export async function loadAuthorizedConversationContextForSession(input: {
+  companyId: string;
+  actorUid: string;
+  threadId: string;
+  sessionId: string;
+  database: FirebaseFirestore.Firestore;
+}): Promise<ConversationContextSnapshot> {
+  const threadRef = threadRefFor(input);
+  const session = await threadRef.collection("sessions").doc(input.sessionId).get();
+  const data = session.data() || {};
+  if (!session.exists
+    || data.ownerUid !== input.actorUid
+    || data.status === "forgotten") {
+    throw new Error("The proposal's conversation session is no longer available.");
+  }
+  return loadAuthorizedConversationContext({
+    ...input,
+    session: {
+      sessionId: input.sessionId,
+      memoryGeneration: Number(data.memoryGeneration || 1),
+      stateVersion: Number(data.stateVersion || 0),
+      state: sessionState(data.state),
+      startedNew: false,
+    },
+  });
+}
+
 function dedupe<T>(values: T[], key: (value: T) => string, maximum: number): T[] {
   const seen = new Set<string>();
   return values.filter((value) => {

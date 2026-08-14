@@ -156,6 +156,9 @@ export type ConversationActionSource = {
   sessionId: string;
   messageId: string;
   callId: string;
+  proposalRootId?: string;
+  proposalVersion?: number;
+  supersedesApprovalId?: string;
 };
 
 export type ActionSource = WorkflowActionSource | ConversationActionSource;

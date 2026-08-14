@@ -18,6 +18,7 @@ import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
 import { companyDocumentPath } from "../tenancy.js";
 import { prepareConversationTaskProposal } from "../agent/task-proposal.js";
+import { prepareConversationMailDraftProposal } from "../agent/mail-draft-proposal.js";
 import { createSlackLink, slackIdentityPath } from "./slack-link.js";
 import {
   classifySlackDeliveryFailure,
@@ -26,6 +27,7 @@ import {
 import {
   bindSlackApprovalTicketMessage,
   issueSlackApprovalTicket,
+  mailDraftProposalBlocks,
   taskProposalBlocks,
 } from "./slack-interactions.js";
 
@@ -289,6 +291,7 @@ export type SlackConversationDependencies = {
   authorize?: typeof authorizedSlackDirect;
   createLink?: typeof createSlackLink;
   prepareTaskProposal?: typeof prepareConversationTaskProposal;
+  prepareMailProposal?: typeof prepareConversationMailDraftProposal;
   issueApprovalTicket?: typeof issueSlackApprovalTicket;
   bindApprovalTicket?: typeof bindSlackApprovalTicketMessage;
   wait?: (milliseconds: number) => Promise<void>;
@@ -311,6 +314,7 @@ export async function processSlackDmEvent(input: {
   const authorize = input.dependencies?.authorize || authorizedSlackDirect;
   const createLink = input.dependencies?.createLink || createSlackLink;
   const prepareTaskProposal = input.dependencies?.prepareTaskProposal || prepareConversationTaskProposal;
+  const prepareMailProposal = input.dependencies?.prepareMailProposal || prepareConversationMailDraftProposal;
   const issueApprovalTicket = input.dependencies?.issueApprovalTicket || issueSlackApprovalTicket;
   const workspace = await resolveSlackWorkspace(input.event.teamId, database);
   if (!workspace) return { outcome: "ignored", replyText: null, route: "ignored" };
@@ -441,7 +445,9 @@ export async function processSlackDmEvent(input: {
     confidence = answer.confidence;
     limitations = answer.limitations;
   } else if (route === "action_request") {
-    const proposed = await prepareTaskProposal({
+    const isMailDraft = /\b(?:draft|email|mail|e-mail|koncept)\b/iu.test(input.event.text)
+      && /\b(?:email|mail|e-mail|message|zpráv|koncept)\b/iu.test(input.event.text);
+    const proposalInput = {
       companyId: workspace.companyId,
       actorUid: uid,
       threadId,
@@ -451,7 +457,10 @@ export async function processSlackDmEvent(input: {
       context,
       geminiApiKey: input.geminiApiKey,
       database,
-    });
+    };
+    const proposed = isMailDraft
+      ? await prepareMailProposal(proposalInput)
+      : await prepareTaskProposal(proposalInput);
     const effectDigest = String(proposed.approval.effectDigest || "");
     const ticket = await issueApprovalTicket({
       credentialKey: input.credentialKey,
@@ -463,22 +472,41 @@ export async function processSlackDmEvent(input: {
       channelId: input.event.channelId,
       approvalId: proposed.approvalId,
       effectDigest,
+      actionKind: proposed.action.kind,
       database,
     });
     const approvalUrl = `${input.appOrigin.replace(/\/+$/, "")}/approvals/${encodeURIComponent(proposed.approvalId)}`;
-    replyText = `Proposed task: ${proposed.action.title}. Review and approve the exact task in this private message.`;
-    replyBlocks = taskProposalBlocks({
-      approvalId: proposed.approvalId,
-      title: proposed.action.title,
-      assigneeName: proposed.action.assigneeName,
-      instructions: proposed.action.instructions,
-      dueAt: proposed.action.dueAt,
-      evidenceTitles: proposed.citations.map((citation) => citation.title),
-      assumptions: proposed.assumptions,
-      effectDigest,
-      approvalUrl,
-      ticketToken: ticket.token,
-    });
+    if (proposed.action.kind === "mail.draft.create") {
+      replyText = `Proposed Gmail draft to ${proposed.action.to[0]}: ${proposed.action.subject}. Review the exact draft in this private message.`;
+      replyBlocks = mailDraftProposalBlocks({
+        approvalId: proposed.approvalId,
+        mailboxAddress: proposed.action.mailboxAddress,
+        to: proposed.action.to[0],
+        subject: proposed.action.subject,
+        body: proposed.action.body,
+        evidenceTitles: proposed.citations.map((citation) => citation.title),
+        assumptions: proposed.assumptions,
+        effectDigest,
+        approvalUrl,
+        ticketToken: ticket.token,
+        version: 1,
+      });
+    } else {
+      replyText = `Proposed task: ${proposed.action.title}. Review the exact task in this private message.`;
+      replyBlocks = taskProposalBlocks({
+        approvalId: proposed.approvalId,
+        title: proposed.action.title,
+        assigneeName: proposed.action.assigneeName,
+        instructions: proposed.action.instructions,
+        dueAt: proposed.action.dueAt,
+        evidenceTitles: proposed.citations.map((citation) => citation.title),
+        assumptions: proposed.assumptions,
+        effectDigest,
+        approvalUrl,
+        ticketToken: ticket.token,
+        version: 1,
+      });
+    }
     const persisted = await persistReply({
       companyId: workspace.companyId,
       actorUid: uid,
@@ -495,7 +523,7 @@ export async function processSlackDmEvent(input: {
         proposal: {
           approvalId: proposed.approvalId,
           effectDigest,
-          actionKind: "task.create",
+          actionKind: proposed.action.kind,
           evidenceCitationIds: proposed.citations.map((citation) => citation.citationId),
         },
         toolTrace: proposed.run.toolTrace,

@@ -60,3 +60,4 @@ jobs:
           gcloud run services add-iam-policy-binding projectcallcontext --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
           gcloud run services add-iam-policy-binding syncknowledgeindex --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
           gcloud run services add-iam-policy-binding processslackapproval --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
+          gcloud run services add-iam-policy-binding syncslackapprovaldecision --project=odorik-tx-260720-c58d --region=europe-west3 --member=serviceAccount:odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com --role=roles/run.invoker --quiet
