@@ -53,6 +53,7 @@ import {
 } from "./coding/reconcile.js";
 import { queueCodingPublisher } from "./coding/service.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
+export { microsoftOAuthCallback } from "./connectors/microsoft-oauth-callback.js";
 export { slackOAuthCallback } from "./connectors/slack-oauth-callback.js";
 export {
   slackEventsWebhook,

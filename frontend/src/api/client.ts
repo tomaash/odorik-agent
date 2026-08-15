@@ -513,7 +513,7 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type ConnectorId = 'odorik' | 'google_workspace' | 'github' | 'slack' | 'grok_subscription'
+export type ConnectorId = 'odorik' | 'google_workspace' | 'microsoft_365' | 'github' | 'slack' | 'grok_subscription'
 export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
@@ -528,7 +528,7 @@ export type SourceCapabilityDescriptor = {
   id: SourceCapabilityId
   serviceId: 'calls' | 'calendar' | 'drive' | 'mail' | 'mail_draft' | 'issues' | 'chat_notify' | 'chat_direct'
   direction: 'observe' | 'act'
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox' | 'channel'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox' | 'channel' | 'direct_message'
   requiredScopes: string[]
   syncMode: 'webhook' | 'incremental' | 'reconcile' | 'manual'
   requiresApproval: boolean
@@ -554,9 +554,9 @@ export type SourceSyncState = {
 }
 
 export type SourceCapability = {
-  id: 'calls' | 'calendar' | 'drive' | 'issues' | 'chat_notify' | 'chat_direct'
+  id: 'calls' | 'calendar' | 'drive' | 'mail' | 'mail_draft' | 'issues' | 'chat_notify' | 'chat_direct'
   capabilityId: SourceCapabilityId
-  status: 'active' | 'attention' | 'reauthorization_required' | 'disabled'
+  status: 'active' | 'attention' | 'reauthorization_required' | 'permission_granted' | 'disabled'
   grantedScopes: string[]
   requiredScopes: string[]
   itemCount: number
@@ -571,7 +571,7 @@ export type SourceResource = {
   id: string
   connectionId: string
   capabilityId: SourceCapabilityId
-  resourceType: 'phone_line' | 'calendar' | 'folder' | 'repository' | 'channel'
+  resourceType: 'phone_line' | 'calendar' | 'folder' | 'label' | 'repository' | 'mailbox' | 'channel' | 'direct_message'
   externalId: string
   displayName: string
   status: 'enabled' | 'disabled'
@@ -592,7 +592,7 @@ export type SourceConnection = {
   id: string
   companyId: string
   connectorId: ConnectorId
-  providerId: 'odorik' | 'google' | 'github' | 'slack' | 'grok'
+  providerId: 'odorik' | 'google' | 'microsoft' | 'github' | 'slack' | 'grok'
   providerAccountId?: string
   tenantId?: string
   displayName: string
@@ -601,6 +601,18 @@ export type SourceConnection = {
   credentialMode: 'encrypted' | 'legacy_secret' | 'shared_secret' | 'managed_secret' | 'none'
   uploadUrl?: string
   accountLabel?: string
+  member?: {
+    entraObjectId: string
+    displayName: string
+    userPrincipalName: string
+  }
+  authorization?: {
+    state: 'healthy' | 'consent_denied' | 'admin_consent_required' | 'conditional_access' | 'revoked' | 'refresh_expired' | 'tenant_mismatch' | 'error'
+    recoveryAction: 'none' | 'retry' | 'ask_admin' | 'satisfy_policy' | 'reconnect' | 'choose_same_account'
+    lastCheckedAt?: string | null
+    lastErrorCode?: string | null
+    lastError?: string | null
+  }
   grantedScopes: string[]
   lastSyncAt?: string | null
   lastObservedAt?: string | null
@@ -1132,6 +1144,15 @@ export const workspaceCapabilityIds: WorkspaceCapabilityId[] = [
   'action.mail.draft.create',
 ]
 
+export type MicrosoftCapabilityId =
+  | 'context.mail.read_scoped'
+  | 'action.mail.draft.create'
+
+export const microsoftCapabilityIds: MicrosoftCapabilityId[] = [
+  'context.mail.read_scoped',
+  'action.mail.draft.create',
+]
+
 export type SelectableMailLabel = {
   id: string
   displayName: string
@@ -1206,6 +1227,21 @@ export async function startGoogleWorkspaceAuthorization(
     ...(connectionId ? { connectionId } : {}),
     returnOrigin: window.location.origin,
   })
+}
+
+export async function startMicrosoftAuthorization(
+  capabilityIds: MicrosoftCapabilityId[] = [],
+  connectionId?: string,
+) {
+  return trpc.sources.microsoft365.authorizationUrl.mutate({
+    capabilityIds,
+    ...(connectionId ? { connectionId } : {}),
+    returnOrigin: window.location.origin,
+  })
+}
+
+export async function refreshMicrosoftConnection(connectionId: string) {
+  return trpc.sources.microsoft365.refresh.mutate({ connectionId })
 }
 
 export async function getGoogleCalendars(connectionId: string): Promise<SelectableCalendar[]> {

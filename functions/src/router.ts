@@ -82,6 +82,10 @@ import {
   revokeGoogleWorkspaceAuthorization,
 } from "./connectors/google-oauth.js";
 import {
+  createMicrosoftAuthorization,
+  refreshMicrosoftConnection,
+} from "./connectors/microsoft-oauth.js";
+import {
   configuredGitHubInstallationId,
   connectGitHubInstallation,
   githubConfigurationFromEnvironment,
@@ -167,6 +171,8 @@ export const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
 
 export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
+export const microsoftConnectorClientId = defineSecret("MICROSOFT_CONNECTOR_CLIENT_ID");
+export const microsoftConnectorClientSecret = defineSecret("MICROSOFT_CONNECTOR_CLIENT_SECRET");
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
 const executeGrokAuthJob = createCloudRunGrokAuthJobExecutor();
 const codingArtifacts = new GoogleCodingArtifactStore();
@@ -566,6 +572,48 @@ export const appRouter = router({
           connectionId: input.connectionId,
           returnOrigin: input.returnOrigin,
         })),
+    }),
+    microsoft365: router({
+      authorizationUrl: adminProcedure
+        .input(z.object({
+          capabilityIds: z.array(z.enum([
+            "context.mail.read_scoped",
+            "action.mail.draft.create",
+          ])).max(1).default([]),
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/).optional(),
+          returnOrigin: z.string().max(200).optional(),
+        }))
+        .mutation(({ ctx, input }) => createMicrosoftAuthorization({
+          companyId: ctx.companyId,
+          uid: ctx.uid,
+          email: ctx.email,
+          displayName: ctx.displayName,
+          clientId: microsoftConnectorClientId.value(),
+          credentialKey: connectorCredentialKey.value(),
+          capabilityIds: input.capabilityIds as SourceCapabilityId[],
+          connectionId: input.connectionId,
+          returnOrigin: input.returnOrigin,
+        })),
+      refresh: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          try {
+            return await refreshMicrosoftConnection({
+              companyId: ctx.companyId,
+              connectionId: input.connectionId,
+              clientId: microsoftConnectorClientId.value(),
+              clientSecret: microsoftConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+          } catch (error) {
+            throw new TRPCError({
+              code: "PRECONDITION_FAILED",
+              message: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
     }),
     slack: router({
       authorizationUrl: adminProcedure
@@ -992,6 +1040,11 @@ export const appRouter = router({
               });
               providerAccessRevoked = false;
             }
+          } else if (prepared.connectorId === "microsoft_365") {
+            // Microsoft offers no least-privilege self-revocation endpoint. Removing
+            // the local encrypted credential ends Erik's access immediately; tenant
+            // admins can additionally remove consent in Entra/My Apps.
+            providerAccessRevoked = null;
           } else if (prepared.connectorId === "slack") {
             providerAccessRevoked = await revokeSlackAuthorization({
               companyId: ctx.companyId,

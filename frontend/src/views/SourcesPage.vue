@@ -35,6 +35,8 @@ import {
   setSourceResourceEnabled,
   setSourceResourceAudience,
   startGoogleWorkspaceAuthorization,
+  startMicrosoftAuthorization,
+  refreshMicrosoftConnection,
   startSlackAuthorization,
   startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
@@ -49,6 +51,7 @@ import {
   selectGmailLabels,
   syncGmailLabels,
   workspaceCapabilityIds,
+  type MicrosoftCapabilityId,
   type SelectableCalendar,
   type SelectableFolder,
   type SelectableMailLabel,
@@ -89,6 +92,7 @@ const currentFolderId = ref<string | null>(null)
 const loadingFolders = ref(false)
 const searchContainerRef = ref<HTMLElement | null>(null)
 const synchronizingId = ref('')
+const microsoftRefreshingId = ref('')
 const mailConnection = ref<SourceConnection | null>(null)
 const mailLabels = ref<SelectableMailLabel[]>([])
 const selectedLabelIds = ref<string[]>([])
@@ -248,6 +252,7 @@ function connectorIcon(connector: SourceConnector) {
   return {
     odorik: 'pi pi-phone',
     google_workspace: 'pi pi-google',
+    microsoft_365: 'pi pi-microsoft',
     github: 'pi pi-github',
     grok_subscription: 'pi pi-code',
     slack: 'pi pi-slack',
@@ -259,12 +264,14 @@ function connectorTag(connector: SourceConnector) {
   if (connector.id === 'github') return t('sources.github.readOnlyIssues')
   if (connector.id === 'grok_subscription') return t('sources.grok.subscriptionOAuth')
   if (connector.id === 'slack') return t('sources.slack.notificationsOnly')
+  if (connector.id === 'microsoft_365') return t('sources.microsoft.foundation')
   return t('sources.workspace.services')
 }
 
 function addConnectionTitle(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connectTitle')
   if (connector.id === 'slack') return t('sources.slack.connectTitle')
+  if (connector.id === 'microsoft_365') return t('sources.microsoft.connectTitle')
   if (connector.id !== 'github') return t('sources.workspace.addAccountTitle')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshTitle')
@@ -274,6 +281,7 @@ function addConnectionTitle(connector: SourceConnector) {
 function addConnectionHint(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connectHint')
   if (connector.id === 'slack') return t('sources.slack.connectHint')
+  if (connector.id === 'microsoft_365') return t('sources.microsoft.connectHint')
   if (connector.id !== 'github') return t('sources.workspace.addAccountHint')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshHint')
@@ -283,6 +291,7 @@ function addConnectionHint(connector: SourceConnector) {
 function addConnectionLabel(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.connect')
   if (connector.id === 'slack') return t('sources.slack.connect')
+  if (connector.id === 'microsoft_365') return t('sources.microsoft.connect')
   if (connector.id !== 'github') return t('sources.workspace.connectAccount')
   return connectionsByConnector.value.get('github')?.length
     ? t('sources.github.refreshInstallation')
@@ -297,6 +306,7 @@ function addConnectionIcon(connector: SourceConnector) {
 
 function connectionKindLabel(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return t('sources.workspace.account')
+  if (connection.connectorId === 'microsoft_365') return t('sources.microsoft.connectionKind')
   if (connection.connectorId === 'github') return t('sources.github.installation')
   if (connection.connectorId === 'grok_subscription') return t('sources.grok.connectionKind')
   if (connection.connectorId === 'slack') return t('sources.slack.connectionKind')
@@ -304,6 +314,7 @@ function connectionKindLabel(connection: SourceConnection) {
 }
 
 function permissionDetailsLabel(connection: SourceConnection) {
+  if (connection.connectorId === 'microsoft_365') return t('sources.microsoft.permissionDetails')
   return connection.connectorId === 'github'
     ? t('sources.github.permissionDetails')
     : t('sources.workspace.permissionDetails')
@@ -311,6 +322,7 @@ function permissionDetailsLabel(connection: SourceConnection) {
 
 function deleteDescriptionKey(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return 'sources.workspace.disconnectDescription'
+  if (connection.connectorId === 'microsoft_365') return 'sources.microsoft.disconnectDescription'
   if (connection.connectorId === 'github') return 'sources.github.deleteDescription'
   if (connection.connectorId === 'slack') return 'sources.slack.disconnectDescription'
   return 'sources.deleteConfirmDescription'
@@ -323,6 +335,7 @@ function resourceIcon(resourceType: string) {
     folder: 'pi pi-folder',
     label: 'pi pi-tag',
     repository: 'pi pi-github',
+    mailbox: 'pi pi-envelope',
   }[resourceType] || 'pi pi-database'
 }
 
@@ -421,16 +434,23 @@ function capabilitySyncOperationId(
   return `${connection.id}:${operation}`
 }
 
-function capabilityName(capabilityId: string) {
+function capabilityName(capabilityId: string, connectorId?: string) {
+  if (connectorId === 'microsoft_365') {
+    return t(`sources.microsoft.capabilities.${capabilityId}.name`)
+  }
   return t(`sources.capabilities.${capabilityId}.name`)
 }
 
-function capabilityDescription(capabilityId: string) {
+function capabilityDescription(capabilityId: string, connectorId?: string) {
+  if (connectorId === 'microsoft_365') {
+    return t(`sources.microsoft.capabilities.${capabilityId}.description`)
+  }
   return t(`sources.capabilities.${capabilityId}.description`)
 }
 
 function capabilityStatusLabel(status?: string) {
   if (status === 'active') return t('sources.enabled')
+  if (status === 'permission_granted') return t('sources.microsoft.permissionGranted')
   if (status === 'reauthorization_required') return t('sources.reauthorize.title')
   if (status === 'attention') return t('sources.attention')
   return t('sources.notEnabled')
@@ -460,6 +480,8 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/drive.readonly': t('sources.scopes.drive'),
     'https://www.googleapis.com/auth/gmail.readonly': t('sources.scopes.gmail'),
     'https://www.googleapis.com/auth/gmail.compose': t('sources.scopes.gmailCompose'),
+    'Mail.Read': t('sources.scopes.microsoftMailRead'),
+    'Mail.ReadWrite': t('sources.scopes.microsoftMailReadWrite'),
     'chat:write': t('sources.scopes.slackChatWrite'),
     'channels:read': t('sources.scopes.slackChannelsRead'),
     'im:history': t('sources.scopes.slackImHistory'),
@@ -605,6 +627,10 @@ async function addConnection(connector: SourceConnector) {
     openWorkspaceAuthorization()
     return
   }
+  if (connector.id === 'microsoft_365') {
+    await beginMicrosoftAuthorization()
+    return
+  }
   if (connector.id === 'slack') {
     saving.value = true
     error.value = ''
@@ -634,6 +660,37 @@ async function addConnection(connector: SourceConnector) {
     } finally {
       saving.value = false
     }
+  }
+}
+
+async function beginMicrosoftAuthorization(
+  connection: SourceConnection | null = null,
+  capabilityId?: SourceCapabilityId,
+) {
+  saving.value = true
+  error.value = ''
+  try {
+    const capabilityIds = capabilityId ? [capabilityId as MicrosoftCapabilityId] : []
+    const result = await startMicrosoftAuthorization(capabilityIds, connection?.id)
+    window.location.assign(result.authorizationUrl)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+    saving.value = false
+  }
+}
+
+async function checkMicrosoftConnection(connection: SourceConnection) {
+  microsoftRefreshingId.value = connection.id
+  error.value = ''
+  try {
+    await refreshMicrosoftConnection(connection.id)
+    notice.value = t('sources.microsoft.healthPassed')
+    await load()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+    await load()
+  } finally {
+    microsoftRefreshingId.value = ''
   }
 }
 
@@ -707,6 +764,10 @@ function canAddConnection(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') {
     return connector.availability === 'available'
       && !connectionsByConnector.value.get('grok_subscription')?.length
+  }
+  if (connector.id === 'microsoft_365') {
+    return connector.availability === 'available'
+      && !connectionsByConnector.value.get('microsoft_365')?.length
   }
   return connector.availability === 'available'
 }
@@ -1198,6 +1259,7 @@ onMounted(async () => {
   document.addEventListener('pointerdown', handleDocumentClick)
   const params = new URLSearchParams(window.location.search)
   const workspaceResult = params.get('workspace')
+  const microsoftResult = params.get('microsoft')
   await load()
   const grokConnection = data.value?.connections.find(
     (connection) => connection.connectorId === 'grok_subscription',
@@ -1221,7 +1283,10 @@ onMounted(async () => {
   else if (workspaceResult === 'partial') error.value = t('sources.workspacePartial')
   else if (workspaceResult === 'denied') error.value = t('sources.googleDenied')
   else if (workspaceResult === 'failed' || workspaceResult === 'invalid') error.value = t('sources.googleFailed')
-  if (workspaceResult) window.history.replaceState({}, '', window.location.pathname)
+  if (microsoftResult === 'connected') notice.value = t('sources.microsoft.connected')
+  else if (microsoftResult === 'partial') error.value = t('sources.microsoft.partial')
+  else if (microsoftResult) error.value = t(`sources.microsoft.authorization.${microsoftResult}`)
+  if (workspaceResult || microsoftResult) window.history.replaceState({}, '', window.location.pathname)
 })
 
 onUnmounted(() => {
@@ -1853,6 +1918,8 @@ onUnmounted(() => {
       :draggable="false"
       :header="pendingDeleteConnection?.connectorId === 'google_workspace'
         ? t('sources.workspace.disconnectAccount')
+        : pendingDeleteConnection?.connectorId === 'microsoft_365'
+          ? t('sources.microsoft.disconnect')
         : t('sources.deleteConnection')"
       class="w-[calc(100vw-2rem)] sm:w-[min(32rem,calc(100vw-4rem))] my-auto"
       contentClass="!p-0 flex flex-col min-w-0 overflow-hidden"
@@ -1879,6 +1946,8 @@ onUnmounted(() => {
         <Button
           :label="pendingDeleteConnection?.connectorId === 'google_workspace'
             ? t('sources.workspace.disconnectAccount')
+            : pendingDeleteConnection?.connectorId === 'microsoft_365'
+              ? t('sources.microsoft.disconnect')
             : t('sources.deletePermanently')"
           icon="pi pi-trash"
           severity="danger"
@@ -2133,6 +2202,60 @@ onUnmounted(() => {
                 />
               </div>
 
+              <section
+                v-if="connection.connectorId === 'microsoft_365'"
+                class="mb-3 grid gap-3 rounded-xl border border-surface-200 bg-white p-3"
+              >
+                <div class="grid gap-2 text-xs sm:grid-cols-2">
+                  <div>
+                    <div class="text-surface-400">{{ t('sources.microsoft.tenant') }}</div>
+                    <div class="mt-1 break-all font-semibold text-surface-800">{{ connection.tenantId }}</div>
+                  </div>
+                  <div>
+                    <div class="text-surface-400">{{ t('sources.microsoft.member') }}</div>
+                    <div class="mt-1 break-all font-semibold text-surface-800">{{ connection.member?.displayName || connection.accountLabel }}</div>
+                    <div class="break-all text-surface-500">{{ connection.member?.entraObjectId }}</div>
+                  </div>
+                </div>
+                <Message
+                  v-if="connection.authorization?.state !== 'healthy'"
+                  severity="warn"
+                  :closable="false"
+                >
+                  <div class="font-semibold">{{ t(`sources.microsoft.authorization.${connection.authorization?.state || 'error'}`) }}</div>
+                  <div v-if="connection.authorization?.lastError" class="mt-1 text-xs">{{ connection.authorization.lastError }}</div>
+                </Message>
+                <div class="flex flex-wrap items-center justify-between gap-2 text-xs text-surface-500">
+                  <span>{{ t('sources.microsoft.lastChecked') }}: <strong>{{ formatDate(connection.authorization?.lastCheckedAt) }}</strong></span>
+                  <div v-if="isAdmin" class="flex flex-wrap gap-1">
+                    <Button
+                      :label="t('sources.microsoft.checkHealth')"
+                      icon="pi pi-refresh"
+                      severity="secondary"
+                      text
+                      size="small"
+                      :loading="microsoftRefreshingId === connection.id"
+                      @click="checkMicrosoftConnection(connection)"
+                    />
+                    <Button
+                      v-if="connection.authorization?.state !== 'healthy'"
+                      :label="t('sources.microsoft.reconnect')"
+                      icon="pi pi-external-link"
+                      severity="warn"
+                      text
+                      size="small"
+                      @click="beginMicrosoftAuthorization(connection)"
+                    />
+                  </div>
+                </div>
+                <details class="rounded-xl bg-surface-50 px-3 py-2 text-xs text-surface-500">
+                  <summary class="cursor-pointer font-semibold text-surface-700">{{ t('sources.microsoft.allDelegatedPermissions') }}</summary>
+                  <ul class="mb-0 mt-2 grid gap-1 pl-4">
+                    <li v-for="scope in connection.grantedScopes" :key="scope">{{ scopeLabel(scope) }}</li>
+                  </ul>
+                </details>
+              </section>
+
               <div
                 v-if="connection.connectorId === 'github'"
                 class="mb-3 rounded-xl border border-surface-200 bg-white p-3"
@@ -2350,9 +2473,9 @@ onUnmounted(() => {
                     <div class="min-w-0">
                       <div class="flex items-center gap-2">
                         <i :class="[resourceIcon(descriptor.resourceType), 'text-emerald-700']" />
-                        <h4 class="m-0 text-sm font-semibold text-surface-900">{{ capabilityName(descriptor.id) }}</h4>
+                        <h4 class="m-0 text-sm font-semibold text-surface-900">{{ capabilityName(descriptor.id, connection.connectorId) }}</h4>
                       </div>
-                      <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">{{ capabilityDescription(descriptor.id) }}</p>
+                      <p class="m-0 mt-1 text-xs leading-relaxed text-surface-500">{{ capabilityDescription(descriptor.id, connection.connectorId) }}</p>
                     </div>
                     <Tag
                       :value="capabilityStatusLabel(capabilityConfiguration(connection, descriptor)?.status)"
@@ -2557,6 +2680,33 @@ onUnmounted(() => {
                         size="small"
                         @click="toggleCapability(connection, descriptor.id, false)"
                       />
+                      <Button
+                        v-if="connection.connectorId === 'microsoft_365' && ['attention', 'reauthorization_required'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
+                        :label="t('sources.microsoft.grantPermission')"
+                        icon="pi pi-external-link"
+                        severity="warn"
+                        text
+                        size="small"
+                        @click="beginMicrosoftAuthorization(connection, descriptor.id)"
+                      />
+                      <Button
+                        v-else-if="connection.connectorId === 'microsoft_365' && capabilityConfiguration(connection, descriptor)?.status === 'disabled'"
+                        :label="t('sources.microsoft.enableCapability')"
+                        icon="pi pi-check-circle"
+                        severity="success"
+                        text
+                        size="small"
+                        @click="toggleCapability(connection, descriptor.id, true)"
+                      />
+                      <Button
+                        v-else-if="connection.connectorId === 'microsoft_365' && capabilityConfiguration(connection, descriptor)?.status === 'permission_granted'"
+                        :label="t('sources.microsoft.disableCapability')"
+                        icon="pi pi-minus-circle"
+                        severity="secondary"
+                        text
+                        size="small"
+                        @click="toggleCapability(connection, descriptor.id, false)"
+                      />
                     </div>
                   </template>
                   <Button
@@ -2568,6 +2718,16 @@ onUnmounted(() => {
                     size="small"
                     class="mt-3 w-full"
                     @click="openWorkspaceAuthorization(connection, descriptor.id)"
+                  />
+                  <Button
+                    v-else-if="isAdmin && connection.connectorId === 'microsoft_365'"
+                    :label="t('sources.microsoft.grantPermission')"
+                    icon="pi pi-external-link"
+                    severity="secondary"
+                    outlined
+                    size="small"
+                    class="mt-3 w-full"
+                    @click="beginMicrosoftAuthorization(connection, descriptor.id)"
                   />
                 </section>
               </div>
@@ -2583,7 +2743,11 @@ onUnmounted(() => {
                   @click="toggleConnection(connection)"
                 />
                 <Button
-                  :label="connection.connectorId === 'google_workspace' ? t('sources.workspace.disconnectAccount') : t('sources.deleteConnection')"
+                  :label="connection.connectorId === 'google_workspace'
+                    ? t('sources.workspace.disconnectAccount')
+                    : connection.connectorId === 'microsoft_365'
+                      ? t('sources.microsoft.disconnect')
+                      : t('sources.deleteConnection')"
                   icon="pi pi-trash"
                   severity="danger"
                   text

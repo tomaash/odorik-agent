@@ -220,6 +220,45 @@ the retry-enabled webhook worker defers its transactional context mutation until
 that reconciliation finishes so an older poll snapshot cannot overwrite a newer
 event.
 
+## Microsoft 365 connection foundation
+
+Microsoft 365 uses the server-side authorization-code flow against the
+`organizations` authority. Every request has an unguessable hashed state,
+encrypted PKCE verifier, S256 challenge, and OIDC nonce. The callback validates
+the ID-token signature, audience, issuer, nonce, tenant ID, and Entra object ID,
+then independently confirms that object with Microsoft Graph `/me`. A stable
+connection binds exactly one company, tenant, and member; another capability
+grant must return as that same identity.
+
+The identity connection requests only `openid profile email offline_access
+User.Read`. Outlook permissions are dynamic and separate:
+
+- mail evidence foundation: delegated `Mail.Read`;
+- draft foundation: delegated `Mail.ReadWrite`, which can create and modify a
+  draft but does not include `Mail.Send`; and
+- no Microsoft flow requests `Mail.Send`.
+
+Slice 11 records these grants as `permission_granted`, not `active`. This is an
+intentional correctness boundary: the permission and token lifecycle exist,
+but Outlook ingestion and the approval-gated draft executor do not become
+operational until Slice 12 proves their complete loops. An administrator can
+locally disable/re-enable an already granted capability without changing the
+tenant grant.
+
+Refresh responses atomically replace the encrypted refresh token and advance a
+credential revision. A concurrent refresh cannot overwrite a newer envelope.
+Manual health verification forces a rotation, calls `/me`, and rechecks the
+bound member. Consent denial, admin consent, Conditional Access, revoked grant,
+expired refresh, and tenant/member mismatch are persisted as distinct recovery
+states without exposing provider tokens or raw sign-in detail.
+
+Disconnect deletes Erik's encrypted credential and all local capability and
+context state. Microsoft does not offer a least-privilege endpoint for an app
+to delete its own delegated grant: Graph grant deletion requires powerful
+directory grant-management permission and an administrator role. Erik does not
+request that permission. A user or tenant administrator can additionally
+remove consent through Microsoft My Apps or Entra.
+
 ## Operations
 
 - `sources.list` is available to enabled members.

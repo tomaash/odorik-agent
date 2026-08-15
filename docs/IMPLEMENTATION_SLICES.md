@@ -17,7 +17,7 @@ The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
 CRM-specific customer intake are not platform priorities.
 
-## Current product position — 2026-08-14
+## Current product position — 2026-08-15
 
 The repository has proved more of the kernel than the historical numbering
 below suggests:
@@ -50,6 +50,20 @@ below suggests:
   Erik page or Slack converge the Slack card to the canonical receipt; clicking
   a stale-but-untampered card is an idempotent success, not a conflicting second
   action. Slack still has no executor of its own.
+- Gmail live acceptance is explicitly deferred while the existing Google
+  connection requires reauthorization; it remains a named acceptance debt and
+  does not block the Microsoft sequence.
+- Slice 11 is implemented in code: tenant/member-bound Microsoft OAuth uses
+  PKCE and validated OIDC identity, identity-only connection precedes separate
+  Outlook grants, rotating refresh tokens replace encrypted credentials, and
+  Sources exposes health, recovery, permissions, local capability controls,
+  and disconnect. Outlook grants remain honestly `permission_granted` until
+  Slice 12 supplies their operating loops.
+  Deployment and live acceptance are waiting on an Entra administrator: the
+  current `tholas@simpleway.cz` session can view registrations but receives 401
+  on new registration. The required registration is multi-tenant for work or
+  school accounts, has the canonical `/oauth/microsoft/callback` web redirect,
+  and configures delegated `User.Read`, `Mail.Read`, and `Mail.ReadWrite` only.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -441,7 +455,7 @@ The live Google Workspace connection is currently `reauthorization_required`,
 so Gmail proposal/approval acceptance remains an environment prerequisite, not
 an untested-code claim.
 
-### Slice 11: Microsoft 365 connection foundation
+### Slice 11: Microsoft 365 connection foundation — implemented in code
 
 **Usable outcome:** an administrator connects one Microsoft 365 account and can
 see exactly which tenant, member, delegated permissions, resources, and

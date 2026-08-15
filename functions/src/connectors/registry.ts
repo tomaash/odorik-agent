@@ -31,6 +31,11 @@ export const mailDraftScopes = [
   "https://www.googleapis.com/auth/gmail.compose",
 ] as const;
 
+export const microsoftMailScopes = ["Mail.Read"] as const;
+
+/** Graph's delegated Mail.ReadWrite grant can create drafts but cannot send mail. */
+export const microsoftMailDraftScopes = ["Mail.ReadWrite"] as const;
+
 /**
  * `chat:write` posts as the bot; `channels:read` lists channels so an administrator
  * can choose one. Neither grants any view of a conversation — H1 writes only.
@@ -143,6 +148,26 @@ export const googleWorkspaceCapabilityIds: readonly SourceCapabilityId[] = [
   "action.mail.draft.create",
 ] as const;
 
+export const microsoft365CapabilityIds = [
+  "context.mail.read_scoped",
+  "action.mail.draft.create",
+] as const;
+
+export const microsoft365Capabilities: Record<
+  typeof microsoft365CapabilityIds[number],
+  SourceCapabilityDescriptor
+> = {
+  "context.mail.read_scoped": {
+    ...sourceCapabilities["context.mail.read_scoped"],
+    resourceType: "mailbox",
+    requiredScopes: [...microsoftMailScopes],
+  },
+  "action.mail.draft.create": {
+    ...sourceCapabilities["action.mail.draft.create"],
+    requiredScopes: [...microsoftMailDraftScopes],
+  },
+};
+
 const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
   odorik: {
     id: "odorik",
@@ -168,6 +193,16 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
       sourceCapabilities["context.mail.read_scoped"],
       sourceCapabilities["action.mail.draft.create"],
     ],
+  },
+  microsoft_365: {
+    id: "microsoft_365",
+    name: "Microsoft 365",
+    description:
+      "One delegated Microsoft account with tenant-bound Outlook permissions granted separately.",
+    availability: "available",
+    // Slice 11 exposes honest permission readiness. The Outlook operating loops
+    // promote these grants from permission_granted to active in Slices 12/13.
+    capabilities: microsoft365CapabilityIds.map((id) => microsoft365Capabilities[id]),
   },
   github: {
     id: "github",

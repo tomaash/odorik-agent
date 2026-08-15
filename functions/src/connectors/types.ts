@@ -1,13 +1,14 @@
 export const connectorIds = [
   "odorik",
   "google_workspace",
+  "microsoft_365",
   "github",
   "grok_subscription",
   "slack",
 ] as const;
 
 export type ConnectorId = typeof connectorIds[number];
-export type ProviderId = "odorik" | "google" | "github" | "grok" | "slack";
+export type ProviderId = "odorik" | "google" | "microsoft" | "github" | "grok" | "slack";
 export type ConnectionStatus = "configuring" | "active" | "attention" | "disconnected";
 export type ResourceStatus = "enabled" | "disabled";
 export type ResourceAudience =
@@ -17,7 +18,26 @@ export type CapabilityStatus =
   | "active"
   | "attention"
   | "reauthorization_required"
+  | "permission_granted"
   | "disabled";
+
+export type OAuthAuthorizationState =
+  | "healthy"
+  | "consent_denied"
+  | "admin_consent_required"
+  | "conditional_access"
+  | "revoked"
+  | "refresh_expired"
+  | "tenant_mismatch"
+  | "error";
+
+export type OAuthRecoveryAction =
+  | "none"
+  | "retry"
+  | "ask_admin"
+  | "satisfy_policy"
+  | "reconnect"
+  | "choose_same_account";
 
 export type SyncOperationalPublicView = {
   health:
@@ -121,6 +141,18 @@ export type ConnectionPublicView = {
     | "none";
   uploadUrl?: string;
   accountLabel?: string;
+  member?: {
+    entraObjectId: string;
+    displayName: string;
+    userPrincipalName: string;
+  };
+  authorization?: {
+    state: OAuthAuthorizationState;
+    recoveryAction: OAuthRecoveryAction;
+    lastCheckedAt?: string | null;
+    lastErrorCode?: string | null;
+    lastError?: string | null;
+  };
   grantedScopes: string[];
   lastSyncAt?: string | null;
   lastObservedAt?: string | null;

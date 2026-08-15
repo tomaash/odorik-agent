@@ -1,7 +1,11 @@
 import { FieldValue, Timestamp } from "firebase-admin/firestore";
 import { TRPCError } from "@trpc/server";
 import { db, jsonSafe } from "../firestore.js";
-import { capabilityDescriptor, connectorCatalog } from "./registry.js";
+import {
+  capabilityDescriptor,
+  connectorCatalog,
+  microsoft365Capabilities,
+} from "./registry.js";
 import { decryptCredentials } from "./credentials.js";
 import { githubInstallationRoutingPath } from "./github.js";
 import {
@@ -154,7 +158,11 @@ export async function listSources(
         const safe = jsonSafe(capability.data()) as Record<string, unknown>;
         const capabilityStats = (safe.stats || {}) as Record<string, unknown>;
         const capabilityId = String(safe.capabilityId) as SourceCapabilityId;
-        const descriptor = capabilityDescriptor(capabilityId);
+        const descriptor = connectorId === "microsoft_365"
+          ? microsoft365Capabilities[
+            capabilityId as keyof typeof microsoft365Capabilities
+          ] || capabilityDescriptor(capabilityId)
+          : capabilityDescriptor(capabilityId);
         const capabilityResources = resources.filter(
           (resource) => resource.capabilityId === capabilityId,
         );
@@ -165,7 +173,9 @@ export async function listSources(
           grantedScopes: Array.isArray(safe.grantedScopes)
             ? safe.grantedScopes.map(String)
             : [],
-          requiredScopes: descriptor.requiredScopes,
+          requiredScopes: Array.isArray(safe.requiredScopes)
+            ? safe.requiredScopes.map(String)
+            : descriptor.requiredScopes,
           itemCount: Number(
             capabilityStats.itemCount
             || capabilityResources.reduce((sum, item) => sum + item.itemCount, 0),
@@ -180,7 +190,8 @@ export async function listSources(
           lastError: typeof capabilityStats.lastError === "string"
             ? capabilityStats.lastError
             : null,
-          sync: connectorSyncPublicState(capabilityStats, {
+          ...(connectorId !== "microsoft_365" ? {
+            sync: connectorSyncPublicState(capabilityStats, {
             ...([
               "context.calendar.read",
               "context.document.read",
@@ -188,7 +199,8 @@ export async function listSources(
             ].includes(capabilityId)
               ? { staleAfterMs: 75 * 60 * 1_000 }
               : {}),
-          }) as CapabilityConfigurationPublicView["sync"],
+            }) as CapabilityConfigurationPublicView["sync"],
+          } : {}),
           createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
           updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
         };
@@ -199,11 +211,15 @@ export async function listSources(
       connectorId,
       providerId: connectorId === "google_workspace"
         ? "google"
+        : connectorId === "microsoft_365"
+          ? "microsoft"
         : connectorId === "github"
           ? "github"
-          : connectorId === "grok_subscription"
+        : connectorId === "grok_subscription"
             ? "grok"
-            : "odorik",
+            : connectorId === "slack"
+              ? "slack"
+              : "odorik",
       providerAccountId: typeof data.providerAccountId === "string"
         ? data.providerAccountId
         : undefined,
@@ -213,6 +229,36 @@ export async function listSources(
       authKind: (auth.kind || "basic_upload") as ConnectionPublicView["authKind"],
       credentialMode: (auth.credentialMode || "none") as ConnectionPublicView["credentialMode"],
       accountLabel: typeof data.accountLabel === "string" ? data.accountLabel : undefined,
+      member: connectorId === "microsoft_365" && data.member && typeof data.member === "object"
+        ? {
+          entraObjectId: String((data.member as Record<string, unknown>).entraObjectId || ""),
+          displayName: String((data.member as Record<string, unknown>).displayName || ""),
+          userPrincipalName: String(
+            (data.member as Record<string, unknown>).userPrincipalName || "",
+          ),
+        }
+        : undefined,
+      authorization: connectorId === "microsoft_365"
+        && data.authorization
+        && typeof data.authorization === "object"
+        ? {
+          state: String(
+            (data.authorization as Record<string, unknown>).state || "error",
+          ) as NonNullable<ConnectionPublicView["authorization"]>["state"],
+          recoveryAction: String(
+            (data.authorization as Record<string, unknown>).recoveryAction || "retry",
+          ) as NonNullable<ConnectionPublicView["authorization"]>["recoveryAction"],
+          lastCheckedAt: typeof (data.authorization as Record<string, unknown>).lastCheckedAt === "string"
+            ? (data.authorization as Record<string, unknown>).lastCheckedAt as string
+            : null,
+          lastErrorCode: typeof (data.authorization as Record<string, unknown>).lastErrorCode === "string"
+            ? (data.authorization as Record<string, unknown>).lastErrorCode as string
+            : null,
+          lastError: typeof (data.authorization as Record<string, unknown>).lastError === "string"
+            ? (data.authorization as Record<string, unknown>).lastError as string
+            : null,
+        }
+        : undefined,
       uploadUrl: connectorId === "odorik"
         ? odorikUploadUrl(companyId, document.id)
         : undefined,
@@ -389,6 +435,11 @@ export async function setConnectionStatus(
   if (snapshot.data()?.connectorId === "google_workspace") {
     throw new Error(
       "Google Workspace account status is managed through authorization and revocation",
+    );
+  }
+  if (snapshot.data()?.connectorId === "microsoft_365") {
+    throw new Error(
+      "Microsoft 365 account status is managed through authorization and disconnect",
     );
   }
   if (snapshot.data()?.connectorId === "grok_subscription") {
@@ -934,11 +985,17 @@ export async function setCapabilityStatus(
   },
   database: FirebaseFirestore.Firestore = db,
 ): Promise<void> {
-  const descriptor = capabilityDescriptor(input.capabilityId);
   const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
+  const connectionSnapshot = await connectionRef.get();
+  const connectorId = connectionSnapshot.data()?.connectorId;
+  const descriptor = connectorId === "microsoft_365"
+    ? microsoft365Capabilities[
+      input.capabilityId as keyof typeof microsoft365Capabilities
+    ] || capabilityDescriptor(input.capabilityId)
+    : capabilityDescriptor(input.capabilityId);
   const capabilityRef = connectionRef.collection("capabilities").doc(descriptor.serviceId);
   const [connection, capability, resources, contextItems] = await Promise.all([
-    connectionRef.get(),
+    Promise.resolve(connectionSnapshot),
     capabilityRef.get(),
     connectionRef.collection("resources")
       .where("capabilityId", "==", input.capabilityId)
@@ -950,20 +1007,29 @@ export async function setCapabilityStatus(
   ]);
   if (
     !connection.exists
-    || connection.data()?.connectorId !== "google_workspace"
+    || !["google_workspace", "microsoft_365"].includes(String(connection.data()?.connectorId))
     || !capability.exists
   ) {
-    throw new Error("Workspace capability not found");
+    throw new Error("OAuth capability not found");
   }
   if (
     input.enabled
-    && !["active", "disabled"].includes(String(capability.data()?.status))
+    && !["active", "permission_granted", "disabled"].includes(String(capability.data()?.status))
   ) {
-    throw new Error("Reconnect Google Workspace before enabling this service");
+    throw new Error("Reconnect the provider before enabling this service");
+  }
+  if (
+    input.enabled
+    && connectorId === "microsoft_365"
+    && connection.data()?.authorization?.state !== "healthy"
+  ) {
+    throw new Error("Reconnect Microsoft 365 before enabling this capability");
   }
   await commitInChunks([
     (batch) => batch.set(capabilityRef, {
-      status: input.enabled ? "active" : "disabled",
+      status: input.enabled
+        ? connectorId === "microsoft_365" ? "permission_granted" : "active"
+        : "disabled",
       disabledBy: input.enabled ? FieldValue.delete() : input.actorUid,
       disabledAt: input.enabled ? FieldValue.delete() : FieldValue.serverTimestamp(),
       updatedBy: input.actorUid,
@@ -995,12 +1061,14 @@ export async function setCapabilityStatus(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.delete(context.ref)) : []),
   ], database);
-  await refreshConnectorSyncAggregates({
-    companyId: input.companyId,
-    connectionId: input.connectionId,
-    capabilityId: input.capabilityId,
-    serviceId: descriptor.serviceId,
-  }, { database });
+  if (connectorId !== "microsoft_365") {
+    await refreshConnectorSyncAggregates({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      capabilityId: input.capabilityId,
+      serviceId: descriptor.serviceId,
+    }, { database });
+  }
 }
 
 export type GoogleConnectorResetResult = {

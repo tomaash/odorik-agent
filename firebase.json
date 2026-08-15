@@ -52,6 +52,13 @@
           }
         },
         {
+          "source": "/oauth/microsoft/callback",
+          "function": {
+            "functionId": "microsoftOAuthCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/oauth/slack/callback",
           "function": {
             "functionId": "slackOAuthCallback",
@@ -134,6 +141,13 @@
           "source": "/oauth/google/callback",
           "function": {
             "functionId": "googleOAuthCallback",
+            "region": "europe-west3"
+          }
+        },
+        {
+          "source": "/oauth/microsoft/callback",
+          "function": {
+            "functionId": "microsoftOAuthCallback",
             "region": "europe-west3"
           }
         },

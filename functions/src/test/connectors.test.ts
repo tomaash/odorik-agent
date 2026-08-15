@@ -210,6 +210,14 @@ test("source public views retain operational state and exclude credentials", asy
         ],
       },
       {
+        id: "microsoft_365",
+        availability: "available",
+        capabilities: [
+          "context.mail.read_scoped",
+          "action.mail.draft.create",
+        ],
+      },
+      {
         id: "github",
         availability: "available",
         capabilities: ["context.github.issue.read"],

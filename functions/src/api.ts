@@ -7,6 +7,8 @@ import {
   githubAppPrivateKey,
   googleConnectorClientId,
   googleConnectorClientSecret,
+  microsoftConnectorClientId,
+  microsoftConnectorClientSecret,
   qdrantApiKey,
   qdrantUrl,
 } from "./router.js";
@@ -35,6 +37,8 @@ export const api = onRequest(
       connectorCredentialKey,
       googleConnectorClientId,
       googleConnectorClientSecret,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
       slackConnectorClientId,
       slackConnectorClientSecret,
       githubAppPrivateKey,
