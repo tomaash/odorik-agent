@@ -36,6 +36,12 @@ function oauthDependencies(
   memory: MemoryFirestore,
   tokenBody: Record<string, unknown>,
   calls: Array<{ url: string; body: string }> = [],
+  member: Record<string, unknown> = {
+    id: objectId,
+    displayName: "Ada Lovelace",
+    mail: "ada@acme.example",
+    userPrincipalName: "ada@acme.example",
+  },
 ) {
   return {
     database: memory.asFirestore(),
@@ -48,12 +54,7 @@ function oauthDependencies(
       calls.push({ url: value, body: String(init?.body || "") });
       if (value.includes("/token")) return jsonResponse(tokenBody);
       if (value.startsWith("https://graph.microsoft.com/v1.0/me")) {
-        return jsonResponse({
-          id: objectId,
-          displayName: "Ada Lovelace",
-          mail: "ada@acme.example",
-          userPrincipalName: "ada@acme.example",
-        });
+        return jsonResponse(member);
       }
       throw new Error(`Unexpected Microsoft request ${value}`);
     }) as typeof fetch,
@@ -103,7 +104,7 @@ test("Microsoft identity authorization uses PKCE, nonce, offline access, and no 
   const { url, state } = await start(memory);
   assert.equal(
     url.origin + url.pathname,
-    "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize",
+    "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
   );
   assert.equal(url.searchParams.get("code_challenge_method"), "S256");
   assert.ok((url.searchParams.get("code_challenge") || "").length >= 40);
@@ -131,6 +132,53 @@ test("Microsoft identity authorization uses PKCE, nonce, offline access, and no 
   assert.equal(memory.list(`${connectionPath}/capabilities`).length, 0);
   assert.equal(JSON.stringify(connection).includes("access-initial"), false);
   assert.equal(JSON.stringify(connection).includes("refresh-initial"), false);
+});
+
+test("personal Microsoft accounts use the consumer tenant identity and may omit userPrincipalName", async () => {
+  const memory = new MemoryFirestore();
+  const consumerTenantId = "9188040d-6c67-4c5b-b112-36a304b66dad";
+  const { state } = await start(memory);
+  const result = await completeMicrosoftAuthorization({
+    code: "consumer-authorization-code",
+    state,
+    clientId,
+    clientSecret,
+    credentialKey,
+    dependencies: {
+      database: memory.asFirestore(),
+      validateIdToken: async () => ({
+        tenantId: consumerTenantId,
+        objectId,
+        subject: "consumer-pairwise-subject",
+      }),
+      fetch: (async (url: string | URL | Request) => {
+        const value = String(url);
+        if (value.includes("/token")) return jsonResponse({
+          access_token: "consumer-access",
+          refresh_token: "consumer-refresh",
+          id_token: "consumer-id-token",
+          expires_in: 3600,
+          scope: "openid profile email offline_access User.Read",
+        });
+        if (value.startsWith("https://graph.microsoft.com/v1.0/me")) return jsonResponse({
+          id: objectId,
+          displayName: "Tomáš Holas",
+          mail: "tomas.holas@gmail.com",
+        });
+        throw new Error(`Unexpected Microsoft request ${value}`);
+      }) as typeof fetch,
+    },
+  });
+  const connection = memory.read(
+    `companies/${companyId}/connections/${result.connectionId}`,
+  );
+  assert.equal(result.connectionId, microsoftConnectionId(consumerTenantId, objectId));
+  assert.equal(connection?.tenantId, consumerTenantId);
+  assert.equal(connection?.accountLabel, "tomas.holas@gmail.com");
+  assert.equal(
+    (connection?.member as Record<string, unknown>)?.userPrincipalName,
+    "tomas.holas@gmail.com",
+  );
 });
 
 test("Outlook permissions are incremental, provider-specific, and never include Mail.Send", async () => {
@@ -168,6 +216,10 @@ test("Outlook permissions are incremental, provider-specific, and never include 
   assert.deepEqual(capability?.requiredScopes, ["Mail.ReadWrite"]);
   assert.equal(JSON.stringify(memory.read(connectionPath)).includes("Mail.Send"), false);
   const tokenRequest = new URLSearchParams(calls.find((call) => call.url.includes("/token"))?.body);
+  assert.equal(
+    new URL(String(calls.find((call) => call.url.includes("/token"))?.url)).pathname,
+    "/common/oauth2/v2.0/token",
+  );
   assert.ok(tokenRequest.get("code_verifier"));
 
   await setCapabilityStatus({
@@ -283,7 +335,7 @@ test("Microsoft failures map to explicit recovery states", () => {
   );
 });
 
-test("the same Entra identity remains isolated by company and disconnect deletes local tokens", async () => {
+test("the same Microsoft identity remains isolated by company and disconnect deletes local tokens", async () => {
   const first = new MemoryFirestore();
   const firstIdentity = await completeIdentity(first);
   const firstConnectionPath = `companies/${companyId}/connections/${firstIdentity.connectionId}`;

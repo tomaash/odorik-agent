@@ -59,11 +59,12 @@ below suggests:
   Sources exposes health, recovery, permissions, local capability controls,
   and disconnect. Outlook grants remain honestly `permission_granted` until
   Slice 12 supplies their operating loops.
-  Deployment and live acceptance are waiting on an Entra administrator: the
-  current `tholas@simpleway.cz` session can view registrations but receives 401
-  on new registration. The required registration is multi-tenant for work or
-  school accounts, has the canonical `/oauth/microsoft/callback` web redirect,
-  and configures delegated `User.Read`, `Mail.Read`, and `Mail.ReadWrite` only.
+  The registration now lives in the Agent Erik-controlled Entra tenant, has the
+  canonical `/oauth/microsoft/callback` web redirect, and configures delegated
+  `User.Read`, `Mail.Read`, and `Mail.ReadWrite` only. It accepts organizational
+  and personal Microsoft accounts so development and dogfood are not blocked by
+  a customer's app-registration policy. Customer-tenant consent policy remains
+  authoritative whenever a customer identity is connected.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced

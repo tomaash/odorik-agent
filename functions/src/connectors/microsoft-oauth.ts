@@ -29,7 +29,10 @@ export const microsoftIdentityScopes = [
 
 export const microsoftAuthorizationLifetimeMs = 60 * 60 * 1_000;
 const refreshSkewMs = 60_000;
-const organizationsAuthority = "https://login.microsoftonline.com/organizations";
+// `common` accepts both organizational Entra identities and personal Microsoft
+// accounts. The validated `tid` + `oid` pair still provides the isolation key;
+// personal accounts use Microsoft's well-known consumer tenant ID.
+const commonAuthority = "https://login.microsoftonline.com/common";
 const tenantIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const microsoftJwks = createRemoteJWKSet(
   new URL("https://login.microsoftonline.com/common/discovery/v2.0/keys"),
@@ -307,7 +310,7 @@ export async function createMicrosoftAuthorization(input: {
   });
   if (loginHint) query.set("login_hint", loginHint);
   return {
-    authorizationUrl: `${organizationsAuthority}/oauth2/v2.0/authorize?${query.toString()}`,
+    authorizationUrl: `${commonAuthority}/oauth2/v2.0/authorize?${query.toString()}`,
   };
 }
 
@@ -380,7 +383,7 @@ export async function completeMicrosoftAuthorization(input: {
   if (!pkce.verifier || !pkce.nonce) {
     throw new Error("The Microsoft PKCE authorization state is incomplete");
   }
-  const response = await request(`${organizationsAuthority}/oauth2/v2.0/token`, {
+  const response = await request(`${commonAuthority}/oauth2/v2.0/token`, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
@@ -421,12 +424,10 @@ export async function completeMicrosoftAuthorization(input: {
   });
   const member = await microsoftGraphMember(tokenBody.access_token, request);
   if (!member.id || member.id.toLocaleLowerCase() !== identity.objectId.toLocaleLowerCase()) {
-    throw new Error("Microsoft Graph member did not match the authenticated Entra identity");
+    throw new Error("Microsoft Graph member did not match the authenticated Microsoft identity");
   }
   const accountLabel = member.mail || member.userPrincipalName;
-  if (!accountLabel || !member.userPrincipalName) {
-    throw new Error("Microsoft did not return a stable work-account label");
-  }
+  if (!accountLabel) throw new Error("Microsoft did not return a stable account label");
 
   const companyId = String(stateData.companyId);
   const connectionId = microsoftConnectionId(identity.tenantId, identity.objectId);
@@ -493,12 +494,12 @@ export async function completeMicrosoftAuthorization(input: {
     providerId: "microsoft",
     providerAccountId: `${identity.tenantId}:${identity.objectId}`,
     tenantId: identity.tenantId,
-    displayName: "Microsoft 365",
+    displayName: "Microsoft",
     accountLabel,
     member: {
       entraObjectId: identity.objectId,
       displayName: member.displayName || accountLabel,
-      userPrincipalName: member.userPrincipalName,
+      userPrincipalName: member.userPrincipalName || accountLabel,
     },
     status: missingCapabilityIds.length ? "attention" : "active",
     reauthorizationRequired: false,

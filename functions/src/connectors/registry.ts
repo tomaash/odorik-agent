@@ -196,9 +196,9 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
   },
   microsoft_365: {
     id: "microsoft_365",
-    name: "Microsoft 365",
+    name: "Microsoft",
     description:
-      "One delegated Microsoft account with tenant-bound Outlook permissions granted separately.",
+      "One organizational or personal Microsoft account with Outlook permissions granted separately.",
     availability: "available",
     // Slice 11 exposes honest permission readiness. The Outlook operating loops
     // promote these grants from permission_granted to active in Slices 12/13.

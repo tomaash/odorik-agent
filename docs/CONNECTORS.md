@@ -220,15 +220,18 @@ the retry-enabled webhook worker defers its transactional context mutation until
 that reconciliation finishes so an older poll snapshot cannot overwrite a newer
 event.
 
-## Microsoft 365 connection foundation
+## Microsoft connection foundation
 
-Microsoft 365 uses the server-side authorization-code flow against the
-`organizations` authority. Every request has an unguessable hashed state,
+Microsoft uses the server-side authorization-code flow against the `common`
+authority so the same connector supports organizational Entra identities and
+personal Microsoft accounts. Every request has an unguessable hashed state,
 encrypted PKCE verifier, S256 challenge, and OIDC nonce. The callback validates
-the ID-token signature, audience, issuer, nonce, tenant ID, and Entra object ID,
-then independently confirms that object with Microsoft Graph `/me`. A stable
-connection binds exactly one company, tenant, and member; another capability
-grant must return as that same identity.
+the ID-token signature, audience, issuer, nonce, tenant ID, and Microsoft object
+ID, then independently confirms that object with Microsoft Graph `/me`. A
+stable connection binds exactly one company, tenant, and member; another
+capability grant must return as that same identity. Personal accounts remain
+isolated under Microsoft's consumer tenant ID just like organizational accounts
+are isolated under their Entra tenant ID.
 
 The identity connection requests only `openid profile email offline_access
 User.Read`. Outlook permissions are dynamic and separate:
