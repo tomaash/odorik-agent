@@ -53,6 +53,9 @@ function oauthDependencies(
       const value = String(url);
       calls.push({ url: value, body: String(init?.body || "") });
       if (value.includes("/token")) return jsonResponse(tokenBody);
+      if (value === "https://graph.microsoft.com/oidc/userinfo") {
+        return jsonResponse({ sub: "pairwise-subject" });
+      }
       if (value.startsWith("https://graph.microsoft.com/v1.0/me")) {
         return jsonResponse(member);
       }
@@ -127,6 +130,7 @@ test("Microsoft identity authorization uses PKCE, nonce, offline access, and no 
   assert.equal(result.connectionId, microsoftConnectionId(tenantId, objectId));
   assert.equal(connection?.tenantId, tenantId);
   assert.equal((connection?.member as Record<string, unknown>)?.entraObjectId, objectId);
+  assert.equal((connection?.member as Record<string, unknown>)?.graphUserId, objectId);
   assert.equal((connection?.authorization as Record<string, unknown>)?.state, "healthy");
   assert.equal(connection?.status, "active");
   assert.equal(memory.list(`${connectionPath}/capabilities`).length, 0);
@@ -137,6 +141,7 @@ test("Microsoft identity authorization uses PKCE, nonce, offline access, and no 
 test("personal Microsoft accounts use the consumer tenant identity and may omit userPrincipalName", async () => {
   const memory = new MemoryFirestore();
   const consumerTenantId = "9188040d-6c67-4c5b-b112-36a304b66dad";
+  const graphUserId = "consumer-graph-user-id";
   const { state } = await start(memory);
   const result = await completeMicrosoftAuthorization({
     code: "consumer-authorization-code",
@@ -160,8 +165,11 @@ test("personal Microsoft accounts use the consumer tenant identity and may omit 
           expires_in: 3600,
           scope: "openid profile email offline_access User.Read",
         });
+        if (value === "https://graph.microsoft.com/oidc/userinfo") {
+          return jsonResponse({ sub: "consumer-pairwise-subject" });
+        }
         if (value.startsWith("https://graph.microsoft.com/v1.0/me")) return jsonResponse({
-          id: objectId,
+          id: graphUserId,
           displayName: "Tomáš Holas",
           mail: "tomas.holas@gmail.com",
         });
@@ -175,10 +183,83 @@ test("personal Microsoft accounts use the consumer tenant identity and may omit 
   assert.equal(result.connectionId, microsoftConnectionId(consumerTenantId, objectId));
   assert.equal(connection?.tenantId, consumerTenantId);
   assert.equal(connection?.accountLabel, "tomas.holas@gmail.com");
+  assert.equal((connection?.member as Record<string, unknown>)?.entraObjectId, objectId);
+  assert.equal((connection?.member as Record<string, unknown>)?.graphUserId, graphUserId);
   assert.equal(
     (connection?.member as Record<string, unknown>)?.userPrincipalName,
     "tomas.holas@gmail.com",
   );
+
+  await refreshMicrosoftConnection({
+    companyId,
+    connectionId: result.connectionId,
+    clientId,
+    clientSecret,
+    credentialKey,
+    dependencies: {
+      database: memory.asFirestore(),
+      fetch: (async (url: string | URL | Request) => {
+        const value = String(url);
+        if (value.includes("/token")) return jsonResponse({
+          access_token: "consumer-refreshed-access",
+          refresh_token: "consumer-refreshed-token",
+          expires_in: 3600,
+          scope: "openid profile email offline_access User.Read",
+        });
+        if (value.startsWith("https://graph.microsoft.com/v1.0/me")) return jsonResponse({
+          id: graphUserId,
+          displayName: "Tomáš Holas",
+          mail: "tomas.holas@gmail.com",
+        });
+        throw new Error(`Unexpected Microsoft request ${value}`);
+      }) as typeof fetch,
+    },
+  });
+  const refreshed = memory.read(
+    `companies/${companyId}/connections/${result.connectionId}`,
+  );
+  assert.equal((refreshed?.member as Record<string, unknown>)?.entraObjectId, objectId);
+  assert.equal((refreshed?.member as Record<string, unknown>)?.graphUserId, graphUserId);
+});
+
+test("Microsoft rejects an access token whose OIDC subject differs from the ID token", async () => {
+  const memory = new MemoryFirestore();
+  const { state } = await start(memory);
+  await assert.rejects(() => completeMicrosoftAuthorization({
+    code: "mixed-subject-code",
+    state,
+    clientId,
+    clientSecret,
+    credentialKey,
+    dependencies: {
+      ...oauthDependencies(memory, {
+        access_token: "mixed-access",
+        refresh_token: "mixed-refresh",
+        id_token: "mixed-id-token",
+        expires_in: 3600,
+        scope: "openid profile email offline_access User.Read",
+      }),
+      fetch: (async (url: string | URL | Request) => {
+        const value = String(url);
+        if (value.includes("/token")) return jsonResponse({
+          access_token: "mixed-access",
+          refresh_token: "mixed-refresh",
+          id_token: "mixed-id-token",
+          expires_in: 3600,
+          scope: "openid profile email offline_access User.Read",
+        });
+        if (value === "https://graph.microsoft.com/oidc/userinfo") {
+          return jsonResponse({ sub: "different-pairwise-subject" });
+        }
+        if (value.startsWith("https://graph.microsoft.com/v1.0/me")) return jsonResponse({
+          id: objectId,
+          displayName: "Ada Lovelace",
+          mail: "ada@acme.example",
+        });
+        throw new Error(`Unexpected Microsoft request ${value}`);
+      }) as typeof fetch,
+    },
+  }), /subject did not match/);
 });
 
 test("Outlook permissions are incremental, provider-specific, and never include Mail.Send", async () => {

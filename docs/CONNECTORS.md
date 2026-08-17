@@ -226,12 +226,16 @@ Microsoft uses the server-side authorization-code flow against the `common`
 authority so the same connector supports organizational Entra identities and
 personal Microsoft accounts. Every request has an unguessable hashed state,
 encrypted PKCE verifier, S256 challenge, and OIDC nonce. The callback validates
-the ID-token signature, audience, issuer, nonce, tenant ID, and Microsoft object
-ID, then independently confirms that object with Microsoft Graph `/me`. A
-stable connection binds exactly one company, tenant, and member; another
-capability grant must return as that same identity. Personal accounts remain
-isolated under Microsoft's consumer tenant ID just like organizational accounts
-are isolated under their Entra tenant ID.
+the ID-token signature, audience, issuer, nonce, tenant ID, Microsoft object ID,
+and pairwise subject. It independently calls Graph's OIDC UserInfo endpoint and
+requires its subject to match the ID token before accepting the Graph profile.
+A stable connection binds exactly one company, tenant, OIDC subject, and Graph
+member; another capability grant must return as that same identity. Personal
+accounts remain isolated under Microsoft's consumer tenant ID just like
+organizational accounts are isolated under their Entra tenant ID. Their Graph
+profile ID is pinned separately because consumer Graph and Entra can expose
+different identifier namespaces; organizational profiles additionally require
+Graph `/me.id` to equal the Entra object ID.
 
 The identity connection requests only `openid profile email offline_access
 User.Read`. Outlook permissions are dynamic and separate:
@@ -251,7 +255,7 @@ tenant grant.
 Refresh responses atomically replace the encrypted refresh token and advance a
 credential revision. A concurrent refresh cannot overwrite a newer envelope.
 Manual health verification forces a rotation, calls `/me`, and rechecks the
-bound member. Consent denial, admin consent, Conditional Access, revoked grant,
+pinned Graph member. Consent denial, admin consent, Conditional Access, revoked grant,
 expired refresh, and tenant/member mismatch are persisted as distinct recovery
 states without exposing provider tokens or raw sign-in detail.
 

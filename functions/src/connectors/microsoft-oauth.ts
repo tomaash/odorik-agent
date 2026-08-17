@@ -33,6 +33,7 @@ const refreshSkewMs = 60_000;
 // accounts. The validated `tid` + `oid` pair still provides the isolation key;
 // personal accounts use Microsoft's well-known consumer tenant ID.
 const commonAuthority = "https://login.microsoftonline.com/common";
+const microsoftConsumerTenantId = "9188040d-6c67-4c5b-b112-36a304b66dad";
 const tenantIdPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const microsoftJwks = createRemoteJWKSet(
   new URL("https://login.microsoftonline.com/common/discovery/v2.0/keys"),
@@ -70,6 +71,10 @@ type MicrosoftMember = {
   displayName?: string;
   mail?: string | null;
   userPrincipalName?: string;
+};
+
+type MicrosoftUserInfo = {
+  sub?: string;
 };
 
 export type MicrosoftAuthorizationIssue = {
@@ -336,6 +341,25 @@ async function microsoftGraphMember(
   return body;
 }
 
+async function microsoftGraphUserInfo(
+  accessToken: string,
+  request: typeof fetch,
+): Promise<MicrosoftUserInfo> {
+  const response = await request("https://graph.microsoft.com/oidc/userinfo", {
+    headers: { authorization: `Bearer ${accessToken}` },
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = await response.json() as MicrosoftUserInfo & { error?: { message?: string } };
+  if (!response.ok) {
+    throw new MicrosoftGraphError(
+      response.status,
+      response.headers.get("www-authenticate") || "",
+      body.error?.message || "unknown error",
+    );
+  }
+  return body;
+}
+
 class MicrosoftGraphError extends Error {
   constructor(
     readonly status: number,
@@ -422,8 +446,20 @@ export async function completeMicrosoftAuthorization(input: {
     clientId: input.clientId,
     nonce: pkce.nonce,
   });
-  const member = await microsoftGraphMember(tokenBody.access_token, request);
-  if (!member.id || member.id.toLocaleLowerCase() !== identity.objectId.toLocaleLowerCase()) {
+  const [member, userInfo] = await Promise.all([
+    microsoftGraphMember(tokenBody.access_token, request),
+    microsoftGraphUserInfo(tokenBody.access_token, request),
+  ]);
+  if (!userInfo.sub || userInfo.sub !== identity.subject) {
+    throw new Error("Microsoft Graph subject did not match the authenticated Microsoft identity");
+  }
+  const isConsumerIdentity = identity.tenantId.toLocaleLowerCase()
+    === microsoftConsumerTenantId;
+  if (
+    !member.id
+    || (!isConsumerIdentity
+      && member.id.toLocaleLowerCase() !== identity.objectId.toLocaleLowerCase())
+  ) {
     throw new Error("Microsoft Graph member did not match the authenticated Microsoft identity");
   }
   const accountLabel = member.mail || member.userPrincipalName;
@@ -498,6 +534,7 @@ export async function completeMicrosoftAuthorization(input: {
     accountLabel,
     member: {
       entraObjectId: identity.objectId,
+      graphUserId: member.id,
       displayName: member.displayName || accountLabel,
       userPrincipalName: member.userPrincipalName || accountLabel,
     },
@@ -786,8 +823,11 @@ export async function refreshMicrosoftConnection(input: {
   const refreshed = await refreshMicrosoftCredential({ ...input, force: true });
   try {
     const member = await microsoftGraphMember(refreshed.accessToken, request);
-    const expectedObjectId = String(refreshed.connection.data()?.member?.entraObjectId || "");
-    if (!member.id || member.id.toLocaleLowerCase() !== expectedObjectId.toLocaleLowerCase()) {
+    const storedMember = refreshed.connection.data()?.member;
+    const expectedGraphUserId = String(
+      storedMember?.graphUserId || storedMember?.entraObjectId || "",
+    );
+    if (!member.id || member.id.toLocaleLowerCase() !== expectedGraphUserId.toLocaleLowerCase()) {
       const issue: MicrosoftAuthorizationIssue = {
         state: "tenant_mismatch",
         recoveryAction: "choose_same_account",
@@ -799,7 +839,8 @@ export async function refreshMicrosoftConnection(input: {
     }
     await refreshed.connection.ref.set({
       member: {
-        entraObjectId: member.id,
+        entraObjectId: storedMember?.entraObjectId || member.id,
+        graphUserId: member.id,
         displayName: member.displayName || member.userPrincipalName || member.id,
         userPrincipalName: member.userPrincipalName || member.mail || member.id,
       },
