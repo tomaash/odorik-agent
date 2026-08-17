@@ -20,7 +20,16 @@ import {
   syncSlackApprovalOutcome,
 } from "./chat/slack-interactions.js";
 import { productionAppOrigin } from "./connectors/google-oauth-return.js";
-import { connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl } from "./router.js";
+import {
+  connectorCredentialKey,
+  geminiApiKey,
+  googleConnectorClientId,
+  googleConnectorClientSecret,
+  microsoftConnectorClientId,
+  microsoftConnectorClientSecret,
+  qdrantApiKey,
+  qdrantUrl,
+} from "./router.js";
 
 export const slackSigningSecret = defineSecret("SLACK_SIGNING_SECRET");
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
@@ -194,7 +203,16 @@ export const processSlackApproval = onDocumentCreated(
     maxInstances: 5,
     retry: false,
     serviceAccount: runtimeServiceAccount,
-    secrets: [connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl],
+    secrets: [
+      connectorCredentialKey,
+      geminiApiKey,
+      qdrantApiKey,
+      qdrantUrl,
+      googleConnectorClientId,
+      googleConnectorClientSecret,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
   },
   async (event) => {
     try {

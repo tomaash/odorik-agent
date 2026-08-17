@@ -911,7 +911,7 @@ export async function authorizedMicrosoftCapability(
   if (
     !capability.exists
     || capability.data()?.capabilityId !== capabilityId
-    || !["permission_granted", "active"].includes(String(capability.data()?.status))
+    || !["permission_granted", "active", "attention"].includes(String(capability.data()?.status))
   ) throw new Error(`Microsoft ${descriptor.serviceId} permission is not enabled`);
   return refreshMicrosoftCredential({
     ...input,

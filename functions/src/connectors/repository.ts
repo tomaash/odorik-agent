@@ -190,17 +190,21 @@ export async function listSources(
           lastError: typeof capabilityStats.lastError === "string"
             ? capabilityStats.lastError
             : null,
-          ...(connectorId !== "microsoft_365" ? {
-            sync: connectorSyncPublicState(capabilityStats, {
-            ...([
-              "context.calendar.read",
-              "context.document.read",
-              "context.github.issue.read",
-            ].includes(capabilityId)
-              ? { staleAfterMs: 75 * 60 * 1_000 }
-              : {}),
-            }) as CapabilityConfigurationPublicView["sync"],
-          } : {}),
+          ...(
+            connectorId !== "microsoft_365"
+            || capabilityId === "context.mail.read_scoped"
+              ? {
+                sync: connectorSyncPublicState(capabilityStats, {
+                  ...([
+                    "context.calendar.read",
+                    "context.document.read",
+                    "context.github.issue.read",
+                  ].includes(capabilityId)
+                    ? { staleAfterMs: 75 * 60 * 1_000 }
+                    : {}),
+                }) as CapabilityConfigurationPublicView["sync"],
+              } : {}
+          ),
           createdAt: typeof safe.createdAt === "string" ? safe.createdAt : null,
           updatedAt: typeof safe.updatedAt === "string" ? safe.updatedAt : null,
         };
@@ -635,7 +639,7 @@ export async function deleteSourceConnection(
   providerAccessRevoked: boolean | null;
 }> {
   const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
-  const [connection, capabilities, resources, contextItems, calls] = await Promise.all([
+  const [connection, capabilities, resources, contextItems, calls, microsoftSubscriptions, microsoftNotifications] = await Promise.all([
     connectionRef.get(),
     connectionRef.collection("capabilities").get(),
     connectionRef.collection("resources").get(),
@@ -645,6 +649,14 @@ export async function deleteSourceConnection(
     input.connectorId === "odorik"
       ? database.collection(`companies/${input.companyId}/calls`)
         .where("connectionId", "==", input.connectionId).get()
+      : Promise.resolve(null),
+    input.connectorId === "microsoft_365"
+      ? database.collection("microsoftGraphSubscriptions")
+        .where("companyId", "==", input.companyId).get()
+      : Promise.resolve(null),
+    input.connectorId === "microsoft_365"
+      ? database.collection("microsoftGraphNotifications")
+        .where("companyId", "==", input.companyId).get()
       : Promise.resolve(null),
   ]);
   if (!connection.exists) throw new Error("Connection not found");
@@ -693,6 +705,12 @@ export async function deleteSourceConnection(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.delete(capability.ref)),
     ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
+    ...(microsoftSubscriptions?.docs || [])
+      .filter((document) => document.data().connectionId === input.connectionId)
+      .map((document) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(document.ref)),
+    ...(microsoftNotifications?.docs || [])
+      .filter((document) => document.data().connectionId === input.connectionId)
+      .map((document) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(document.ref)),
   ], database);
 
   const auditRef = database.collection(`companies/${input.companyId}/auditEvents`).doc();
@@ -1068,6 +1086,15 @@ export async function setCapabilityStatus(
       capabilityId: input.capabilityId,
       serviceId: descriptor.serviceId,
     }, { database });
+  } else if (input.capabilityId === "context.mail.read_scoped" && !input.enabled) {
+    const subscriptions = await database.collection("microsoftGraphSubscriptions")
+      .where("companyId", "==", input.companyId).get();
+    await commitInChunks(subscriptions.docs
+      .filter((document) => document.data().connectionId === input.connectionId)
+      .map((document) => (batch) => batch.set(document.ref, {
+        status: "disabled",
+        updatedAt: FieldValue.serverTimestamp(),
+      }, { merge: true })), database);
   }
 }
 

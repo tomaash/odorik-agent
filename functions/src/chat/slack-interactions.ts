@@ -360,7 +360,7 @@ export function mailDraftProposalBlocks(input: {
   ].filter(Boolean).join("\n");
   const policy = conversationApprovalPolicy("mail.draft.create");
   return [
-    { type: "header", text: { type: "plain_text", text: "Proposed Gmail draft", emoji: true } },
+    { type: "header", text: { type: "plain_text", text: "Proposed email draft", emoji: true } },
     { type: "section", text: { type: "mrkdwn", text: facts.slice(0, 3_000) } },
     { type: "context", elements: [{ type: "mrkdwn", text: proposalContext({
       approvalUrl: input.approvalUrl,
@@ -628,7 +628,7 @@ function receiptBlocks(input: {
   const actionKind = String(input.approval.action?.kind || "action");
   const result = input.approval.executionStatus;
   if (input.approval.decisionStatus === "approved" && result === "succeeded") {
-    const title = actionKind === "mail.draft.create" ? "Gmail draft created" : "Task created";
+    const title = actionKind === "mail.draft.create" ? "Email draft created" : "Task created";
     return {
       text: `${title}.`,
       surfaceStatus: "succeeded",

@@ -6,6 +6,7 @@ export type ConnectorSyncTrigger =
   | "manual"
   | "scheduled"
   | "selection"
+  | "webhook"
   | "retry"
   | "operator_replay";
 

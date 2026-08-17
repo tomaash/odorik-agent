@@ -17,16 +17,16 @@ The existing call-to-CRM application remains deployed as a source of real
 company data and a working vertical workflow. Photo collection and
 CRM-specific customer intake are not platform priorities.
 
-## Current product position — 2026-08-15
+## Current product position — 2026-08-17
 
 The repository has proved more of the kernel than the historical numbering
 below suggests:
 
-- permission-aware Calendar, Drive, Gmail, Odorik, and GitHub evidence use one
+- permission-aware Calendar, Drive, Gmail, Outlook, Odorik, and GitHub evidence use one
   source and retrieval contract;
 - private member-owned agent threads, hybrid search, exact tools, citations,
   durable index delivery, and factual-agent run traces are implemented;
-- typed task, case, case-movement, and Gmail-draft effects share the mandatory
+- typed task, case, case-movement, and provider-neutral mail-draft effects share the mandatory
   approval and execution kernel;
 - approval-gated Gmail draft creation has passed test-production acceptance;
 - Slack workspace OAuth, channel selection, pointer-only approval delivery,
@@ -65,6 +65,16 @@ below suggests:
   and personal Microsoft accounts so development and dogfood are not blocked by
   a customer's app-registration policy. Customer-tenant consent policy remains
   authoritative whenever a customer identity is connected.
+- Slice 12 is implemented in code and awaiting live acceptance. Outlook Mail
+  imports a fixed, member-restricted Inbox resource bounded to the last 90 days,
+  then resumes from Graph's opaque delta link. Durable, replay-idempotent change
+  notifications validate `clientState`, wake the same sync runtime, and renew
+  before expiry; delta remains the ledger and rebuilds after an expired cursor.
+  The existing one-recipient `mail.draft.create` envelope now routes through a
+  provider adapter. Outlook uses create-message only, attaches a stable Erik
+  request property for reconciliation, treats ambiguous outcomes as unknown,
+  and has no send path or `Mail.Send` grant. The connected personal mailbox has
+  test mail ready for the ingestion and approval-gated live proof.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -77,9 +87,9 @@ roadmap requirements rather than prompt-tuning follow-ups.
 ### Priority decision after Slice 10
 
 1. Deploy and complete Slice 10 live acceptance; do not widen its actions.
-2. Build the Microsoft 365 foundation, then Outlook Mail and Calendar as
-   provider loops on the existing source/action kernel.
-3. Add Teams personal conversation only after Entra identity, tenant isolation,
+2. Complete Slice 12 live acceptance, then build Outlook Calendar on the same
+   source runtime rather than widening the mail slice.
+3. Add Teams personal conversation only after Outlook identity, tenant isolation,
    and Graph lifecycle behavior are proven. Reuse the Slack conversation and
    proposal protocols rather than create a Teams-specific agent.
 4. Make cross-surface thread binding explicit, then measure coordination before
@@ -480,13 +490,13 @@ with PKCE. Refresh tokens must be treated as replaceable secrets; the old token
 is securely discarded after a new one is stored. This foundation is therefore
 the next slice, not an Outlook UI shortcut.
 
-### Slice 12: Outlook evidence and draft loop
+### Slice 12: Outlook evidence and draft loop — implemented in code, live acceptance pending
 
 **Usable outcome:** Erik can answer a permission-aware question from one Outlook
 mailbox and, from that grounded conversation, propose exactly one Outlook draft
 that appears in Drafts only after approval.
 
-- ingest a deliberately narrow mailbox resource with stable Graph IDs,
+- ingest a deliberately narrow, fixed Inbox resource for the last 90 days with stable Graph IDs,
   provenance, audience, and selected fields; start with read-only mail evidence;
 - combine Graph change notifications with durable queueing and delta queries.
   A webhook is a wake-up signal, not the ledger: acknowledge quickly, validate
@@ -497,8 +507,9 @@ that appears in Drafts only after approval.
   current Gmail-specific result contract cannot remain honest;
 - use Graph's create-message operation, which saves to Drafts. Do not grant or
   call the separate send operation; and
-- prove exact recipient, mailbox, body, digest, provider reconciliation,
-  `outcome_unknown`, disconnect, and no-send invariants live.
+- automated tests prove exact recipient, mailbox, body, provider reconciliation,
+  `outcome_unknown`, replay resistance, cursor recovery, and no-send invariants;
+  the remaining acceptance is one live ingestion/citation and one approved draft.
 
 ### Slice 13: Outlook calendar continuity
 

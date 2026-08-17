@@ -36,7 +36,7 @@ const responseSchema = {
   required: ["to", "subject", "body", "callId", "contactId", "citationIds", "assumptions"],
 };
 
-const instruction = `You prepare one exact Gmail draft proposal from a private company conversation.
+const instruction = `You prepare one exact email draft proposal from a private company conversation.
 
 Rules:
 - Use company-data tools before proposing. Resolve every referenced person, call, customer, and prior discussion against current authorized records.
@@ -46,7 +46,7 @@ Rules:
 - Preserve the user's intent and current evidence in a concise subject and complete body. Do not promise facts the evidence does not support.
 - Include every citation ID supporting the recipient and draft. Put unresolved details in assumptions.
 - If the recipient, source call, or requested content is materially ambiguous, do not guess: return values that validation will refuse.
-- You only prepare a proposal. A separately authenticated named approval is required before Gmail is contacted.
+- You only prepare a proposal. A separately authenticated named approval is required before the selected mail provider is contacted.
 
 Return only the required JSON object.`;
 
@@ -197,7 +197,8 @@ async function selectedMailbox(input: {
   const connections = await input.database.collection(`companies/${input.companyId}/connections`).get();
   const candidates = (await Promise.all(connections.docs.flatMap((document) => {
     const data = document.data() || {};
-    if (data.connectorId !== "google_workspace" || !["active", "attention"].includes(String(data.status))) {
+    if (!["google_workspace", "microsoft_365"].includes(String(data.connectorId))
+      || !["active", "attention"].includes(String(data.status))) {
       return [];
     }
     return [(async () => {
@@ -205,7 +206,7 @@ async function selectedMailbox(input: {
       const capabilityData = capability.data() || {};
       if (!capability.exists
         || capabilityData.capabilityId !== "action.mail.draft.create"
-        || !["active", "attention"].includes(String(capabilityData.status))) return null;
+        || !["permission_granted", "active", "attention"].includes(String(capabilityData.status))) return null;
       const mailboxAddress = String(data.accountLabel || "").trim();
       const providerAccountId = String(data.providerAccountId || "").trim();
       return mailboxAddress && providerAccountId
@@ -218,8 +219,8 @@ async function selectedMailbox(input: {
   const selected = mentioned.length === 1 ? mentioned[0] : candidates.length === 1 ? candidates[0] : null;
   if (!selected) {
     throw new Error(candidates.length
-      ? "Choose exactly one connected Gmail mailbox for this draft."
-      : "Enable Create Gmail drafts on a Google Workspace connection first.");
+      ? "Choose exactly one connected mailbox for this draft."
+      : "Enable draft creation on a connected mail account first.");
   }
   return selected;
 }

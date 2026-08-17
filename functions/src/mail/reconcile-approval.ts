@@ -4,10 +4,11 @@ import { TRPCError } from "@trpc/server";
 import { db, jsonSafe } from "../firestore.js";
 import { companyCollectionPath, companyDocumentPath } from "../tenancy.js";
 import { reconcileMailDraftExecution } from "./executor.js";
+import { reconcileOutlookDraftExecution } from "./outlook-executor.js";
 
 /**
  * Operator path for `outcome_unknown` mail draft approvals: discover the draft
- * if Google already created it, attach IDs to the approval, and clear the
+ * if the provider already created it, attach IDs to the approval, and clear the
  * unknown state without a second create.
  */
 export async function reconcileMailDraftApproval(input: {
@@ -16,6 +17,8 @@ export async function reconcileMailDraftApproval(input: {
   approvalId: string;
   clientId: string;
   clientSecret: string;
+  microsoftClientId?: string;
+  microsoftClientSecret?: string;
   credentialKey: string;
 }) {
   const approvalRef = db.doc(
@@ -53,20 +56,27 @@ export async function reconcileMailDraftApproval(input: {
   ) {
     throw new TRPCError({
       code: "PRECONDITION_FAILED",
-      message: "This approval is not a Gmail draft.",
+      message: "This approval is not an email draft.",
     });
   }
 
   let result;
   try {
-    result = await reconcileMailDraftExecution({
+    const connection = await db.doc(companyDocumentPath(
+      input.companyId, "connections", action.connectionId,
+    )).get();
+    const isMicrosoft = connection.data()?.connectorId === "microsoft_365";
+    const reconcile = isMicrosoft ? reconcileOutlookDraftExecution : reconcileMailDraftExecution;
+    result = await reconcile({
       companyId: input.companyId,
       draftRequestId: action.draftRequestId,
       connectionId: action.connectionId,
       actorUid: input.actorUid,
       auth: {
-        clientId: input.clientId,
-        clientSecret: input.clientSecret,
+        clientId: isMicrosoft ? input.microsoftClientId || input.clientId : input.clientId,
+        clientSecret: isMicrosoft
+          ? input.microsoftClientSecret || input.clientSecret
+          : input.clientSecret,
         credentialKey: input.credentialKey,
       },
     });

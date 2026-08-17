@@ -86,6 +86,10 @@ import {
   refreshMicrosoftConnection,
 } from "./connectors/microsoft-oauth.js";
 import {
+  replayMicrosoftOutlookSyncRun,
+  syncMicrosoftOutlookConnection,
+} from "./connectors/microsoft-outlook.js";
+import {
   configuredGitHubInstallationId,
   connectGitHubInstallation,
   githubConfigurationFromEnvironment,
@@ -614,6 +618,19 @@ export const appRouter = router({
             });
           }
         }),
+      sync: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ ctx, input }) => syncMicrosoftOutlookConnection({
+          companyId: ctx.companyId,
+          connectionId: input.connectionId,
+          clientId: microsoftConnectorClientId.value(),
+          clientSecret: microsoftConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+          trigger: "manual",
+          requestedBy: ctx.uid,
+        })),
     }),
     slack: router({
       authorizationUrl: adminProcedure
@@ -875,6 +892,18 @@ export const appRouter = router({
               credentialKey: connectorCredentialKey.value(),
             });
           case "mail":
+            if (String((await db.doc(companyDocumentPath(
+              ctx.companyId, "connections", input.connectionId,
+            )).get()).data()?.connectorId) === "microsoft_365") {
+              return replayMicrosoftOutlookSyncRun({
+                companyId: ctx.companyId,
+                ...input,
+                actorUid: ctx.uid,
+                clientId: microsoftConnectorClientId.value(),
+                clientSecret: microsoftConnectorClientSecret.value(),
+                credentialKey: connectorCredentialKey.value(),
+              });
+            }
             return replayGoogleGmailSyncRun({
               companyId: ctx.companyId,
               ...input,
@@ -1408,6 +1437,8 @@ export const appRouter = router({
           approvalId: input.approvalId,
           clientId: googleConnectorClientId.value(),
           clientSecret: googleConnectorClientSecret.value(),
+          microsoftClientId: microsoftConnectorClientId.value(),
+          microsoftClientSecret: microsoftConnectorClientSecret.value(),
           credentialKey: connectorCredentialKey.value(),
         });
       }),

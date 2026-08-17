@@ -245,12 +245,26 @@ User.Read`. Outlook permissions are dynamic and separate:
   draft but does not include `Mail.Send`; and
 - no Microsoft flow requests `Mail.Send`.
 
-Slice 11 records these grants as `permission_granted`, not `active`. This is an
-intentional correctness boundary: the permission and token lifecycle exist,
-but Outlook ingestion and the approval-gated draft executor do not become
-operational until Slice 12 proves their complete loops. An administrator can
-locally disable/re-enable an already granted capability without changing the
-tenant grant.
+Slice 11 initially records these grants as `permission_granted`, not `active`.
+Slice 12 promotes Mail.Read only after the fixed Inbox sync enters its operating
+loop, and promotes Mail.ReadWrite only after a draft is created or reconciled.
+An administrator can locally disable/re-enable an already granted capability
+without changing the tenant grant.
+
+Outlook evidence is deliberately one resource: Inbox messages received in the
+last 90 days. The first run is bounded and subsequent runs retain Graph's full
+opaque delta link. A 404/410 cursor failure rebuilds that same bounded window.
+Graph change notifications are validated with a hashed `clientState`, persisted
+idempotently, and processed only as wake-ups for delta sync. Subscription
+lifecycle events request recreation, and a scheduled manager renews active
+subscriptions before expiry. Webhook delivery is therefore neither trusted as
+complete history nor allowed to mutate context directly.
+
+The provider-neutral `mail.draft.create` action still allows exactly one
+recipient and requires approval. The Outlook adapter calls only Graph's
+create-message endpoint, stores a stable Erik extended property for provider
+reconciliation, and refuses a second create while an earlier provider outcome
+is unknown. It never requests `Mail.Send` and contains no send endpoint.
 
 Refresh responses atomically replace the encrypted refresh token and advance a
 credential revision. A concurrent refresh cannot overwrite a newer envelope.

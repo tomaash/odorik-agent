@@ -22,30 +22,30 @@ const mailDraftCreatedResultSchema = z.object({
 }).strict();
 
 /**
- * Kept for tests that still assert the G2 closed-executor shape. Production
- * wires `createGmailDraftExecutor`.
+ * Closed default used by isolated descriptor tests. Production wires the
+ * provider router.
  */
 export class MailDraftExecutionUnavailableError extends Error {
   constructor() {
     super(
-      "Creating the Gmail draft is not available yet. The proposal records the "
-      + "exact effect; nothing was sent to Google.",
+      "Creating an email draft is unavailable. The proposal records the "
+      + "exact effect; no provider was contacted.",
     );
     this.name = "MailDraftExecutionUnavailableError";
   }
 }
 
 /**
- * The `mail.draft.create` proposal and G3 executor.
+ * The provider-neutral `mail.draft.create` proposal and executor.
  *
  * Registered so `requestWorkflowActionApproval` can produce a digest and card.
- * Execution creates one Gmail draft when `action.mail.draft.create` is granted
- * on the Workspace connection (`gmail.compose` scope). Sending is never called.
+ * Execution creates one Gmail or Outlook draft when the selected connection has
+ * its provider-specific draft grant. Sending is never called.
  */
 export function createMailDraftCreateDescriptor(
   /**
-   * Production wires `createGmailDraftExecutor()` from the action registry.
-   * The default refuses so unit tests never touch Google by accident.
+   * Production wires `createProviderMailDraftExecutor()` from the action
+   * registry. The default refuses so unit tests never touch a provider.
    */
   executeAction: MailDraftExecutor = async () => {
     throw new MailDraftExecutionUnavailableError();
@@ -60,7 +60,7 @@ export function createMailDraftCreateDescriptor(
     resultSchema: mailDraftCreatedResultSchema,
     authorization: {
       requiresApproval: true,
-      providerCapabilityId: "google.gmail.drafts.write",
+      providerCapabilityId: "mail.drafts.write",
     },
     reversibility: "compensatable",
     idempotency: "provider_aware",
@@ -101,21 +101,21 @@ export function createMailDraftCreateDescriptor(
       const connectionData = connection.data() || {};
       if (
         !connection.exists
-        || connectionData.connectorId !== "google_workspace"
+        || !["google_workspace", "microsoft_365"].includes(String(connectionData.connectorId))
         || !["active", "attention"].includes(String(connectionData.status))
         || String(connectionData.accountLabel || "") !== action.mailboxAddress
         || String(connectionData.providerAccountId || "") !== action.providerAccountId
-      ) throw new Error("The Google Workspace connection for this mailbox is not active");
+      ) throw new Error("The mail connection for this mailbox is not active");
 
       const draftWriteData = draftWrite.data() || {};
       if (
         !draftWrite.exists
         || draftWriteData.capabilityId !== "action.mail.draft.create"
-        || !["active", "attention"].includes(String(draftWriteData.status))
+        || !["permission_granted", "active", "attention"].includes(String(draftWriteData.status))
       ) {
         throw new Error(
-          "Gmail draft creation is not enabled on this connection. "
-          + "Grant “Create Gmail drafts” under Sources first.",
+          "Draft creation is not enabled on this connection. "
+          + "Grant the provider draft permission under Sources first.",
         );
       }
 

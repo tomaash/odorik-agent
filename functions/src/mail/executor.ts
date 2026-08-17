@@ -141,8 +141,8 @@ export class MailDraftOutcomeUnknownError extends Error {
 export class MailDraftWriteGrantMissingError extends Error {
   constructor() {
     super(
-      "Gmail draft creation is not enabled on this Google account. "
-      + "An administrator must grant “Create Gmail drafts” on Sources.",
+      "Email draft creation is not enabled on the selected mailbox. "
+      + "An administrator must grant draft access on Sources.",
     );
     this.name = "MailDraftWriteGrantMissingError";
   }

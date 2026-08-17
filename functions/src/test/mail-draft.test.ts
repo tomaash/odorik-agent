@@ -73,13 +73,13 @@ async function assertPreconditions(memory: MemoryFirestore, action = draftAction
   });
 }
 
-test("the mail draft descriptor declares an external effect it cannot yet perform", () => {
+test("the provider-neutral mail draft descriptor declares a reconciled external effect", () => {
   assert.equal(mailDraftCreateDescriptor.category, "external.write");
   assert.equal(mailDraftCreateDescriptor.capabilityId, "action.mail.draft.create");
   assert.equal(mailDraftCreateDescriptor.authorization.requiresApproval, true);
   assert.equal(
     mailDraftCreateDescriptor.authorization.providerCapabilityId,
-    "google.gmail.drafts.write",
+    "mail.drafts.write",
   );
   // The registry only admits external actions that can be reconciled, and a
   // draft is deletable, so the effect is compensatable rather than final.
@@ -175,11 +175,11 @@ test("the draft is refused when the mailbox is no longer usable", async () => {
 
   const draftWriteOff = new MemoryFirestore();
   seedMailbox(draftWriteOff, { draftWriteStatus: "disabled" });
-  await assert.rejects(() => assertPreconditions(draftWriteOff), /draft creation is not enabled/);
+  await assert.rejects(() => assertPreconditions(draftWriteOff), /[Dd]raft creation is not enabled/);
 
   const draftWriteMissing = new MemoryFirestore();
   seedMailbox(draftWriteMissing, { draftWriteStatus: null });
-  await assert.rejects(() => assertPreconditions(draftWriteMissing), /draft creation is not enabled/);
+  await assert.rejects(() => assertPreconditions(draftWriteMissing), /[Dd]raft creation is not enabled/);
 
   const renamed = new MemoryFirestore();
   seedMailbox(renamed, { accountLabel: "someone-else@acme.cz" });

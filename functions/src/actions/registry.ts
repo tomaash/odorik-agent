@@ -4,7 +4,7 @@ import type { ResourceAudience } from "../access.js";
 import { internalActionDescriptors } from "./internal-actions.js";
 import { codingActionDescriptors } from "../coding/action.js";
 import { createMailDraftCreateDescriptor } from "../mail/action.js";
-import { createGmailDraftExecutor } from "../mail/executor.js";
+import { createProviderMailDraftExecutor } from "../mail/provider-executor.js";
 
 export type RegisteredAction = {
   kind: string;
@@ -219,7 +219,7 @@ export async function executeRegisteredAction(input: {
 
 /** Production mail drafts: real Gmail executor with provider-aware idempotency. */
 const productionMailDraftDescriptor = createMailDraftCreateDescriptor(
-  createGmailDraftExecutor(),
+  createProviderMailDraftExecutor(),
 );
 
 export const actionRegistry = createActionRegistry(

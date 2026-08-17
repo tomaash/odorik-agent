@@ -45,6 +45,13 @@
           }
         },
         {
+          "source": "/webhooks/microsoft",
+          "function": {
+            "functionId": "microsoftGraphWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/oauth/google/callback",
           "function": {
             "functionId": "googleOAuthCallback",
@@ -134,6 +141,13 @@
           "source": "/webhooks/github",
           "function": {
             "functionId": "githubWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
+          "source": "/webhooks/microsoft",
+          "function": {
+            "functionId": "microsoftGraphWebhook",
             "region": "europe-west3"
           }
         },

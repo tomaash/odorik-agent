@@ -37,6 +37,7 @@ import {
   startGoogleWorkspaceAuthorization,
   startMicrosoftAuthorization,
   refreshMicrosoftConnection,
+  syncMicrosoftOutlook,
   startSlackAuthorization,
   startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
@@ -1085,7 +1086,11 @@ async function synchronizeMail(connection: SourceConnection) {
   synchronizingId.value = `${connection.id}:mail`
   error.value = ''
   try {
-    await syncGmailLabels(connection.id)
+    if (connection.connectorId === 'microsoft_365') {
+      await syncMicrosoftOutlook(connection.id)
+    } else {
+      await syncGmailLabels(connection.id)
+    }
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -2615,7 +2620,7 @@ onUnmounted(() => {
                         @click="synchronizeDrive(connection)"
                       />
                       <Button
-                        v-if="descriptor.id === 'context.mail.read_scoped' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        v-if="connection.connectorId === 'google_workspace' && descriptor.id === 'context.mail.read_scoped' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
                         :label="t('sources.chooseLabels')"
                         icon="pi pi-list-check"
                         severity="secondary"
@@ -2624,7 +2629,7 @@ onUnmounted(() => {
                         @click="openMailPicker(connection)"
                       />
                       <Button
-                        v-if="descriptor.id === 'context.mail.read_scoped' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        v-if="descriptor.id === 'context.mail.read_scoped' && ['active', 'permission_granted'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
                         :label="synchronizingId === `${connection.id}:mail` ? t('sources.syncing') : t('sources.syncNow')"
                         icon="pi pi-refresh"
                         severity="secondary"
@@ -2699,7 +2704,7 @@ onUnmounted(() => {
                         @click="toggleCapability(connection, descriptor.id, true)"
                       />
                       <Button
-                        v-else-if="connection.connectorId === 'microsoft_365' && capabilityConfiguration(connection, descriptor)?.status === 'permission_granted'"
+                        v-else-if="connection.connectorId === 'microsoft_365' && ['permission_granted', 'active'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
                         :label="t('sources.microsoft.disableCapability')"
                         icon="pi pi-minus-circle"
                         severity="secondary"

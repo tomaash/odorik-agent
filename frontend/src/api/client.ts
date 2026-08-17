@@ -1244,6 +1244,10 @@ export async function refreshMicrosoftConnection(connectionId: string) {
   return trpc.sources.microsoft365.refresh.mutate({ connectionId })
 }
 
+export async function syncMicrosoftOutlook(connectionId: string) {
+  return trpc.sources.microsoft365.sync.mutate({ connectionId })
+}
+
 export async function getGoogleCalendars(connectionId: string): Promise<SelectableCalendar[]> {
   return trpc.sources.googleCalendar.calendars.query({ connectionId }) as Promise<SelectableCalendar[]>
 }

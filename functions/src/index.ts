@@ -19,6 +19,8 @@ import {
   githubAppPrivateKey,
   googleConnectorClientId,
   googleConnectorClientSecret,
+  microsoftConnectorClientId,
+  microsoftConnectorClientSecret,
   qdrantApiKey,
   qdrantUrl,
 } from "./router.js";
@@ -38,6 +40,11 @@ import {
   syncAllGoogleGmailConnections,
 } from "./connectors/google-gmail.js";
 import {
+  retryDueMicrosoftOutlookSyncRuns,
+  syncAllMicrosoftOutlookConnections,
+} from "./connectors/microsoft-outlook.js";
+import { ensureAllMicrosoftOutlookSubscriptions } from "./connectors/microsoft-outlook-subscriptions.js";
+import {
   githubConfigurationFromEnvironment,
   retryDueGitHubSyncRuns,
   syncAllGitHubConnections,
@@ -54,6 +61,10 @@ import {
 import { queueCodingPublisher } from "./coding/service.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { microsoftOAuthCallback } from "./connectors/microsoft-oauth-callback.js";
+export {
+  microsoftGraphWebhook,
+  processMicrosoftGraphWebhook,
+} from "./microsoft-graph-webhook.js";
 export { slackOAuthCallback } from "./connectors/slack-oauth-callback.js";
 export {
   slackEventsWebhook,
@@ -401,6 +412,93 @@ export const recoverMailSourceSyncs = onSchedule(
     const attention = results.filter((result) => result.status === "attention");
     if (attention.length) {
       console.error("One or more Gmail synchronization runs exhausted recovery", attention);
+    }
+  },
+);
+
+export const syncOutlookMailSources = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await syncAllMicrosoftOutlookConnections({
+      clientId: microsoftConnectorClientId.value(),
+      clientSecret: microsoftConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more Outlook connections failed to synchronize", failures);
+    }
+  },
+);
+
+export const recoverOutlookMailSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await retryDueMicrosoftOutlookSyncRuns({
+      clientId: microsoftConnectorClientId.value(),
+      clientSecret: microsoftConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more Outlook synchronization runs exhausted recovery", attention);
+    }
+  },
+);
+
+export const renewOutlookMailSubscriptions = onSchedule(
+  {
+    schedule: "every 12 hours",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await ensureAllMicrosoftOutlookSubscriptions({
+      clientId: microsoftConnectorClientId.value(),
+      clientSecret: microsoftConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more Outlook subscriptions failed to renew", failures);
     }
   },
 );

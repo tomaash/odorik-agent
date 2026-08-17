@@ -477,7 +477,7 @@ export async function processSlackDmEvent(input: {
     });
     const approvalUrl = `${input.appOrigin.replace(/\/+$/, "")}/approvals/${encodeURIComponent(proposed.approvalId)}`;
     if (proposed.action.kind === "mail.draft.create") {
-      replyText = `Proposed Gmail draft to ${proposed.action.to[0]}: ${proposed.action.subject}. Review the exact draft in this private message.`;
+      replyText = `Proposed email draft to ${proposed.action.to[0]}: ${proposed.action.subject}. Review the exact draft in this private message.`;
       replyBlocks = mailDraftProposalBlocks({
         approvalId: proposed.approvalId,
         mailboxAddress: proposed.action.mailboxAddress,

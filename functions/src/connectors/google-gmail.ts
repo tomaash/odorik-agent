@@ -898,6 +898,10 @@ export async function retryDueGoogleGmailSyncRuns(input: {
   );
   const results: Array<MailSyncResult & { companyId: string; connectionId: string }> = [];
   for (const run of due) {
+    const connection = await database.doc(
+      companyDocumentPath(run.companyId, "connections", run.connectionId),
+    ).get();
+    if (connection.data()?.connectorId !== "google_workspace") continue;
     const result = await executeGoogleGmailSyncRun({
       companyId: run.companyId,
       connectionId: run.connectionId,
