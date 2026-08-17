@@ -119,6 +119,8 @@ export function routeSlackTurn(text: string, hasPriorTurn = false): SlackTurnRou
   if (
     /^(?:(?:can|could|would) you |please |prosím )?(?:approve|reject|delete|move|assign|schedule|schval|odmítni|smaž|přesuň|přiřaď|naplánuj)\b/u.test(request)
     || /^(?:(?:can|could|would) you |please |prosím )?(?:send|draft|pošli)\b.{0,80}\b(?:email|message|mail|e-mail|zpráv)/u.test(request)
+    || /^(?:(?:can|could|would) you |please |prosím )?(?:prepare|compose|write|připrav|napiš)\b.{0,160}\b(?:email|mail|e-mail|message|zpráv)\b/u.test(request)
+    || /(?:^|[,;:—-]\s*)(?:please\s+|prosím\s+)?(?:prepare|compose|write|připrav|napiš)\b.{0,160}\b(?:email|mail|e-mail|message|zpráv)\b/u.test(request)
     || /^(?:(?:can|could|would) you |please |prosím )?(?:(?:create|make|vytvoř)\b|(?:update|uprav)\b(?! me\b)).{0,80}\b(?:task|case|contact|record|draft|email|event|calendar|úkol|případ|kontakt|záznam|koncept|událost|kalendář)/u.test(request)
   ) {
     return "action_request";
@@ -264,7 +266,7 @@ function socialReply(text: string): string {
   return "Hello! Ask me about your company’s calls, contacts, cases, tasks, documents, mail, or recent work.";
 }
 
-const capabilityReply = "I can answer read-only questions about the company data you’re allowed to access and show the supporting sources. I won’t approve or execute consequential actions from an ordinary Slack reply.";
+const capabilityReply = "I can answer permission-aware questions with sources and prepare supported task or one-recipient email-draft proposals. Consequential actions still require your explicit approval.";
 const actionRequestReply = "I won’t execute or approve an action from an ordinary Slack message. I can help verify the relevant company context here; use Agent Erik’s authenticated approval surface for consequential actions.";
 const sessionResetReply = "Started a fresh topic. I won’t automatically use the previous session’s discussion state.";
 const memoryForgetReply = "Forgot the conversation context I was carrying. Retained transport and audit records will not be used as memory in future turns.";

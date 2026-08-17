@@ -119,6 +119,11 @@ test("the turn router keeps social and capability messages out of factual retrie
   assert.equal(routeSlackTurn("What can you do?", true), "capability");
   assert.equal(routeSlackTurn("Could you create a task for me?", true), "action_request");
   assert.equal(routeSlackTurn("Hello, could you send an email?", true), "action_request");
+  assert.equal(routeSlackTurn(
+    "Using one recent completed call as the evidence anchor, prepare—but do not send—an email draft from my connected Microsoft mailbox to tomas.holas@outlook.com.",
+    true,
+  ), "action_request");
+  assert.equal(routeSlackTurn("Could you prepare an email draft for Acme?", true), "action_request");
   assert.equal(routeSlackTurn("Update me on open tasks", true), "company_fact");
   assert.equal(routeSlackTurn("Make sense of the latest call", true), "company_fact");
   assert.equal(routeSlackTurn("Summarize Acme", false), "company_fact");
