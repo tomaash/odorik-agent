@@ -384,7 +384,7 @@ async function ensureInboxResource(input: OutlookSyncInput): Promise<void> {
       ...(resourceSnapshot.exists ? {} : {
         audience: {
           visibility: "restricted",
-          memberIds: [input.requestedBy || connectionSnapshot.data()?.createdBy].filter(Boolean),
+          memberIds: [connectionSnapshot.data()?.createdBy].filter(Boolean),
         },
         audienceRevision: 1,
         createdAt: now,

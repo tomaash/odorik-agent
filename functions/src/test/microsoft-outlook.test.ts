@@ -87,7 +87,7 @@ test("Outlook imports a fixed restricted Inbox window and resumes from the opaqu
 
   const first = await syncMicrosoftOutlookConnection({
     companyId, connectionId, clientId: "client", clientSecret: "secret", credentialKey,
-    requestedBy: "member-1", database: memory.asFirestore(), fetch: request, now: () => now,
+    requestedBy: "scheduler:outlook-mail", database: memory.asFirestore(), fetch: request, now: () => now,
   });
   assert.equal(first.status, "succeeded");
   assert.equal(requested[0]?.pathname, "/v1.0/me/mailFolders/inbox/messages/delta");
