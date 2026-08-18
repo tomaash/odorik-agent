@@ -226,6 +226,20 @@ function plainText(body?: OutlookCalendarEvent["body"]): string {
     .trim();
 }
 
+function searchableCalendarDate(dateTime?: string): string | null {
+  const date = String(dateTime || "").slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
+  const parsed = new Date(`${date}T12:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return new Intl.DateTimeFormat("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+    timeZone: "UTC",
+  }).format(parsed);
+}
+
 export function outlookCalendarEventContextItem(input: {
   companyId: string;
   connectionId: string;
@@ -262,6 +276,7 @@ export function outlookCalendarEventContextItem(input: {
   ].filter(Boolean))];
   const start = input.event.start?.dateTime || null;
   const end = input.event.end?.dateTime || null;
+  const searchDate = searchableCalendarDate(start || undefined);
   const location = input.event.location?.displayName || null;
   const description = plainText(input.event.body) || String(input.event.bodyPreview || "").trim();
   const title = restrictedDetails
@@ -271,6 +286,7 @@ export function outlookCalendarEventContextItem(input: {
   const text = [
     `Calendar: ${input.calendarName}`,
     `Status: ${status}`,
+    searchDate && `Date: ${searchDate}`,
     `Starts: ${start || "unknown"} (${input.event.start?.timeZone || "unknown time zone"})`,
     `Ends: ${end || "unknown"} (${input.event.end?.timeZone || "unknown time zone"})`,
     !restrictedDetails && location && `Location: ${location}`,

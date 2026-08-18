@@ -139,6 +139,7 @@ test("Outlook Calendar selects explicitly, redacts private details, and resumes 
   )}`;
   const item = memory.read(itemPath);
   assert.equal(item?.title, "Private calendar event");
+  assert.match(String(item?.text), /Date: Thursday, August 20, 2026/);
   assert.doesNotMatch(String(item?.text), /Acquisition|Do not expose|guest@example/);
   assert.deepEqual(item?.participantRefs, []);
   assert.equal((item?.metadata as Record<string, unknown>).restrictedDetails, true);
