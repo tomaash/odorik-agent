@@ -89,16 +89,18 @@ turn. The prototype also has no per-conversation serialization, only eight
 recent message documents, and no durable session memory. These are now explicit
 roadmap requirements rather than prompt-tuning follow-ups.
 
-### Priority decision after Slice 10
+### Priority decision after Slice 13
 
-1. Deploy and complete Slice 10 live acceptance; do not widen its actions.
-2. Build Outlook Calendar on the accepted Microsoft identity and source runtime
-   rather than widening the completed mail slice.
-3. Add Teams personal conversation only after Outlook identity, tenant isolation,
-   and Graph lifecycle behavior are proven. Reuse the Slack conversation and
-   proposal protocols rather than create a Teams-specific agent.
-4. Make cross-surface thread binding explicit, then measure coordination before
-   adding initiative or shared-channel scope.
+1. Treat the Microsoft identity, Outlook Mail, Outlook draft, and Outlook Calendar
+   loops as one accepted Microsoft 365 foundation; harden them through normal use
+   instead of adding broader mailbox or calendar permissions.
+2. Build Teams personal conversation and decision parity next. Reuse the Slack
+   conversation, proposal, approval, and receipt protocols rather than create a
+   Teams-specific agent runtime.
+3. Make cross-surface thread binding explicit, then measure coordination before
+   adding initiative, Teams history ingestion, or shared-channel scope.
+4. Keep SharePoint/OneDrive and calendar mutation behind observed-demand gates;
+   neither is required to prove the next conversational surface.
 
 Slice 9B older-session recall remains a deliberately deferred horizontal
 capability. Pull it forward only if evaluations show that Microsoft dogfood is
@@ -518,7 +520,7 @@ that appears in Drafts only after approval.
   subscription setup, Slack-originated approval, exactly one Outlook draft,
   and zero matching Sent Items.
 
-### Slice 13: Outlook calendar continuity
+### Slice 13: Outlook calendar continuity — implemented, deployed, and accepted live
 
 **Usable outcome:** one connected Microsoft account contributes current,
 permission-aware calendar context to the same Erik conversation and proposal
@@ -529,7 +531,15 @@ evidence model.
 - preserve organizer/attendee semantics, recurrence, time zones, cancellations,
   and restricted visibility without flattening them into model text; and
 - remain read-only until a specific calendar mutation loop justifies its own
-  typed action, policy, approval, idempotency, and reconciliation contract.
+  typed action, policy, approval, idempotency, and reconciliation contract;
+- live acceptance on 2026-08-18 proved incremental `Calendars.Read` consent on
+  the existing Microsoft identity, explicit selection of the primary and Czech
+  holidays calendars, owner-restricted audiences, a 52-item two-resource
+  recovery sync, and an active `/me/events` change subscription; and
+- the natural date-only question that initially missed a known event now returns
+  a cited answer after indexing a lexical weekday/date alongside Graph's exact
+  timestamps. The citation is branded Outlook Calendar, opens the Outlook event,
+  and no calendar write permission is granted.
 
 ### Slice 14: Teams personal conversation and decision parity
 
@@ -562,6 +572,7 @@ Current Microsoft implementation references:
 - [Graph change-notification webhook delivery](https://learn.microsoft.com/en-us/graph/change-notifications-delivery-webhooks)
 - [Graph lifecycle notifications and recovery](https://learn.microsoft.com/en-us/graph/change-notifications-lifecycle-events)
 - [Graph delta synchronization](https://learn.microsoft.com/en-us/graph/delta-query-overview)
+- [Graph event delta synchronization](https://learn.microsoft.com/en-us/graph/delta-query-events)
 - [Create an Outlook draft message](https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0)
 - [Teams proactive personal messages](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
 - [Teams card capabilities and constraints](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)

@@ -263,9 +263,10 @@ Every action capability must define:
 | G1 | Add selected-label Gmail evidence to Google Workspace | Completed | Accepted in test production (dogfood + unit suite) |
 | G2 | Produce an exact, non-executing email-draft proposal | Completed | Proposal is useful without any provider write |
 | G3 | Create a Gmail draft after approval and reconcile the result | Completed | Accepted in test production (dogfood create + unit suite) |
-| M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Gated | Microsoft decision gate passes |
-| M2 | Prove `mail.draft.create` through Outlook | Gated | Same workflow needs no provider-specific semantics |
-| M3+ | Add one Microsoft resource family per slice | Gated | Calendar/files demand chooses the next family |
+| M1 | Establish one Microsoft 365 account connection and scoped Outlook mail evidence | Completed | Accepted in test production 2026-08-18 |
+| M2 | Prove `mail.draft.create` through Outlook | Completed | Accepted in test production 2026-08-18 |
+| M3 | Add selected Outlook Calendar evidence | Completed | Accepted in test production 2026-08-18 |
+| M4+ | Add another Microsoft resource family only from observed demand | Gated | SharePoint/OneDrive or another family wins a named loop |
 | A1 | Ingest selected meeting artifacts | Gated | Artifact demand and provider access are proven |
 | R1 | Add one specialist system-of-record connector | Gated | One provider wins the scorecard |
 | H1 | Post pending-approval notifications to one selected Slack channel | Completed | Accepted in test production 2026-08-13 |
@@ -1303,7 +1304,7 @@ Microsoft 365 account connection
 ├── provider account and tenant identity
 ├── encrypted Microsoft Graph credential envelope
 ├── Outlook Mail capability configuration
-├── future Outlook Calendar capability configuration
+├── Outlook Calendar capability configuration
 └── future SharePoint/OneDrive capability configuration
 ```
 
@@ -1321,8 +1322,12 @@ Execute one resource family per slice:
 2. **M2:** add the separate `action.mail.draft.create` capability grant to the
    same connection and implement the existing approved draft contract through
    Outlook.
-3. **M3+:** choose Outlook Calendar or SharePoint/OneDrive from observed
-   demand, then add one capability configuration before considering the other.
+3. **M3:** add selected, read-only Outlook Calendar evidence through the same
+   notification-plus-delta recovery model; accepted live on 2026-08-18.
+4. **M4+:** add SharePoint/OneDrive or another resource family only when a
+   named workflow and design-partner demand justify its permissions and support
+   cost. Teams personal conversation may proceed independently because it is an
+   interaction adapter, not broad Teams-history ingestion.
 
 Teams chat and meeting artifacts are not enabled merely because the account is
 already connected. They retain their own demand, privacy, permission, and
