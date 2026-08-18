@@ -12,6 +12,9 @@ const adapterId = computed(() => {
   const url = externalUrl.value || ''
   const path = props.citation.sourcePath || ''
   if (url.includes('drive.google.com') || path.includes('drive')) return 'google_drive'
+  if (url.includes('outlook.live.com') || url.includes('outlook.office.com')) {
+    return path.includes('calendar') ? 'microsoft_calendar' : 'outlook_mail'
+  }
   if (url.includes('calendar.google.com') || path.includes('calendar')) return 'google_calendar'
   if (url.includes('mail.google.com') || path.includes('gmail')) return 'gmail'
   if (props.citation.kind === 'call' || props.citation.kind === 'interaction') return 'odorik'
@@ -40,10 +43,12 @@ const icon = computed(() => {
     case 'google_drive':
       return 'pi pi-file'
     case 'google_calendar':
+    case 'microsoft_calendar':
       return 'pi pi-calendar'
     case 'odorik':
       return 'pi pi-phone'
     case 'gmail':
+    case 'outlook_mail':
       return 'pi pi-envelope'
     case 'github':
       return 'pi pi-github'
@@ -61,10 +66,14 @@ const badgeLabel = computed(() => {
       return 'Google Drive'
     case 'google_calendar':
       return 'Google Calendar'
+    case 'microsoft_calendar':
+      return 'Outlook Calendar'
     case 'odorik':
       return 'Odorik Call'
     case 'gmail':
       return 'Gmail'
+    case 'outlook_mail':
+      return 'Outlook Mail'
     case 'github':
       return 'GitHub'
     default:
@@ -82,8 +91,12 @@ const externalButtonText = computed(() => {
       return 'Open in Google Drive'
     case 'google_calendar':
       return 'Open in Google Calendar'
+    case 'microsoft_calendar':
+      return 'Open in Outlook Calendar'
     case 'gmail':
       return 'Open in Gmail'
+    case 'outlook_mail':
+      return 'Open in Outlook'
     case 'github':
       return 'View on GitHub'
     default:

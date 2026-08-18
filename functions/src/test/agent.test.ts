@@ -102,6 +102,38 @@ test("gmail context items cite as gmail without a deep link, not generic google"
   assert.equal(chunk.metadata?.externalUrl, null);
 });
 
+test("Microsoft calendar and mail citations keep Outlook branding and deep links", () => {
+  const calendarUrl = "https://outlook.live.com/owa/?itemid=calendar-event&path=/calendar/item";
+  const calendar = extractRecordMetadata({
+    kind: "context_item",
+    recordId: "calendar-1",
+    sourcePath: "companies/explorers/contextItems/calendar-1",
+    title: "Interview",
+    occurredAt: "2026-08-20T13:00:00.000Z",
+    data: {
+      source: { providerId: "microsoft", capabilityId: "context.calendar.read" },
+      metadata: { sourceUrl: calendarUrl },
+    },
+  });
+  assert.equal(calendar.adapterId, "microsoft_calendar");
+  assert.equal(calendar.externalUrl, calendarUrl);
+
+  const mailUrl = "https://outlook.live.com/mail/0/id/message-1";
+  const mail = extractRecordMetadata({
+    kind: "context_item",
+    recordId: "mail-1",
+    sourcePath: "companies/explorers/contextItems/mail-1",
+    title: "Message",
+    occurredAt: "2026-08-18T09:00:00.000Z",
+    data: {
+      source: { providerId: "microsoft", capabilityId: "context.mail.read_scoped" },
+      metadata: { sourceUrl: mailUrl },
+    },
+  });
+  assert.equal(mail.adapterId, "outlook_mail");
+  assert.equal(mail.externalUrl, mailUrl);
+});
+
 test("RRF combines rankings without comparing incompatible raw scores", () => {
   const result = reciprocalRankFusion(
     [

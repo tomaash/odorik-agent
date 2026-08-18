@@ -448,16 +448,19 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
     const capabilityId = typeof sourceObj.capabilityId === "string"
       ? sourceObj.capabilityId
       : null;
+    const providerId = typeof sourceObj.providerId === "string"
+      ? sourceObj.providerId
+      : null;
     // Map capability IDs first. Mail stores providerId "google" without adapterId;
     // without this branch citations become generic "google" with no Gmail deep link.
     adapterId = capabilityId === "context.document.read"
       ? "google_drive"
       : capabilityId === "context.calendar.read"
-        ? "google_calendar"
+        ? providerId === "microsoft" ? "microsoft_calendar" : "google_calendar"
         : capabilityId === "context.call.read"
           ? "odorik"
           : capabilityId === "context.mail.read_scoped"
-            ? "gmail"
+            ? providerId === "microsoft" ? "outlook_mail" : "gmail"
             : typeof sourceObj.adapterId === "string"
               ? sourceObj.adapterId
               : typeof sourceObj.providerId === "string"
@@ -465,7 +468,7 @@ export function extractRecordMetadata(record: CompanyRecord): Record<string, str
                 : null;
     if (adapterId === "google_drive") {
       externalUrl = artifactRefs[0] || null;
-    } else if (adapterId === "google_calendar") {
+    } else if (["google_calendar", "microsoft_calendar", "outlook_mail"].includes(adapterId || "")) {
       externalUrl = (typeof metaObj.sourceUrl === "string" ? metaObj.sourceUrl : null) || artifactRefs[0] || null;
     } else if (adapterId === "gmail") {
       // No reliable Gmail web deep link (rfc822msgid search and #all/ both fail
