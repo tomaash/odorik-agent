@@ -65,7 +65,7 @@ below suggests:
   and personal Microsoft accounts so development and dogfood are not blocked by
   a customer's app-registration policy. Customer-tenant consent policy remains
   authoritative whenever a customer identity is connected.
-- Slice 12 is implemented in code and awaiting live acceptance. Outlook Mail
+- Slice 12 is implemented, deployed, and accepted live as of 2026-08-18. Outlook Mail
   imports a fixed, member-restricted Inbox resource bounded to the last 90 days,
   then resumes from Graph's opaque delta link. Durable, replay-idempotent change
   notifications validate `clientState`, wake the same sync runtime, and renew
@@ -73,8 +73,13 @@ below suggests:
   The existing one-recipient `mail.draft.create` envelope now routes through a
   provider adapter. Outlook uses create-message only, attaches a stable Erik
   request property for reconciliation, treats ambiguous outcomes as unknown,
-  and has no send path or `Mail.Send` grant. The connected personal mailbox has
-  test mail ready for the ingestion and approval-gated live proof.
+  and has no send path or `Mail.Send` grant. Live acceptance imported and cited
+  two messages from the connected personal mailbox, then prepared an exact
+  Slack proposal and created one marked Outlook draft after approval. Graph
+  confirmed the recipient, subject, text body, Drafts parent, `isDraft=true`,
+  one unique Erik request marker, and zero matching Sent Items.
+  Dogfood also caught a natural-language routing gap for “prepare … an email
+  draft”; the corrected route is regression-tested and deployed.
 
 The direct-message dogfood exposed a product-level defect: after a company
 summary, the message “hello” was forced through a company search and produced
@@ -87,8 +92,8 @@ roadmap requirements rather than prompt-tuning follow-ups.
 ### Priority decision after Slice 10
 
 1. Deploy and complete Slice 10 live acceptance; do not widen its actions.
-2. Complete Slice 12 live acceptance, then build Outlook Calendar on the same
-   source runtime rather than widening the mail slice.
+2. Build Outlook Calendar on the accepted Microsoft identity and source runtime
+   rather than widening the completed mail slice.
 3. Add Teams personal conversation only after Outlook identity, tenant isolation,
    and Graph lifecycle behavior are proven. Reuse the Slack conversation and
    proposal protocols rather than create a Teams-specific agent.
@@ -490,7 +495,7 @@ with PKCE. Refresh tokens must be treated as replaceable secrets; the old token
 is securely discarded after a new one is stored. This foundation is therefore
 the next slice, not an Outlook UI shortcut.
 
-### Slice 12: Outlook evidence and draft loop — implemented in code, live acceptance pending
+### Slice 12: Outlook evidence and draft loop — implemented, deployed, and accepted live
 
 **Usable outcome:** Erik can answer a permission-aware question from one Outlook
 mailbox and, from that grounded conversation, propose exactly one Outlook draft
@@ -509,7 +514,9 @@ that appears in Drafts only after approval.
   call the separate send operation; and
 - automated tests prove exact recipient, mailbox, body, provider reconciliation,
   `outcome_unknown`, replay resistance, cursor recovery, and no-send invariants;
-  the remaining acceptance is one live ingestion/citation and one approved draft.
+  live acceptance on 2026-08-18 proved Inbox ingestion and citations, durable
+  subscription setup, Slack-originated approval, exactly one Outlook draft,
+  and zero matching Sent Items.
 
 ### Slice 13: Outlook calendar continuity
 

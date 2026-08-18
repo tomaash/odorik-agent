@@ -266,6 +266,14 @@ create-message endpoint, stores a stable Erik extended property for provider
 reconciliation, and refuses a second create while an earlier provider outcome
 is unknown. It never requests `Mail.Send` and contains no send endpoint.
 
+Live acceptance on 2026-08-18 proved the complete personal-account loop: two
+Inbox messages were imported, indexed, and cited; the notification subscription
+was created and an invalid `clientState` was ignored; an authenticated Slack DM
+produced an exact approval card; and approval created one uniquely marked
+message in Drafts. A direct Graph read confirmed the disclosed recipient,
+subject, plain-text body, Drafts parent, and `isDraft=true`; the same Erik marker
+matched zero messages in Sent Items.
+
 Refresh responses atomically replace the encrypted refresh token and advance a
 credential revision. A concurrent refresh cannot overwrite a newer envelope.
 Manual health verification forces a rotation, calls `/me`, and rechecks the
