@@ -213,6 +213,7 @@ test("source public views retain operational state and exclude credentials", asy
         id: "microsoft_365",
         availability: "available",
         capabilities: [
+          "context.calendar.read",
           "context.mail.read_scoped",
           "action.mail.draft.create",
         ],

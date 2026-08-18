@@ -699,6 +699,10 @@ export async function retryDueGoogleCalendarSyncRuns(input: {
   const due = await listDueConnectorSyncRuns({ serviceId: "calendar", limit: input.limit }, dependencies);
   const results: Array<CalendarSyncResult & { companyId: string; connectionId: string }> = [];
   for (const run of due) {
+    const connection = await database.doc(
+      companyDocumentPath(run.companyId, "connections", run.connectionId),
+    ).get();
+    if (connection.data()?.connectorId !== "google_workspace") continue;
     const result = await executeGoogleCalendarSyncRun({
       companyId: run.companyId,
       connectionId: run.connectionId,

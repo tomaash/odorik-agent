@@ -647,6 +647,7 @@ const messages = {
         gmailCompose: 'Vytvářet a upravovat koncepty (Google scope umí i odeslat; Erik odeslání nepoužívá)',
         microsoftMailRead: 'Číst poštu přihlášeného uživatele',
         microsoftMailReadWrite: 'Číst a měnit poštu včetně vytváření konceptů (nezahrnuje odesílání)',
+        microsoftCalendarRead: 'Číst kalendáře a události přihlášeného uživatele',
         slackChatWrite: 'Odesílat zprávy do vybraných kanálů',
         slackChannelsRead: 'Zobrazit kanály, do kterých byl Erik pozván',
         slackImHistory: 'Číst pouze přímé zprávy odeslané botovi',
@@ -772,13 +773,16 @@ const messages = {
           invalid: 'Microsoft autorizační požadavek je neplatný nebo vypršel.',
         },
         capabilities: {
-          context: { mail: { read_scoped: {
+          context: { calendar: { read: {
+            name: 'Čtení kalendáře Outlook',
+            description: 'Načítá události pouze z výslovně vybraných kalendářů. Nový výběr je zpočátku viditelný jen vlastníkovi připojení.',
+          } }, mail: { read_scoped: {
             name: 'Čtení pošty Outlook',
-            description: 'Připraví delegované Mail.Read pro příští úzký, auditovatelný import schránky. Tato slice zatím poštu nenačítá.',
+            description: 'Načítá pevnou složku Inbox zpětně za 90 dní pomocí obnovitelných změnových kurzorů.',
           } } },
           action: { mail: { draft: { create: {
             name: 'Vytváření konceptů Outlook',
-            description: 'Připraví Mail.ReadWrite, které umí založit koncept, ale ne odesílat. Schvalovaný provozní loop přijde v další slice.',
+            description: 'Po schválení vytvoří právě jeden koncept v Outlooku. Erik nikdy nevolá operaci odeslání.',
           } } } },
         },
       },
@@ -896,8 +900,10 @@ const messages = {
         description: 'Do firemního kontextu se načtou pouze označené kalendáře. Výběr můžete později změnit.',
         primary: 'Primární',
         none: 'V tomto Google účtu nejsou dostupné žádné kalendáře.',
+        noneMicrosoft: 'V tomto účtu Microsoft nejsou dostupné žádné kalendáře.',
         submit: 'Uložit výběr a synchronizovat',
         privacy: 'Události z vybraných kalendářů budou dostupné všem povoleným členům této firmy.',
+        privacyRestricted: 'Nově vybraný kalendář vidíte nejprve jen vy. Později ho můžete výslovně zpřístupnit dalším členům u zdroje.',
       },
       mailPicker: {
         title: 'Vyberte štítky',
@@ -1586,6 +1592,7 @@ const messages = {
         gmailCompose: 'Create and update drafts (Google’s scope can also send; Erik never sends)',
         microsoftMailRead: 'Read the signed-in user’s mail',
         microsoftMailReadWrite: 'Read and change mail, including creating drafts (does not permit sending)',
+        microsoftCalendarRead: 'Read the signed-in user’s calendars and events',
         slackChatWrite: 'Post messages to selected channels',
         slackChannelsRead: 'List channels Erik has been invited to',
         slackImHistory: 'Read only direct messages sent to the bot',
@@ -1711,13 +1718,16 @@ const messages = {
           invalid: 'The Microsoft authorization request is invalid or expired.',
         },
         capabilities: {
-          context: { mail: { read_scoped: {
+          context: { calendar: { read: {
+            name: 'Read Outlook calendars',
+            description: 'Imports events only from explicitly selected calendars. A new selection is initially visible only to the connection owner.',
+          } }, mail: { read_scoped: {
             name: 'Read Outlook mail',
-            description: 'Prepares delegated Mail.Read for the next narrow, auditable mailbox import. This slice does not ingest mail yet.',
+            description: 'Imports the fixed Inbox for the last 90 days through recoverable change cursors.',
           } } },
           action: { mail: { draft: { create: {
             name: 'Create Outlook drafts',
-            description: 'Prepares Mail.ReadWrite, which can create a draft but cannot send. The approval-gated operating loop arrives in the next slice.',
+            description: 'After approval, creates exactly one Outlook draft. Erik never calls the send operation.',
           } } } },
         },
       },
@@ -1835,8 +1845,10 @@ const messages = {
         description: 'Only checked calendars are imported into company context. You can change the selection later.',
         primary: 'Primary',
         none: 'No calendars are available in this Google account.',
+        noneMicrosoft: 'No calendars are available in this Microsoft account.',
         submit: 'Save selection and synchronize',
         privacy: 'Events from selected calendars will be available to every enabled member of this company.',
+        privacyRestricted: 'A newly selected calendar is visible only to you at first. You can explicitly share it with other members later from the source.',
       },
       mailPicker: {
         title: 'Choose labels',

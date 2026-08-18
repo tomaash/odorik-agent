@@ -3,15 +3,18 @@ import { Timestamp } from "firebase-admin/firestore";
 
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
-import { companyDocumentPath } from "../tenancy.js";
 import { authorizedMicrosoftCapability } from "./microsoft-oauth.js";
+import {
+  syncMicrosoftOutlookCalendarConnection,
+  type CalendarSyncInput,
+} from "./microsoft-outlook-calendar.js";
 import { syncMicrosoftOutlookConnection, type OutlookSyncInput } from "./microsoft-outlook.js";
 
-const capabilityId = "context.mail.read_scoped" as const;
 const subscriptionCollection = "microsoftGraphSubscriptions";
 const notificationCollection = "microsoftGraphNotifications";
 export const microsoftOutlookWebhookUrl = "https://app.agenterik.cz/webhooks/microsoft";
 export const microsoftOutlookSubscriptionResource = "me/mailFolders('inbox')/messages";
+export const microsoftOutlookCalendarSubscriptionResource = "me/events";
 const subscriptionLifetimeMs = 6 * 24 * 60 * 60 * 1_000;
 const renewalWindowMs = 24 * 60 * 60 * 1_000;
 
@@ -24,6 +27,26 @@ type GraphSubscription = {
 };
 
 type GraphSubscriptionList = { value?: GraphSubscription[] };
+
+type MicrosoftSubscriptionInput = OutlookSyncInput | CalendarSyncInput;
+
+type SubscriptionDescriptor = {
+  capabilityId: "context.mail.read_scoped" | "context.calendar.read";
+  serviceId: "mail" | "calendar";
+  resource: string;
+};
+
+const mailSubscription: SubscriptionDescriptor = {
+  capabilityId: "context.mail.read_scoped",
+  serviceId: "mail",
+  resource: microsoftOutlookSubscriptionResource,
+};
+
+const calendarSubscription: SubscriptionDescriptor = {
+  capabilityId: "context.calendar.read",
+  serviceId: "calendar",
+  resource: microsoftOutlookCalendarSubscriptionResource,
+};
 
 export type MicrosoftGraphNotification = {
   id?: string;
@@ -71,8 +94,8 @@ async function graphSubscriptionJson<T>(input: {
   return body;
 }
 
-function subscriptionDocumentId(companyId: string, connectionId: string): string {
-  return sha256Hex(`${companyId}:${connectionId}:${microsoftOutlookSubscriptionResource}`).slice(0, 40);
+function subscriptionDocumentId(companyId: string, connectionId: string, resource: string): string {
+  return sha256Hex(`${companyId}:${connectionId}:${resource}`).slice(0, 40);
 }
 
 function expiration(now: Timestamp): string {
@@ -86,6 +109,7 @@ async function createSubscription(input: {
   database: FirebaseFirestore.Firestore;
   request: typeof fetch;
   now: Timestamp;
+  descriptor: SubscriptionDescriptor;
 }): Promise<GraphSubscription> {
   const clientState = randomBytes(32).toString("base64url");
   try {
@@ -98,7 +122,7 @@ async function createSubscription(input: {
         changeType: "created,updated,deleted",
         notificationUrl: microsoftOutlookWebhookUrl,
         lifecycleNotificationUrl: microsoftOutlookWebhookUrl,
-        resource: microsoftOutlookSubscriptionResource,
+        resource: input.descriptor.resource,
         expirationDateTime: expiration(input.now),
         clientState,
       },
@@ -111,14 +135,17 @@ async function createSubscription(input: {
       request: input.request,
     });
     const existing = (listed.value || []).find(
-      (value) => value.resource?.toLocaleLowerCase() === microsoftOutlookSubscriptionResource.toLocaleLowerCase(),
+      (value) => value.resource?.toLocaleLowerCase() === input.descriptor.resource.toLocaleLowerCase(),
     );
     if (!existing?.id || !existing.clientState) throw error;
     return existing;
   }
 }
 
-export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput): Promise<{
+async function ensureMicrosoftSubscription(
+  input: MicrosoftSubscriptionInput,
+  descriptor: SubscriptionDescriptor,
+): Promise<{
   status: "created" | "renewed" | "current";
   subscriptionId: string;
   expirationDateTime: string;
@@ -127,7 +154,7 @@ export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput
   const request = input.fetch || fetch;
   const now = input.now?.() || Timestamp.now();
   const ref = database.collection(subscriptionCollection).doc(
-    subscriptionDocumentId(input.companyId, input.connectionId),
+    subscriptionDocumentId(input.companyId, input.connectionId, descriptor.resource),
   );
   const current = await ref.get();
   const currentData = current.data() || {};
@@ -144,7 +171,7 @@ export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput
       expirationDateTime: String(currentData.expirationDateTime),
     };
   }
-  const authorized = await authorizedMicrosoftCapability(capabilityId, {
+  const authorized = await authorizedMicrosoftCapability(descriptor.capabilityId, {
     companyId: input.companyId,
     connectionId: input.connectionId,
     clientId: input.clientId,
@@ -170,13 +197,13 @@ export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput
       }
       subscription = await createSubscription({
         companyId: input.companyId, connectionId: input.connectionId,
-        accessToken: authorized.accessToken, database, request, now,
+        accessToken: authorized.accessToken, database, request, now, descriptor,
       });
     }
   } else {
     subscription = await createSubscription({
       companyId: input.companyId, connectionId: input.connectionId,
-      accessToken: authorized.accessToken, database, request, now,
+      accessToken: authorized.accessToken, database, request, now, descriptor,
     });
   }
   if (!subscription.id || !subscription.expirationDateTime) {
@@ -190,9 +217,10 @@ export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput
   await ref.set({
     companyId: input.companyId,
     connectionId: input.connectionId,
-    capabilityId,
+    capabilityId: descriptor.capabilityId,
+    serviceId: descriptor.serviceId,
     providerSubscriptionId: subscription.id,
-    resource: subscription.resource || microsoftOutlookSubscriptionResource,
+    resource: subscription.resource || descriptor.resource,
     changeType: subscription.changeType || "created,updated,deleted",
     clientStateHash,
     expirationDateTime: subscription.expirationDateTime,
@@ -204,8 +232,16 @@ export async function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput
   return { status, subscriptionId: subscription.id, expirationDateTime: subscription.expirationDateTime };
 }
 
+export function ensureMicrosoftOutlookSubscription(input: OutlookSyncInput) {
+  return ensureMicrosoftSubscription(input, mailSubscription);
+}
+
+export function ensureMicrosoftOutlookCalendarSubscription(input: CalendarSyncInput) {
+  return ensureMicrosoftSubscription(input, calendarSubscription);
+}
+
 export async function ensureAllMicrosoftOutlookSubscriptions(
-  input: Omit<OutlookSyncInput, "companyId" | "connectionId">,
+  input: Omit<MicrosoftSubscriptionInput, "companyId" | "connectionId">,
 ): Promise<Array<{ companyId: string; connectionId: string; ok: boolean; status?: string; error?: string }>> {
   const database = input.database || db;
   const companies = await database.collection("companies").get();
@@ -216,15 +252,17 @@ export async function ensureAllMicrosoftOutlookSubscriptions(
       .where("connectorId", "==", "microsoft_365")
       .where("status", "in", ["active", "attention"]).get();
     for (const connection of connections.docs) {
-      const capability = await connection.ref.collection("capabilities").doc("mail").get();
-      if (!capability.exists || !["permission_granted", "active", "attention"].includes(String(capability.data()?.status))) continue;
-      try {
-        const ensured = await ensureMicrosoftOutlookSubscription({
-          ...input, companyId: company.id, connectionId: connection.id,
-        });
-        results.push({ companyId: company.id, connectionId: connection.id, ok: true, status: ensured.status });
-      } catch (error) {
-        results.push({ companyId: company.id, connectionId: connection.id, ok: false, error: error instanceof Error ? error.message : String(error) });
+      for (const descriptor of [mailSubscription, calendarSubscription]) {
+        const capability = await connection.ref.collection("capabilities").doc(descriptor.serviceId).get();
+        if (!capability.exists || !["active", "attention"].includes(String(capability.data()?.status))) continue;
+        try {
+          const ensured = await ensureMicrosoftSubscription({
+            ...input, companyId: company.id, connectionId: connection.id,
+          }, descriptor);
+          results.push({ companyId: company.id, connectionId: connection.id, ok: true, status: `${descriptor.serviceId}:${ensured.status}` });
+        } catch (error) {
+          results.push({ companyId: company.id, connectionId: connection.id, ok: false, error: `${descriptor.serviceId}: ${error instanceof Error ? error.message : String(error)}` });
+        }
       }
     }
   }
@@ -278,6 +316,8 @@ export async function queueMicrosoftGraphNotifications(input: {
       transaction.create(ref, {
         companyId: subscriptionData.companyId,
         connectionId: subscriptionData.connectionId,
+        capabilityId: subscriptionData.capabilityId,
+        serviceId: subscriptionData.serviceId,
         subscriptionDocumentId: subscription.id,
         providerSubscriptionId: notification.subscriptionId,
         changeType: notification.changeType || null,
@@ -304,7 +344,7 @@ export async function queueMicrosoftGraphNotifications(input: {
   return { queued, duplicate, ignored };
 }
 
-export async function processMicrosoftGraphNotification(input: OutlookSyncInput & {
+export async function processMicrosoftGraphNotification(input: MicrosoftSubscriptionInput & {
   notificationId: string;
 }): Promise<void> {
   const database = input.database || db;
@@ -314,13 +354,16 @@ export async function processMicrosoftGraphNotification(input: OutlookSyncInput 
   const data = snapshot.data() || {};
   await ref.set({ status: "processing", attempts: Number(data.attempts || 0) + 1, updatedAt: Timestamp.now() }, { merge: true });
   try {
-    const result = await syncMicrosoftOutlookConnection({
+    const syncInput = {
       ...input,
       companyId: String(data.companyId),
       connectionId: String(data.connectionId),
-      trigger: "webhook",
+      trigger: "webhook" as const,
       requestedBy: "webhook:microsoft-graph",
-    });
+    };
+    const result = data.serviceId === "calendar"
+      ? await syncMicrosoftOutlookCalendarConnection(syncInput)
+      : await syncMicrosoftOutlookConnection(syncInput);
     await ref.set({ status: "processed", syncRunId: result.runId, processedAt: Timestamp.now(), lastError: null }, { merge: true });
   } catch (error) {
     await ref.set({ status: "failed", lastError: error instanceof Error ? error.message : String(error), updatedAt: Timestamp.now() }, { merge: true });

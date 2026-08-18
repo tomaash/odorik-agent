@@ -1145,10 +1145,12 @@ export const workspaceCapabilityIds: WorkspaceCapabilityId[] = [
 ]
 
 export type MicrosoftCapabilityId =
+  | 'context.calendar.read'
   | 'context.mail.read_scoped'
   | 'action.mail.draft.create'
 
 export const microsoftCapabilityIds: MicrosoftCapabilityId[] = [
+  'context.calendar.read',
   'context.mail.read_scoped',
   'action.mail.draft.create',
 ]
@@ -1246,6 +1248,18 @@ export async function refreshMicrosoftConnection(connectionId: string) {
 
 export async function syncMicrosoftOutlook(connectionId: string) {
   return trpc.sources.microsoft365.sync.mutate({ connectionId })
+}
+
+export async function getMicrosoftOutlookCalendars(connectionId: string): Promise<SelectableCalendar[]> {
+  return trpc.sources.microsoft365.calendars.query({ connectionId }) as Promise<SelectableCalendar[]>
+}
+
+export async function selectMicrosoftOutlookCalendars(connectionId: string, calendarIds: string[]) {
+  return trpc.sources.microsoft365.selectCalendars.mutate({ connectionId, calendarIds })
+}
+
+export async function syncMicrosoftOutlookCalendars(connectionId: string) {
+  return trpc.sources.microsoft365.syncCalendars.mutate({ connectionId })
 }
 
 export async function getGoogleCalendars(connectionId: string): Promise<SelectableCalendar[]> {

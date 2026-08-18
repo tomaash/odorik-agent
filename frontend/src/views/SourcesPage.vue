@@ -18,6 +18,7 @@ import {
   getKnowledgeIndexStatus,
   getGrokSubscriptionAuthorization,
   getGoogleCalendars,
+  getMicrosoftOutlookCalendars,
   getGoogleDriveFolders,
   getSlackChannels,
   getTeamOverview,
@@ -28,6 +29,7 @@ import {
   replaySourceSync,
   retryChatNotificationDelivery,
   selectGoogleCalendars,
+  selectMicrosoftOutlookCalendars,
   selectGoogleDriveFolders,
   selectSlackChannels,
   setSourceCapabilityStatus,
@@ -38,6 +40,7 @@ import {
   startMicrosoftAuthorization,
   refreshMicrosoftConnection,
   syncMicrosoftOutlook,
+  syncMicrosoftOutlookCalendars,
   startSlackAuthorization,
   startGrokSubscriptionAuthorization,
   syncGoogleCalendars,
@@ -483,6 +486,7 @@ function scopeLabel(scope: string) {
     'https://www.googleapis.com/auth/gmail.compose': t('sources.scopes.gmailCompose'),
     'Mail.Read': t('sources.scopes.microsoftMailRead'),
     'Mail.ReadWrite': t('sources.scopes.microsoftMailReadWrite'),
+    'Calendars.Read': t('sources.scopes.microsoftCalendarRead'),
     'chat:write': t('sources.scopes.slackChatWrite'),
     'channels:read': t('sources.scopes.slackChannelsRead'),
     'im:history': t('sources.scopes.slackImHistory'),
@@ -996,7 +1000,9 @@ async function openCalendarPicker(connection: SourceConnection) {
   calendars.value = []
   selectedCalendarIds.value = []
   try {
-    calendars.value = await getGoogleCalendars(connection.id)
+    calendars.value = connection.connectorId === 'microsoft_365'
+      ? await getMicrosoftOutlookCalendars(connection.id)
+      : await getGoogleCalendars(connection.id)
     selectedCalendarIds.value = calendars.value
       .filter((calendar) => calendar.selected)
       .map((calendar) => calendar.id)
@@ -1019,7 +1025,11 @@ async function saveCalendarSelection() {
   saving.value = true
   error.value = ''
   try {
-    await selectGoogleCalendars(calendarConnection.value.id, selectedCalendarIds.value)
+    if (calendarConnection.value.connectorId === 'microsoft_365') {
+      await selectMicrosoftOutlookCalendars(calendarConnection.value.id, selectedCalendarIds.value)
+    } else {
+      await selectGoogleCalendars(calendarConnection.value.id, selectedCalendarIds.value)
+    }
     calendarConnection.value = null
     await load()
   } catch (cause) {
@@ -1033,7 +1043,11 @@ async function synchronizeCalendar(connection: SourceConnection) {
   synchronizingId.value = `${connection.id}:calendar`
   error.value = ''
   try {
-    await syncGoogleCalendars(connection.id)
+    if (connection.connectorId === 'microsoft_365') {
+      await syncMicrosoftOutlookCalendars(connection.id)
+    } else {
+      await syncGoogleCalendars(connection.id)
+    }
     await load()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -1576,8 +1590,12 @@ onUnmounted(() => {
               <span class="block text-xs text-surface-400 mt-1 break-all">{{ calendar.id }}</span>
             </span>
           </label>
-          <p v-if="calendars.length === 0" class="text-sm text-surface-500">{{ t('sources.calendarPicker.none') }}</p>
-          <Message severity="warn" :closable="false">{{ t('sources.calendarPicker.privacy') }}</Message>
+          <p v-if="calendars.length === 0" class="text-sm text-surface-500">
+            {{ t(calendarConnection?.connectorId === 'microsoft_365' ? 'sources.calendarPicker.noneMicrosoft' : 'sources.calendarPicker.none') }}
+          </p>
+          <Message severity="warn" :closable="false">
+            {{ t(calendarConnection?.connectorId === 'microsoft_365' ? 'sources.calendarPicker.privacyRestricted' : 'sources.calendarPicker.privacy') }}
+          </Message>
         </div>
 
         <div class="shrink-0 flex flex-col-reverse gap-2 border-t border-surface-200 bg-white px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
@@ -2582,7 +2600,7 @@ onUnmounted(() => {
 
                     <div v-if="isAdmin" class="mt-3 flex flex-wrap justify-end gap-1">
                       <Button
-                        v-if="descriptor.id === 'context.calendar.read' && capabilityConfiguration(connection, descriptor)?.status === 'active'"
+                        v-if="descriptor.id === 'context.calendar.read' && ['active', 'permission_granted'].includes(capabilityConfiguration(connection, descriptor)?.status || '')"
                         :label="t('sources.chooseCalendars')"
                         icon="pi pi-list-check"
                         severity="secondary"

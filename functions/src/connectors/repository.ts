@@ -1086,11 +1086,15 @@ export async function setCapabilityStatus(
       capabilityId: input.capabilityId,
       serviceId: descriptor.serviceId,
     }, { database });
-  } else if (input.capabilityId === "context.mail.read_scoped" && !input.enabled) {
+  } else if (
+    ["context.mail.read_scoped", "context.calendar.read"].includes(input.capabilityId)
+    && !input.enabled
+  ) {
     const subscriptions = await database.collection("microsoftGraphSubscriptions")
       .where("companyId", "==", input.companyId).get();
     await commitInChunks(subscriptions.docs
-      .filter((document) => document.data().connectionId === input.connectionId)
+      .filter((document) => document.data().connectionId === input.connectionId
+        && document.data().capabilityId === input.capabilityId)
       .map((document) => (batch) => batch.set(document.ref, {
         status: "disabled",
         updatedAt: FieldValue.serverTimestamp(),

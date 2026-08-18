@@ -33,6 +33,9 @@ export const mailDraftScopes = [
 
 export const microsoftMailScopes = ["Mail.Read"] as const;
 
+/** Read-only delegated access to the signed-in member's calendars and events. */
+export const microsoftCalendarScopes = ["Calendars.Read"] as const;
+
 /** Graph's delegated Mail.ReadWrite grant can create drafts but cannot send mail. */
 export const microsoftMailDraftScopes = ["Mail.ReadWrite"] as const;
 
@@ -149,6 +152,7 @@ export const googleWorkspaceCapabilityIds: readonly SourceCapabilityId[] = [
 ] as const;
 
 export const microsoft365CapabilityIds = [
+  "context.calendar.read",
   "context.mail.read_scoped",
   "action.mail.draft.create",
 ] as const;
@@ -157,6 +161,10 @@ export const microsoft365Capabilities: Record<
   typeof microsoft365CapabilityIds[number],
   SourceCapabilityDescriptor
 > = {
+  "context.calendar.read": {
+    ...sourceCapabilities["context.calendar.read"],
+    requiredScopes: [...microsoftCalendarScopes],
+  },
   "context.mail.read_scoped": {
     ...sourceCapabilities["context.mail.read_scoped"],
     resourceType: "mailbox",

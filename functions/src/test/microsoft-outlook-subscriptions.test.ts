@@ -14,6 +14,8 @@ test("Microsoft notifications validate clientState and queue replay-idempotently
     companyId: "company-1",
     connectionId: "microsoft-1",
     providerSubscriptionId: "graph-subscription-1",
+    capabilityId: "context.calendar.read",
+    serviceId: "calendar",
     clientStateHash: sha256Hex("correct-secret"),
     status: "active",
   });
@@ -39,6 +41,7 @@ test("Microsoft notifications validate clientState and queue replay-idempotently
   assert.equal(queued.length, 1);
   assert.equal(queued[0]?.status, "queued");
   assert.equal(queued[0]?.companyId, "company-1");
+  assert.equal(queued[0]?.serviceId, "calendar");
 });
 
 test("subscription lifecycle removal is durable and still wakes delta recovery", async () => {

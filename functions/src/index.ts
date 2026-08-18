@@ -43,6 +43,10 @@ import {
   retryDueMicrosoftOutlookSyncRuns,
   syncAllMicrosoftOutlookConnections,
 } from "./connectors/microsoft-outlook.js";
+import {
+  retryDueMicrosoftOutlookCalendarSyncRuns,
+  syncAllMicrosoftOutlookCalendarConnections,
+} from "./connectors/microsoft-outlook-calendar.js";
 import { ensureAllMicrosoftOutlookSubscriptions } from "./connectors/microsoft-outlook-subscriptions.js";
 import {
   githubConfigurationFromEnvironment,
@@ -470,6 +474,64 @@ export const recoverOutlookMailSourceSyncs = onSchedule(
     const attention = results.filter((result) => result.status === "attention");
     if (attention.length) {
       console.error("One or more Outlook synchronization runs exhausted recovery", attention);
+    }
+  },
+);
+
+export const syncOutlookCalendarSources = onSchedule(
+  {
+    schedule: "every 30 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await syncAllMicrosoftOutlookCalendarConnections({
+      clientId: microsoftConnectorClientId.value(),
+      clientSecret: microsoftConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const failures = results.filter((result) => !result.ok);
+    if (failures.length) {
+      console.error("One or more Outlook calendars failed to synchronize", failures);
+    }
+  },
+);
+
+export const recoverOutlookCalendarSourceSyncs = onSchedule(
+  {
+    schedule: "every 5 minutes",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 540,
+    memory: "512MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientId,
+      microsoftConnectorClientSecret,
+    ],
+  },
+  async () => {
+    const results = await retryDueMicrosoftOutlookCalendarSyncRuns({
+      clientId: microsoftConnectorClientId.value(),
+      clientSecret: microsoftConnectorClientSecret.value(),
+      credentialKey: connectorCredentialKey.value(),
+    });
+    const attention = results.filter((result) => result.status === "attention");
+    if (attention.length) {
+      console.error("One or more Outlook calendar synchronization runs exhausted recovery", attention);
     }
   },
 );

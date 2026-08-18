@@ -90,6 +90,13 @@ import {
   syncMicrosoftOutlookConnection,
 } from "./connectors/microsoft-outlook.js";
 import {
+  listMicrosoftOutlookCalendars,
+  replayMicrosoftOutlookCalendarSyncRun,
+  selectMicrosoftOutlookCalendars,
+  syncMicrosoftOutlookCalendarConnection,
+} from "./connectors/microsoft-outlook-calendar.js";
+import { ensureMicrosoftOutlookCalendarSubscription } from "./connectors/microsoft-outlook-subscriptions.js";
+import {
   configuredGitHubInstallationId,
   connectGitHubInstallation,
   githubConfigurationFromEnvironment,
@@ -581,6 +588,7 @@ export const appRouter = router({
       authorizationUrl: adminProcedure
         .input(z.object({
           capabilityIds: z.array(z.enum([
+            "context.calendar.read",
             "context.mail.read_scoped",
             "action.mail.draft.create",
           ])).max(1).default([]),
@@ -623,6 +631,54 @@ export const appRouter = router({
           connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
         }))
         .mutation(({ ctx, input }) => syncMicrosoftOutlookConnection({
+          companyId: ctx.companyId,
+          connectionId: input.connectionId,
+          clientId: microsoftConnectorClientId.value(),
+          clientSecret: microsoftConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+          trigger: "manual",
+          requestedBy: ctx.uid,
+        })),
+      calendars: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .query(({ ctx, input }) => listMicrosoftOutlookCalendars({
+          companyId: ctx.companyId,
+          connectionId: input.connectionId,
+          clientId: microsoftConnectorClientId.value(),
+          clientSecret: microsoftConnectorClientSecret.value(),
+          credentialKey: connectorCredentialKey.value(),
+        })),
+      selectCalendars: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+          calendarIds: z.array(z.string().min(1).max(2000)).max(50),
+        }))
+        .mutation(async ({ ctx, input }) => {
+          const result = await selectMicrosoftOutlookCalendars({
+            companyId: ctx.companyId,
+            connectionId: input.connectionId,
+            calendarIds: input.calendarIds,
+            actorUid: ctx.uid,
+            clientId: microsoftConnectorClientId.value(),
+            clientSecret: microsoftConnectorClientSecret.value(),
+            credentialKey: connectorCredentialKey.value(),
+          });
+          if (input.calendarIds.length) await ensureMicrosoftOutlookCalendarSubscription({
+            companyId: ctx.companyId,
+            connectionId: input.connectionId,
+            clientId: microsoftConnectorClientId.value(),
+            clientSecret: microsoftConnectorClientSecret.value(),
+            credentialKey: connectorCredentialKey.value(),
+          });
+          return result;
+        }),
+      syncCalendars: adminProcedure
+        .input(z.object({
+          connectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ ctx, input }) => syncMicrosoftOutlookCalendarConnection({
           companyId: ctx.companyId,
           connectionId: input.connectionId,
           clientId: microsoftConnectorClientId.value(),
@@ -872,8 +928,21 @@ export const appRouter = router({
         if (!run.exists) {
           throw new TRPCError({ code: "NOT_FOUND", message: "Synchronization run not found" });
         }
+        const connection = await db.doc(companyDocumentPath(
+          ctx.companyId, "connections", input.connectionId,
+        )).get();
         switch (run.data()?.serviceId) {
           case "calendar":
+            if (String(connection.data()?.connectorId) === "microsoft_365") {
+              return replayMicrosoftOutlookCalendarSyncRun({
+                companyId: ctx.companyId,
+                ...input,
+                actorUid: ctx.uid,
+                clientId: microsoftConnectorClientId.value(),
+                clientSecret: microsoftConnectorClientSecret.value(),
+                credentialKey: connectorCredentialKey.value(),
+              });
+            }
             return replayGoogleCalendarSyncRun({
               companyId: ctx.companyId,
               ...input,
@@ -892,9 +961,7 @@ export const appRouter = router({
               credentialKey: connectorCredentialKey.value(),
             });
           case "mail":
-            if (String((await db.doc(companyDocumentPath(
-              ctx.companyId, "connections", input.connectionId,
-            )).get()).data()?.connectorId) === "microsoft_365") {
+            if (String(connection.data()?.connectorId) === "microsoft_365") {
               return replayMicrosoftOutlookSyncRun({
                 companyId: ctx.companyId,
                 ...input,
@@ -1147,6 +1214,22 @@ export const appRouter = router({
               });
               return { ok: true, sync };
             }
+          }
+          if (
+            connection.data()?.connectorId === "microsoft_365"
+            && capabilityId === "context.calendar.read"
+          ) {
+            const sync = await syncMicrosoftOutlookCalendarConnection({
+              companyId: ctx.companyId,
+              connectionId: input.connectionId,
+              resourceIds: [input.resourceId],
+              trigger: "selection",
+              requestedBy: ctx.uid,
+              clientId: microsoftConnectorClientId.value(),
+              clientSecret: microsoftConnectorClientSecret.value(),
+              credentialKey: connectorCredentialKey.value(),
+            });
+            return { ok: true, sync };
           }
           if (
             connection.data()?.connectorId === "github"
