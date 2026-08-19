@@ -158,10 +158,14 @@ personal conversation, and Entra object ID—to one member-owned Erik thread.
 Binding is explicit and revocable; matching an email address or display name is
 not identity proof.
 
-Inbound and outbound provider events first enter an immutable conversation
-journal. Each record retains provider event ID, provider timestamp, received
-timestamp, direction, delivery state, binding, member, and the message or run it
-caused. The provider event ID is the idempotency boundary. Events wait for a
+Inbound and outbound provider events first enter a durable conversation
+journal. Its delivery envelope is immutable for ordering and idempotency, while
+message text, rendered cards, provider identity fields, and derived content are
+redacted after the declared retention period or an earlier member/lifecycle
+request. The retained envelope contains only the hashed document identity,
+ordering/delivery outcome, and references required for replay safety and
+mandatory approval/execution audit. The provider event identity is hashed into
+the document key and remains the idempotency boundary. Events wait for a
 small explicit reorder window, then provider time plus a stable event-ID
 tie-breaker defines processing order; Firestore trigger arrival order does not.
 An event that arrives older than an already advanced cursor is retained and
@@ -179,7 +183,9 @@ not kept alive by an open model process.
 The first continuity contract deliberately implements only the active session.
 Six hours of inactivity closes it; recent messages use a 6,000-token estimate;
 and compact state versions cite exact first/last message IDs. A memory-generation
-fence implements forget without erasing immutable provider events or audit runs.
+fence first prevents stale content from entering a prompt; the retention service
+then redacts the older provider payloads, thread messages, derived session state,
+and agent-run content without erasing approval or execution audit.
 Older-session semantic retrieval is a separate 9B capability and must not be
 approximated by appending every historical summary.
 

@@ -17,6 +17,11 @@ import {
 } from "./agent/search.js";
 import { memberThreadDocumentId } from "./agent/threads.js";
 import { askFromWebWithBoundSession } from "./agent/cross-surface-continuity.js";
+import { beginConversationSession } from "./agent/conversation-memory.js";
+import {
+  inspectMemberConversationData,
+  redactMemberConversationData,
+} from "./agent/conversation-retention.js";
 import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
 import {
   enqueueKnowledgeIndexBackfill,
@@ -1375,6 +1380,71 @@ export const appRouter = router({
       });
       return { id: threadId, title: "New chat", createdAt: now.toDate().toISOString() };
     }),
+    conversationData: enabledProcedure
+      .input(z.object({ threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/) }))
+      .query(async ({ ctx, input }) => {
+        try {
+          return await inspectMemberConversationData({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            threadId: input.threadId,
+          });
+        } catch (error) {
+          throw new TRPCError({
+            code: "NOT_FOUND",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
+    forgetConversation: enabledProcedure
+      .input(z.object({
+        threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/),
+        requestId: z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/),
+      }))
+      .mutation(async ({ ctx, input }) => {
+        const activityAtMs = Date.now();
+        try {
+          const session = await beginConversationSession({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            threadId: input.threadId,
+            activityAtMs,
+            control: "forget",
+            idempotencyKey: input.requestId,
+            database: db,
+          });
+          const redacted = await redactMemberConversationData({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            threadId: input.threadId,
+            reason: "member_forget",
+            beforeMemoryGeneration: session.memoryGeneration,
+            database: db,
+          });
+          await db.collection(companyCollectionPath(ctx.companyId, "auditEvents"))
+            .doc(`conversation_forget_${input.requestId}`).set({
+              eventType: "conversation.content_forgotten",
+              actorUid: ctx.uid,
+              threadId: input.threadId,
+              memoryGeneration: session.memoryGeneration,
+              redacted,
+              occurredAt: Timestamp.fromMillis(activityAtMs),
+              createdAt: Timestamp.fromMillis(activityAtMs),
+            }, { merge: true });
+          return inspectMemberConversationData({
+            companyId: ctx.companyId,
+            actorUid: ctx.uid,
+            threadId: input.threadId,
+            database: db,
+          });
+        } catch (error) {
+          throw new TRPCError({
+            code: error instanceof Error && error.message === "Conversation not found."
+              ? "NOT_FOUND" : "INTERNAL_SERVER_ERROR",
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }),
     history: enabledProcedure
       .input(z.object({ threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general") }).optional())
       .query(async ({ ctx, input }) => {
@@ -1388,17 +1458,20 @@ export const appRouter = router({
           .get();
         // Rehydrate citation deep links from live context items so older answers
         // pick up improved source URLs (e.g. Gmail rfc822msgid) without a new ask.
-        const messages = await Promise.all(snapshot.docs.reverse().map(async (document) => {
-          const data = document.data();
-          if (data.role !== "assistant" || !Array.isArray(data.citations)) {
-            return { id: document.id, ...data };
-          }
-          return {
-            id: document.id,
-            ...data,
-            citations: await rehydrateCitationPresentation(db, ctx.companyId, data.citations),
-          };
-        }));
+        const messages = await Promise.all(snapshot.docs.reverse()
+          .filter((document) => !document.data().contentRedacted
+            && typeof document.data().text === "string")
+          .map(async (document) => {
+            const data = document.data();
+            if (data.role !== "assistant" || !Array.isArray(data.citations)) {
+              return { id: document.id, ...data };
+            }
+            return {
+              id: document.id,
+              ...data,
+              citations: await rehydrateCitationPresentation(db, ctx.companyId, data.citations),
+            };
+          }));
         return jsonSafe(messages);
       }),
     ask: enabledProcedure

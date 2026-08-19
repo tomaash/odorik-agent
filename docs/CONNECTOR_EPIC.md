@@ -2,10 +2,14 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** intentional multi-surface continuity (Slice
-15A). Exact Slack/Teams handoffs into the same Erik thread, visible surface
-binding, and session-aware web continuation are implemented locally and
-verified without waiting on Store publication. Teams personal conversation and decision parity (Slice 14)
+**Current implementation slice:** conversation privacy and retention (Slice
+15B). A 30-day content-retention contract, resumable adoption of existing
+records, hourly redaction, immediate member forget, connector/uninstall cleanup,
+and member-visible conversation-data controls are implemented. Redaction
+keeps only the minimal delivery/idempotency envelope and mandatory approval or
+execution audit. Exact Slack/Teams handoffs into the same Erik thread, visible
+surface binding, and session-aware web continuation remain the completed 15A
+foundation. Teams personal conversation and decision parity (Slice 14)
 is deployed with its Azure bot, Teams channel, production secrets, hosting
 routes, public legal pages, and Store-ready package. Teams Free cannot sideload
 it. Partner Center enrollment is an explicit external blocker: automated trust
@@ -20,7 +24,10 @@ and the app is published.** Automated and endpoint-level verification must not
 be described as live Teams acceptance. Outlook mail, Outlook Calendar,
 Slack notification, and durable Slack conversation slices are complete and
 accepted.
-The core epic (C0–C5, G1–G3) is complete and accepted.
+The core epic (C0–C5, G1–G3) is complete and accepted. Slice 15B implementation
+and automated acceptance are complete; live acceptance remains pending. Teams
+client acceptance remains impossible while the separate Microsoft Partner
+Center blocker is open.
 
 **Last plan revision:** 2026-08-18
 

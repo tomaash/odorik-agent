@@ -386,8 +386,9 @@ corrections, and conversation decisions. Every factual turn still uses fresh
 authorized company tools; summaries cannot satisfy citations.
 
 `what do you remember?` exposes the active state. `forget this conversation`
-rotates a memory generation, so retained provider/audit records cannot silently
-re-enter future prompts. Session selection and state completion are idempotent
+rotates a memory generation immediately; Slice 15B also redacts the older
+provider payload and derived content so it cannot silently re-enter future
+prompts. Session selection and state completion are idempotent
 per inbound Slack message, and every run records the exact session, state
 version, selected raw message IDs, estimated token use, and selected memory IDs.
 
@@ -654,8 +655,30 @@ session. Web turns on a bound thread reuse the active bounded session, current
 memory generation, token-budgeted authorized context, fresh-evidence policy,
 and idempotent session completion rather than falling back to an ambient recent
 history merge. This is the smallest useful continuity proof; provider-event
-retention/deletion controls and real Teams-client acceptance remain separate
-exit work.
+retention and deletion controls are completed by 15B below. Real Teams-client
+acceptance remains separate and externally blocked.
+
+**Slice 15B implementation state (2026-08-19): implementation and automated
+acceptance complete; live acceptance pending.** Conversation content now carries policy version
+`conversation-retention-v1` and expires 30 days after activity. An hourly,
+bounded maintenance job first adopts pre-policy records through resumable
+collection cursors, then redacts expired provider events, member messages,
+session state, agent-run content, thread titles, and external conversation
+identities in place. The remaining envelope contains the stable hashed document
+identity, ordering/delivery outcome, and references required for replay safety;
+approval and execution records are not altered.
+
+“Forget content” is available to the owning member from the Ask page. It rotates
+the memory generation, redacts all older message text, citations, provider
+payloads, compact state, and agent-run content, and records a content-free audit
+event. Slack and Teams `forget this conversation` use the same generation-fenced
+redaction after preparing the new-generation receipt. Connector deletion and a
+verified Teams uninstall immediately revoke the binding and redact provider
+copies. Tests prove member/company isolation, exact retention bounds, legacy
+adoption, preservation of approval audit, connector cleanup, and that a late
+duplicate provider event cannot restore redacted content. Live Teams validation
+is not claimed and cannot occur before Microsoft resolves support request
+`2608180010001212` and Store publication completes.
 
 Direct messages do not justify reading general channel history. A future shared
 conversation must define audience intersection, participant identity, mention

@@ -14,6 +14,11 @@ import {
   type ConversationSessionControl,
 } from "../agent/conversation-memory.js";
 import { teamsConversationHandoff } from "../agent/cross-surface-continuity.js";
+import {
+  conversationRetentionMetadata,
+  redactMemberConversationData,
+  redactMicrosoftTeamsConversationAfterUninstall,
+} from "../agent/conversation-retention.js";
 import { prepareConversationTaskProposal } from "../agent/task-proposal.js";
 import { prepareConversationMailDraftProposal } from "../agent/mail-draft-proposal.js";
 import { resolveMicrosoftTeamsTenant } from "../connectors/microsoft-teams.js";
@@ -134,6 +139,7 @@ export async function queueMicrosoftTeamsMessage(input: {
       providerConversationId: input.event.conversationId,
       serviceUrl: input.event.serviceUrl,
       enqueueGeneration: Number(conversation.data()?.enqueueGeneration || 0) + 1,
+      ...conversationRetentionMetadata(),
       ...(!conversation.exists ? { createdAt: Timestamp.now() } : {}),
       updatedAt: Timestamp.now(),
     }, { merge: true });
@@ -143,6 +149,7 @@ export async function queueMicrosoftTeamsMessage(input: {
       pending: true,
       orderKey: microsoftTeamsEventOrderKey(input.event),
       attempts: 0,
+      ...conversationRetentionMetadata(),
       createdAt: Timestamp.now(),
     });
     return "queued";
@@ -206,6 +213,14 @@ export async function recordMicrosoftTeamsInstallationUpdate(input: {
       updatedAt: now,
     }, { merge: true });
   });
+  if (!input.installed) {
+    await redactMicrosoftTeamsConversationAfterUninstall({
+      tenantId,
+      providerConversationId: String(conversation.id || ""),
+      entraObjectId,
+      database,
+    });
+  }
   return "recorded";
 }
 
@@ -231,7 +246,7 @@ function simpleReply(route: SlackTurnRoute, text: string, context: Awaited<Retur
   if (route === "capability") return "I can answer permission-aware company questions with sources and prepare task or one-recipient email-draft proposals. Consequential actions still require your explicit approval.";
   if (route === "memory_inspect") return describeConversationMemory(context);
   if (route === "session_reset") return "Started a fresh topic. I won’t automatically use the previous session’s discussion state.";
-  if (route === "memory_forget") return "Forgot the conversation context I was carrying. Retained transport and audit records will not be used as memory in future turns.";
+  if (route === "memory_forget") return "Forgot the conversation context I was carrying and erased its earlier content. Minimal delivery identities and approval/execution audit remain, but the removed text will not be used as memory.";
   return "I won’t execute or approve an action from an ordinary message. I can prepare a supported proposal for your explicit approval.";
 }
 
@@ -318,6 +333,24 @@ export async function processMicrosoftTeamsMessage(input: {
     companyId: workspace.companyId, actorUid: uid, threadId, activityAtMs, control,
     idempotencyKey: inboundMessageId, database,
   });
+  const retention = conversationRetentionMetadata(activityAtMs);
+  await Promise.all([
+    database.doc(`microsoftTeamsConversations/${microsoftTeamsConversationId(input.event)}`).set({
+      ...workspace,
+      actorUid: uid,
+      threadId,
+      bindingStatus: "active",
+      ...retention,
+    }, { merge: true }),
+    database.doc(microsoftTeamsEventPath(input.event)).set({
+      ...workspace,
+      actorUid: uid,
+      threadId,
+      sessionId: session.sessionId,
+      memoryGeneration: session.memoryGeneration,
+      ...retention,
+    }, { merge: true }),
+  ]);
   const originMetadata = {
     tenantId: input.event.tenantId,
     entraObjectId: input.event.entraObjectId,
@@ -432,6 +465,16 @@ export async function processMicrosoftTeamsMessage(input: {
   await database.doc(companyDocumentPath(workspace.companyId, "agentRuns", runId)).set({
     contextUsed: { ...turnMetadata.contextUsed, resultingStateVersion: completed.stateVersion },
   }, { merge: true });
+  if (route === "memory_forget") {
+    await redactMemberConversationData({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      reason: "member_forget",
+      beforeMemoryGeneration: session.memoryGeneration,
+      database,
+    });
+  }
   return { outcome: "answered", route,
     replyText: teamsConversationHandoff(replyText, input.appOrigin, threadId),
     companyId: workspace.companyId,

@@ -134,9 +134,10 @@ class MemoryQuery {
       operator: string;
       value: unknown;
     }> = [],
-    private readonly ordering: { field: string; direction: Direction } | null = null,
+    private readonly ordering: { field: string | object; direction: Direction } | null = null,
     private readonly maximum: number | null = null,
     private readonly collectionGroup = false,
+    private readonly afterPath: string | null = null,
   ) {}
 
   where(field: string, operator: string, value: unknown): MemoryQuery {
@@ -150,10 +151,11 @@ class MemoryQuery {
       this.ordering,
       this.maximum,
       this.collectionGroup,
+      this.afterPath,
     );
   }
 
-  orderBy(field: string, direction: Direction = "asc"): MemoryQuery {
+  orderBy(field: string | object, direction: Direction = "asc"): MemoryQuery {
     return new MemoryQuery(
       this.database,
       this.collectionPath,
@@ -161,6 +163,7 @@ class MemoryQuery {
       { field, direction },
       this.maximum,
       this.collectionGroup,
+      this.afterPath,
     );
   }
 
@@ -172,6 +175,19 @@ class MemoryQuery {
       this.ordering,
       maximum,
       this.collectionGroup,
+      this.afterPath,
+    );
+  }
+
+  startAfter(reference: MemoryDocumentReference): MemoryQuery {
+    return new MemoryQuery(
+      this.database,
+      this.collectionPath,
+      this.filters,
+      this.ordering,
+      this.maximum,
+      this.collectionGroup,
+      reference.path,
     );
   }
 
@@ -189,6 +205,7 @@ class MemoryQuery {
       .filter(([path]) => this.collectionGroup
         ? isCollectionGroupDocument(this.collectionPath, path)
         : isDirectDocument(this.collectionPath, path))
+      .filter(([path]) => !this.afterPath || path > this.afterPath)
       .filter(([, data]) => this.filters.every((filter) => {
         const actual = comparableValue(nestedValue(data, filter.field));
         const expected = comparableValue(filter.value);
@@ -204,8 +221,10 @@ class MemoryQuery {
     if (this.ordering) {
       const { field, direction } = this.ordering;
       values.sort((left, right) => {
-        const leftValue = String(nestedValue(left[1], field) ?? "");
-        const rightValue = String(nestedValue(right[1], field) ?? "");
+        const leftValue = typeof field === "string"
+          ? String(nestedValue(left[1], field) ?? "") : left[0];
+        const rightValue = typeof field === "string"
+          ? String(nestedValue(right[1], field) ?? "") : right[0];
         const comparison = leftValue.localeCompare(rightValue);
         return direction === "asc" ? comparison : -comparison;
       });

@@ -63,6 +63,10 @@ import {
   reconcileCodingRuns,
 } from "./coding/reconcile.js";
 import { queueCodingPublisher } from "./coding/service.js";
+import {
+  backfillLegacyConversationRetentionMetadata,
+  redactExpiredConversationContent,
+} from "./agent/conversation-retention.js";
 export { googleOAuthCallback } from "./connectors/google-oauth-callback.js";
 export { microsoftOAuthCallback } from "./connectors/microsoft-oauth-callback.js";
 export {
@@ -636,6 +640,26 @@ export const reconcileCodingRunExecutions = onSchedule(
     });
     if (result.failures) {
       throw new Error(`${result.failures} coding run reconciliation check(s) failed`);
+    }
+  },
+);
+
+export const redactExpiredConversations = onSchedule(
+  {
+    schedule: "every 1 hours",
+    timeZone: "Europe/Prague",
+    region: "europe-west3",
+    timeoutSeconds: 300,
+    memory: "256MiB",
+    maxInstances: 1,
+    retryCount: 0,
+    serviceAccount: runtimeServiceAccount,
+  },
+  async () => {
+    const migration = await backfillLegacyConversationRetentionMetadata();
+    const result = await redactExpiredConversationContent();
+    if (migration.examined || result.redacted) {
+      console.info("Applied conversation retention maintenance", { migration, ...result });
     }
   },
 );

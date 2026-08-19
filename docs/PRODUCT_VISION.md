@@ -165,7 +165,7 @@ prompt.
 
 | Memory class | Purpose | Authority |
 | --- | --- | --- |
-| Event journal | Immutable inbound and outbound turns, provider IDs, timestamps, delivery state | Exact record of the conversation transport |
+| Event journal | Durable delivery envelopes plus retention-bounded message content | Exact transport ordering and outcomes; content is redacted on expiry or forget |
 | Working context | Recent ordered turns and the currently discussed objects or task | Temporary conversational state |
 | Episodic memory | Versioned summaries of completed sessions, decisions, corrections, and unresolved topics | Derived and provenance-bound; useful for recall, never company evidence |
 | Member preferences | Explicit durable preferences or instructions accepted from that member | Scoped to that member and revocable; never silently inferred from agent text |

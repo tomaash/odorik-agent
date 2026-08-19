@@ -4,6 +4,7 @@ import { companyDocumentPath } from "../tenancy.js";
 import { FirestoreCompanyData, knowledgeKindForCollection } from "./knowledge.js";
 import { memberThreadDocumentId } from "./threads.js";
 import type { ToolCitation } from "./types.js";
+import { conversationRetentionMetadata } from "./conversation-retention.js";
 
 export const conversationSessionVersion = "conversation-session-v1";
 export const conversationSessionInactivityMs = 6 * 60 * 60 * 1000;
@@ -211,6 +212,7 @@ export async function beginConversationSession(input: {
         lastActivityAt: activityAt,
         createdAt: activityAt,
         updatedAt: activityAt,
+        ...conversationRetentionMetadata(input.activityAtMs),
       });
     }
     transaction.set(threadRef, {
@@ -223,6 +225,7 @@ export async function beginConversationSession(input: {
       conversationSessionVersion,
       ...(control === "forget" ? { forgottenBefore: activityAt } : {}),
       updatedAt: activityAt,
+      ...conversationRetentionMetadata(input.activityAtMs),
     }, { merge: true });
     if (operationRef) {
       transaction.set(operationRef, {
@@ -350,7 +353,8 @@ export async function loadAuthorizedConversationContextForSession(input: {
   const data = session.data() || {};
   if (!session.exists
     || data.ownerUid !== input.actorUid
-    || data.status === "forgotten") {
+    || data.status === "forgotten"
+    || data.contentRedacted) {
     throw new Error("The proposal's conversation session is no longer available.");
   }
   return loadAuthorizedConversationContext({
@@ -451,10 +455,12 @@ export async function completeConversationSessionTurn(input: {
       turnCount: Number(current.data()?.turnCount || 0) + 1,
       lastActivityAt: activityAt,
       updatedAt: activityAt,
+      ...conversationRetentionMetadata(input.activityAtMs),
     }, { merge: true });
     transaction.set(threadRef, {
       activeSessionLastActivityAt: activityAt,
       updatedAt: activityAt,
+      ...conversationRetentionMetadata(input.activityAtMs),
     }, { merge: true });
     transaction.set(turnRef, {
       userMessageId: input.userMessageId,

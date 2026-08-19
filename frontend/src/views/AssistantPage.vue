@@ -13,10 +13,13 @@ import SourceCard from '../components/SourceCard.vue'
 import {
   askAssistant,
   createAssistantThread,
+  forgetAssistantConversation,
+  getAssistantConversationData,
   getAssistantHistory,
   getAssistantStatus,
   listAssistantThreads,
   type AssistantMessage,
+  type AssistantConversationData,
   type AssistantThread,
 } from '../api/client'
 
@@ -32,6 +35,9 @@ const status = ref<{ search?: string; readOnly?: boolean } | null>(null)
 const bottom = ref<HTMLElement | null>(null)
 const threads = ref<AssistantThread[]>([])
 const activeThreadId = ref('')
+const conversationData = ref<AssistantConversationData | null>(null)
+const conversationDataLoading = ref(false)
+const forgetting = ref(false)
 
 const suggestions = computed(() => tm('assistant.suggestions') as string[])
 const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value) || null)
@@ -58,6 +64,20 @@ async function scrollToBottom() {
   bottom.value?.scrollIntoView({ behavior: 'smooth', block: 'end' })
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return t('assistant.notAvailable')
+  return new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value))
+}
+
+async function loadConversationData(threadId: string) {
+  conversationDataLoading.value = true
+  try {
+    conversationData.value = await getAssistantConversationData(threadId)
+  } finally {
+    conversationDataLoading.value = false
+  }
+}
+
 async function load() {
   loading.value = true
   error.value = ''
@@ -73,6 +93,7 @@ async function load() {
       || threadList[0]!.id
     await reflectActiveThread(activeThreadId.value)
     messages.value = await getAssistantHistory(activeThreadId.value)
+    await loadConversationData(activeThreadId.value)
     status.value = agentStatus
     await scrollToBottom()
   } catch (cause) {
@@ -89,6 +110,7 @@ async function selectThread(threadId: string) {
   try {
     messages.value = await getAssistantHistory(threadId)
     activeThreadId.value = threadId
+    await loadConversationData(threadId)
     await reflectActiveThread(threadId)
     await scrollToBottom()
   } catch (cause) {
@@ -106,9 +128,26 @@ async function newThread() {
     threads.value = [thread, ...threads.value]
     activeThreadId.value = thread.id
     messages.value = []
+    await loadConversationData(thread.id)
     await reflectActiveThread(thread.id)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
+  }
+}
+
+async function forgetConversation() {
+  if (!activeThreadId.value || forgetting.value) return
+  if (!window.confirm(t('assistant.forgetConfirm'))) return
+  forgetting.value = true
+  error.value = ''
+  try {
+    conversationData.value = await forgetAssistantConversation(activeThreadId.value)
+    messages.value = await getAssistantHistory(activeThreadId.value)
+    threads.value = await listAssistantThreads()
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    forgetting.value = false
   }
 }
 
@@ -131,6 +170,7 @@ async function send(value = question.value) {
       limitations: answer.limitations,
     })
     threads.value = await listAssistantThreads()
+    await loadConversationData(activeThreadId.value)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   } finally {
@@ -209,6 +249,53 @@ onMounted(load)
     >
       {{ t('assistant.surfaceContinuity', { surface: surfaceLabel(activeExternalSurface) }) }}
     </Message>
+    <details class="mb-5 rounded-lg border border-surface-200 bg-white/70 p-4">
+      <summary class="cursor-pointer text-sm font-semibold text-surface-800">
+        {{ t('assistant.conversationData') }}
+      </summary>
+      <div v-if="conversationDataLoading" class="mt-4 flex items-center gap-2 text-sm text-surface-500">
+        <ProgressSpinner class="!h-4 !w-4" strokeWidth="5" />
+        {{ t('assistant.loadingConversationData') }}
+      </div>
+      <div v-else-if="conversationData" class="mt-4 grid gap-4">
+        <p class="m-0 text-sm leading-relaxed text-surface-600">
+          {{ t('assistant.retentionExplanation', { days: conversationData.retentionDays }) }}
+        </p>
+        <dl class="m-0 grid gap-x-6 gap-y-2 text-sm sm:grid-cols-2">
+          <div class="flex justify-between gap-3 border-b border-surface-100 py-1.5">
+            <dt class="text-surface-500">{{ t('assistant.boundSurface') }}</dt>
+            <dd class="m-0 font-medium text-surface-800">{{ surfaceLabel(conversationData.surface) }}</dd>
+          </div>
+          <div class="flex justify-between gap-3 border-b border-surface-100 py-1.5">
+            <dt class="text-surface-500">{{ t('assistant.retainedMessages') }}</dt>
+            <dd class="m-0 font-medium text-surface-800">{{ conversationData.retainedMessages }}</dd>
+          </div>
+          <div class="flex justify-between gap-3 border-b border-surface-100 py-1.5">
+            <dt class="text-surface-500">{{ t('assistant.memoryGeneration') }}</dt>
+            <dd class="m-0 font-medium text-surface-800">{{ conversationData.memoryGeneration }}</dd>
+          </div>
+          <div class="flex justify-between gap-3 border-b border-surface-100 py-1.5">
+            <dt class="text-surface-500">{{ t('assistant.contentExpires') }}</dt>
+            <dd class="m-0 text-right font-medium text-surface-800">{{ formatDate(conversationData.contentExpiresAt) }}</dd>
+          </div>
+        </dl>
+        <Message severity="warn" :closable="false">
+          {{ t('assistant.forgetExplanation') }}
+        </Message>
+        <div>
+          <Button
+            :label="t('assistant.forgetNow')"
+            icon="pi pi-trash"
+            severity="danger"
+            outlined
+            size="small"
+            :loading="forgetting"
+            :disabled="sending"
+            @click="forgetConversation"
+          />
+        </div>
+      </div>
+    </details>
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <template v-else>

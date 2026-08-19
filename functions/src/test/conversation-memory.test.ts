@@ -7,6 +7,7 @@ import {
   conversationRecentTokenBudget,
   conversationSessionInactivityMs,
   loadAuthorizedConversationContext,
+  loadAuthorizedConversationContextForSession,
   selectTokenBudgetedMessages,
 } from "../agent/conversation-memory.js";
 import { memberThreadDocumentId } from "../agent/threads.js";
@@ -142,4 +143,12 @@ test("conversation state has exact message bounds and revoked evidence leaves ne
   });
   assert.equal(revoked.state.entities.length, 0);
   assert.deepEqual(revoked.priorMessages.map((message) => message.id), ["user-1"]);
+
+  memory.seed(`${threadPath()}/sessions/${session.sessionId}`, {
+    ...memory.read(`${threadPath()}/sessions/${session.sessionId}`),
+    contentRedacted: true,
+  });
+  await assert.rejects(() => loadAuthorizedConversationContextForSession({
+    companyId, actorUid, threadId, sessionId: session.sessionId, database,
+  }), /no longer available/);
 });

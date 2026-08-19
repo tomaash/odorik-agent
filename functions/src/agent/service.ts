@@ -10,6 +10,9 @@ import { CompanyFactTools } from "./tools.js";
 import { memberThreadDocumentId } from "./threads.js";
 import { sha256Hex } from "../hash.js";
 import {
+  conversationRetentionMetadata,
+} from "./conversation-retention.js";
+import {
   conversationStatePrompt,
   selectTokenBudgetedMessages,
   type ConversationContextSnapshot,
@@ -72,6 +75,7 @@ export async function persistCompanyAgentInbound(input: {
     lastMessageAt: createdAt,
     lastOrigin: input.origin,
     ...(input.origin === "web" ? {} : { boundSurface: input.origin }),
+    ...conversationRetentionMetadata(input.createdAtMs),
   }, { merge: true });
   batch.set(messagesRef.doc(input.messageId), {
     role: "user",
@@ -81,6 +85,7 @@ export async function persistCompanyAgentInbound(input: {
     originMetadata: jsonSafe(input.originMetadata || {}),
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.memoryGeneration ? { memoryGeneration: input.memoryGeneration } : {}),
+    ...conversationRetentionMetadata(input.createdAtMs),
     createdAt,
   }, { merge: true });
   await batch.commit();
@@ -119,6 +124,7 @@ export async function persistCompanyConversationReply(input: {
     updatedAt: answerAt,
     lastMessageAt: answerAt,
     lastOrigin: input.origin,
+    ...conversationRetentionMetadata(answerAt.toMillis()),
   }, { merge: true });
   batch.set(answerRef, {
     role: "assistant",
@@ -133,6 +139,7 @@ export async function persistCompanyConversationReply(input: {
     replyToMessageId: input.inboundMessageId,
     ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     ...(input.memoryGeneration ? { memoryGeneration: input.memoryGeneration } : {}),
+    ...conversationRetentionMetadata(answerAt.toMillis()),
     createdAt: answerAt,
   });
   batch.set(runRef, {
@@ -150,6 +157,8 @@ export async function persistCompanyConversationReply(input: {
     origin: input.origin,
     originMetadata,
     ...(turnMetadata as Record<string, unknown>),
+    ...(input.memoryGeneration ? { memoryGeneration: input.memoryGeneration } : {}),
+    ...conversationRetentionMetadata(answerAt.toMillis()),
     createdAt: answerAt,
   });
   await batch.commit();
@@ -266,6 +275,7 @@ export async function askCompanyFactAgent(input: {
     updatedAt: answerAt,
     lastMessageAt: answerAt,
     lastOrigin: origin,
+    ...conversationRetentionMetadata(answerAt.toMillis()),
   }, { merge: true });
   if (!input.inboundMessageId) {
     batch.set(userMessageRef, {
@@ -274,6 +284,7 @@ export async function askCompanyFactAgent(input: {
       actorUid: input.actorUid,
       origin,
       originMetadata,
+      ...conversationRetentionMetadata(userAt.toMillis()),
       createdAt: userAt,
     });
   }
@@ -293,6 +304,7 @@ export async function askCompanyFactAgent(input: {
       sessionId: input.conversationContext.sessionId,
       memoryGeneration: input.conversationContext.memoryGeneration,
     } : {}),
+    ...conversationRetentionMetadata(answerAt.toMillis()),
     createdAt: answerAt,
   });
   batch.set(runRef, {
@@ -325,6 +337,10 @@ export async function askCompanyFactAgent(input: {
       estimatedRecentTokens: fallback.estimatedTokens,
     }),
     latencyMs: Date.now() - startedAt,
+    ...(input.conversationContext ? {
+      memoryGeneration: input.conversationContext.memoryGeneration,
+    } : {}),
+    ...conversationRetentionMetadata(answerAt.toMillis()),
     createdAt: answerAt,
   });
   await batch.commit();

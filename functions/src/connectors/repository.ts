@@ -37,6 +37,7 @@ import {
 import { callContactId } from "../calls.js";
 import { normalizePhone } from "../phone.js";
 import { microsoftTeamsTenantPath } from "./microsoft-teams.js";
+import { redactExternalConversationsForConnection } from "../agent/conversation-retention.js";
 
 const ingestBaseUrl = process.env.ODORIK_INGEST_BASE_URL?.trim()
   || "https://odorik-ingest-apf5skngva-ey.a.run.app";
@@ -672,6 +673,14 @@ export async function deleteSourceConnection(
       : Promise.resolve(null),
   ]);
   if (!connection.exists) throw new Error("Connection not found");
+  const conversationCleanup = ["slack", "microsoft_teams"].includes(input.connectorId)
+    ? await redactExternalConversationsForConnection({
+      companyId: input.companyId,
+      connectionId: input.connectionId,
+      reason: "connector_deleted",
+      database,
+    })
+    : { conversations: 0, events: 0 };
 
   const linkedRecords = uniqueDocuments((await Promise.all([
     recordsLinkedToCalls(
@@ -745,6 +754,8 @@ export async function deleteSourceConnection(
     contextItemsDeleted: contextItems.size,
     sourceRecordsDisabled: calls?.size || 0,
     providerAccessRevoked: input.providerAccessRevoked,
+    conversationsRedacted: conversationCleanup.conversations,
+    conversationEventsRedacted: conversationCleanup.events,
     occurredAt: FieldValue.serverTimestamp(),
     createdAt: FieldValue.serverTimestamp(),
   });

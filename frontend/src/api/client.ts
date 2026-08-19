@@ -278,6 +278,21 @@ export type AssistantThread = {
   createdAt?: string | null
 }
 
+export type AssistantConversationData = {
+  threadId: string
+  surface: 'web' | 'slack_dm' | 'teams_personal'
+  retentionDays: number
+  retentionPolicyVersion: string
+  memoryGeneration: number
+  activeSessionId: string | null
+  retainedMessages: number
+  redactedMessages: number
+  retainedSessions: number
+  forgottenBefore: string | null
+  contentExpiresAt: string | null
+  contentRedactedAt: string | null
+}
+
 export type WorkflowListItem = {
   id: string
   name: string
@@ -1004,6 +1019,19 @@ export async function listAssistantThreads(): Promise<AssistantThread[]> {
 
 export async function createAssistantThread(): Promise<AssistantThread> {
   return trpc.assistant.createThread.mutate() as Promise<AssistantThread>
+}
+
+export async function getAssistantConversationData(
+  threadId: string,
+): Promise<AssistantConversationData> {
+  return trpc.assistant.conversationData.query({ threadId }) as Promise<AssistantConversationData>
+}
+
+export async function forgetAssistantConversation(
+  threadId: string,
+): Promise<AssistantConversationData> {
+  const requestId = `forget_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  return trpc.assistant.forgetConversation.mutate({ threadId, requestId }) as Promise<AssistantConversationData>
 }
 
 export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {

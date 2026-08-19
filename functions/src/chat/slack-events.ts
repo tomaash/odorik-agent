@@ -14,6 +14,10 @@ import {
   type ConversationSessionControl,
 } from "../agent/conversation-memory.js";
 import { slackConversationHandoff } from "../agent/cross-surface-continuity.js";
+import {
+  conversationRetentionMetadata,
+  redactMemberConversationData,
+} from "../agent/conversation-retention.js";
 import { authorizedSlackDirect } from "../connectors/slack-oauth.js";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
@@ -194,6 +198,7 @@ export async function queueSlackDmEvent(input: {
       slackUserId: input.event.slackUserId,
       channelId: input.event.channelId,
       enqueueGeneration: generation,
+      ...conversationRetentionMetadata(),
       ...(!conversation.exists ? { createdAt: Timestamp.now() } : {}),
       updatedAt: Timestamp.now(),
     }, { merge: true });
@@ -203,6 +208,7 @@ export async function queueSlackDmEvent(input: {
       pending: true,
       orderKey: slackEventOrderKey(input.event.eventTs, input.event.eventId),
       attempts: 0,
+      ...conversationRetentionMetadata(),
       createdAt: Timestamp.now(),
     });
     return "queued";
@@ -270,7 +276,7 @@ function socialReply(text: string): string {
 const capabilityReply = "I can answer permission-aware questions with sources and prepare supported task or one-recipient email-draft proposals. Consequential actions still require your explicit approval.";
 const actionRequestReply = "I won’t execute or approve an action from an ordinary Slack message. I can help verify the relevant company context here; use Agent Erik’s authenticated approval surface for consequential actions.";
 const sessionResetReply = "Started a fresh topic. I won’t automatically use the previous session’s discussion state.";
-const memoryForgetReply = "Forgot the conversation context I was carrying. Retained transport and audit records will not be used as memory in future turns.";
+const memoryForgetReply = "Forgot the conversation context I was carrying and erased its earlier content. Minimal delivery identities and approval/execution audit remain, but the removed text will not be used as memory.";
 
 type PreparedSlackReply = {
   outcome: "answered" | "link_requested" | "ignored";
@@ -371,6 +377,24 @@ export async function processSlackDmEvent(input: {
     idempotencyKey: inboundMessageId,
     database,
   });
+  const retention = conversationRetentionMetadata(activityAtMs);
+  await Promise.all([
+    database.doc(`slackConversations/${slackConversationId(input.event)}`).set({
+      ...workspace,
+      actorUid: uid,
+      threadId,
+      bindingStatus: "active",
+      ...retention,
+    }, { merge: true }),
+    database.doc(slackConversationEventPath(input.event)).set({
+      ...workspace,
+      actorUid: uid,
+      threadId,
+      sessionId: session.sessionId,
+      memoryGeneration: session.memoryGeneration,
+      ...retention,
+    }, { merge: true }),
+  ]);
   const originMetadata = {
     teamId: input.event.teamId,
     slackUserId: input.event.slackUserId,
@@ -587,6 +611,16 @@ export async function processSlackDmEvent(input: {
       resultingStateVersion: completed.stateVersion,
     },
   }, { merge: true });
+  if (route === "memory_forget") {
+    await redactMemberConversationData({
+      companyId: workspace.companyId,
+      actorUid: uid,
+      threadId,
+      reason: "member_forget",
+      beforeMemoryGeneration: session.memoryGeneration,
+      database,
+    });
+  }
   return {
     outcome: "answered",
     replyText: slackConversationHandoff(replyText, input.appOrigin, threadId),
