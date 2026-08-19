@@ -564,8 +564,12 @@ adapter, not a shortcut for broad Teams history ingestion. Shared chats and
 channels remain out of scope until their participant-audience intersection and
 membership-change semantics are explicit.
 
-**Implementation state (2026-08-18): deployed, awaiting Store publication and
-live client acceptance.**
+**Implementation state (2026-08-19): code and backend deployed, but Teams is
+unavailable and cannot be tested in a real Teams client.** Microsoft must first
+resolve Partner Center support request `2608180010001212`; publisher enrollment,
+Store submission, and publication must then complete before any desktop or
+mobile acceptance is possible. Automated contract tests and direct endpoint
+checks are implementation evidence only, not live Teams acceptance.
 The repository now has a separate tenant-bound `microsoft_teams` installation,
 personal-only authenticated ingress through the current Microsoft Teams SDK,
 an exact allowlisted conversation reference, short-lived tenant + Entra object

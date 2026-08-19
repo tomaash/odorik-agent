@@ -13,7 +13,11 @@ evaluation rejected the first attempt before workspace creation, and the clean
 custom-domain retry did not complete. Microsoft support request
 `2608180010001212` is open and awaiting advocate review. See
 `MICROSOFT_PARTNER_CENTER_BLOCKER.md`. Store publication and subsequent real
-desktop/mobile acceptance therefore remain. Outlook mail, Outlook Calendar,
+desktop/mobile acceptance therefore remain. **Teams is not currently an
+available product surface, and there is no way to test it in a real Teams
+client until Microsoft resolves that ticket, publisher enrollment succeeds,
+and the app is published.** Automated and endpoint-level verification must not
+be described as live Teams acceptance. Outlook mail, Outlook Calendar,
 Slack notification, and durable Slack conversation slices are complete and
 accepted.
 The core epic (C0–C5, G1–G3) is complete and accepted.

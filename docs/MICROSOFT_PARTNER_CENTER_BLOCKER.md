@@ -11,6 +11,13 @@ Slice 14 is deployed and packaged, but Agent Erik cannot complete its real
 Microsoft Teams desktop/mobile acceptance until the app can be submitted to the
 Teams Store through Partner Center's **Microsoft 365 and Copilot** program.
 
+This is a hard availability and testability boundary: Teams is not currently
+available as a product surface, and there is no supported way to install or
+exercise the app in a real Teams client while support request
+`2608180010001212` remains unresolved. Automated tests, webhook checks, and the
+deployed Azure bot prove code and infrastructure behavior only; they must not be
+reported as Teams client acceptance.
+
 The product implementation is not waiting on more bot code. The blocked chain
 is:
 

@@ -110,6 +110,12 @@ effects still execute only through Erik's canonical approval kernel; the first
 conversation actions are one internal task and one provider-mailbox draft
 (never send).
 
+> **Teams is currently unavailable and cannot be tested in a real Teams
+> client.** Microsoft must first resolve Partner Center support request
+> `2608180010001212`; publisher enrollment and Teams Store publication must then
+> complete. The deployed bot and automated tests do not replace that live-client
+> acceptance gate.
+
 For Teams personal conversation, set `MICROSOFT_TEAMS_APP_ID` in the Functions
 environment and the bot client ID, client secret, and tenant ID above in Secret Manager. Register the
 bot messaging endpoint as `https://<app-origin>/webhooks/teams`, then publish or
