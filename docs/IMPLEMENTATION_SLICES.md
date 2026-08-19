@@ -658,8 +658,8 @@ history merge. This is the smallest useful continuity proof; provider-event
 retention and deletion controls are completed by 15B below. Real Teams-client
 acceptance remains separate and externally blocked.
 
-**Slice 15B implementation state (2026-08-19): implementation and automated
-acceptance complete; live acceptance pending.** Conversation content now carries policy version
+**Slice 15B implementation state (2026-08-19): implementation, automated
+acceptance, and non-Teams production validation complete.** Conversation content now carries policy version
 `conversation-retention-v1` and expires 30 days after activity. An hourly,
 bounded maintenance job first adopts pre-policy records through resumable
 collection cursors, then redacts expired provider events, member messages,
@@ -679,6 +679,17 @@ adoption, preservation of approval audit, connector cleanup, and that a late
 duplicate provider event cannot restore redacted content. Live Teams validation
 is not claimed and cannot occur before Microsoft resolves support request
 `2608180010001212` and Store publication completes.
+
+Production validation used isolated disposable records and the deployed hourly
+job. It confirmed in-place redaction of a web thread title, message content,
+session state, agent-run content, Slack identity and Slack event payload; it also
+confirmed that the audit record and replay-safe ordering envelope remained.
+The job reported six redactions with no errors, the deployed web route returned
+success, the API rejected an unauthenticated request, and unsigned Slack ingress
+failed closed. The Ask-page privacy panel was inspected only in its signed-out
+route because no authenticated browser session was available; its authenticated
+forget interaction remains covered by the automated suite rather than claimed
+as a live UI check.
 
 Direct messages do not justify reading general channel history. A future shared
 conversation must define audience intersection, participant identity, mention

@@ -24,10 +24,14 @@ and the app is published.** Automated and endpoint-level verification must not
 be described as live Teams acceptance. Outlook mail, Outlook Calendar,
 Slack notification, and durable Slack conversation slices are complete and
 accepted.
-The core epic (C0–C5, G1–G3) is complete and accepted. Slice 15B implementation
-and automated acceptance are complete; live acceptance remains pending. Teams
-client acceptance remains impossible while the separate Microsoft Partner
-Center blocker is open.
+The core epic (C0–C5, G1–G3) is complete and accepted. Slice 15B implementation,
+automated acceptance, and non-Teams production validation are complete. The
+deployed hourly job redacted isolated web-thread, message, session, agent-run,
+and Slack-event probes while preserving the audit and delivery envelope; public
+web/API routes and unsigned Slack ingress also failed or served as designed.
+The authenticated Ask-page interaction was not exercised because no signed-in
+browser session was available. Teams client acceptance remains impossible while
+the separate Microsoft Partner Center blocker is open.
 
 **Last plan revision:** 2026-08-18
 
