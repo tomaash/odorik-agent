@@ -13,6 +13,7 @@ import {
   loadAuthorizedConversationContext,
   type ConversationSessionControl,
 } from "../agent/conversation-memory.js";
+import { slackConversationHandoff } from "../agent/cross-surface-continuity.js";
 import { authorizedSlackDirect } from "../connectors/slack-oauth.js";
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
@@ -588,7 +589,7 @@ export async function processSlackDmEvent(input: {
   }, { merge: true });
   return {
     outcome: "answered",
-    replyText,
+    replyText: slackConversationHandoff(replyText, input.appOrigin, threadId),
     route,
     ...workspace,
     botToken: authorization.botToken,

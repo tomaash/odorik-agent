@@ -219,6 +219,11 @@ test("source public views retain operational state and exclude credentials", asy
         ],
       },
       {
+        id: "microsoft_teams",
+        availability: "available",
+        capabilities: ["context.chat.direct"],
+      },
+      {
         id: "github",
         availability: "available",
         capabilities: ["context.github.issue.read"],

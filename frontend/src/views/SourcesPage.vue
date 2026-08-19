@@ -21,6 +21,7 @@ import {
   getMicrosoftOutlookCalendars,
   getGoogleDriveFolders,
   getSlackChannels,
+  enableMicrosoftTeams,
   getTeamOverview,
   getOdorikSetup,
   listSources,
@@ -97,6 +98,7 @@ const loadingFolders = ref(false)
 const searchContainerRef = ref<HTMLElement | null>(null)
 const synchronizingId = ref('')
 const microsoftRefreshingId = ref('')
+const microsoftTeamsEnablingId = ref('')
 const mailConnection = ref<SourceConnection | null>(null)
 const mailLabels = ref<SelectableMailLabel[]>([])
 const selectedLabelIds = ref<string[]>([])
@@ -257,6 +259,7 @@ function connectorIcon(connector: SourceConnector) {
     odorik: 'pi pi-phone',
     google_workspace: 'pi pi-google',
     microsoft_365: 'pi pi-microsoft',
+    microsoft_teams: 'pi pi-microsoft',
     github: 'pi pi-github',
     grok_subscription: 'pi pi-code',
     slack: 'pi pi-slack',
@@ -269,6 +272,7 @@ function connectorTag(connector: SourceConnector) {
   if (connector.id === 'grok_subscription') return t('sources.grok.subscriptionOAuth')
   if (connector.id === 'slack') return t('sources.slack.notificationsOnly')
   if (connector.id === 'microsoft_365') return t('sources.microsoft.foundation')
+  if (connector.id === 'microsoft_teams') return t('sources.microsoft.teamsTag')
   return t('sources.workspace.services')
 }
 
@@ -311,6 +315,7 @@ function addConnectionIcon(connector: SourceConnector) {
 function connectionKindLabel(connection: SourceConnection) {
   if (connection.connectorId === 'google_workspace') return t('sources.workspace.account')
   if (connection.connectorId === 'microsoft_365') return t('sources.microsoft.connectionKind')
+  if (connection.connectorId === 'microsoft_teams') return t('sources.microsoft.teamsConnectionKind')
   if (connection.connectorId === 'github') return t('sources.github.installation')
   if (connection.connectorId === 'grok_subscription') return t('sources.grok.connectionKind')
   if (connection.connectorId === 'slack') return t('sources.slack.connectionKind')
@@ -699,6 +704,22 @@ async function checkMicrosoftConnection(connection: SourceConnection) {
   }
 }
 
+async function enableTeams(connection: SourceConnection) {
+  microsoftTeamsEnablingId.value = connection.id
+  error.value = ''
+  notice.value = ''
+  try {
+    const result = await enableMicrosoftTeams(connection.id)
+    notice.value = t('sources.microsoft.teamsEnabled')
+    await load()
+    if (result.installUrl) window.location.assign(result.installUrl)
+  } catch (cause) {
+    error.value = cause instanceof Error ? cause.message : String(cause)
+  } finally {
+    microsoftTeamsEnablingId.value = ''
+  }
+}
+
 async function openSlackPicker(connection: SourceConnection) {
   loadingSlackChannels.value = true
   error.value = ''
@@ -766,6 +787,7 @@ async function retryChatDelivery(delivery: ChatNotificationDelivery) {
 }
 
 function canAddConnection(connector: SourceConnector) {
+  if (connector.id === 'microsoft_teams') return false
   if (connector.id === 'grok_subscription') {
     return connector.availability === 'available'
       && !connectionsByConnector.value.get('grok_subscription')?.length
@@ -2277,6 +2299,19 @@ onUnmounted(() => {
                     <li v-for="scope in connection.grantedScopes" :key="scope">{{ scopeLabel(scope) }}</li>
                   </ul>
                 </details>
+                <div v-if="isAdmin" class="rounded-xl border border-blue-200 bg-blue-50 p-3">
+                  <div class="text-sm font-semibold text-blue-950">{{ t('sources.microsoft.teamsTitle') }}</div>
+                  <p class="m-0 mt-1 text-xs leading-relaxed text-blue-900/80">{{ t('sources.microsoft.teamsDescription') }}</p>
+                  <Button
+                    :label="t('sources.microsoft.teamsEnable')"
+                    icon="pi pi-microsoft"
+                    size="small"
+                    class="mt-3 w-full sm:w-auto"
+                    :loading="microsoftTeamsEnablingId === connection.id"
+                    :disabled="Boolean(connectionsByConnector.get('microsoft_teams')?.length)"
+                    @click="enableTeams(connection)"
+                  />
+                </div>
               </section>
 
               <div

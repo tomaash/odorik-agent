@@ -2,10 +2,12 @@ export type ConversationApprovalPolicy = {
   version: "conversation-action-policy-v1";
   riskTier: "internal_write" | "external_draft";
   approvalMode: "named_person_each_version";
-  surface: "slack_dm";
+  surface: ConversationSurface;
   allowedDecisions: Array<"approve" | "reject" | "request_changes">;
   effectBoundary: string;
 };
+
+export type ConversationSurface = "slack_dm" | "teams_personal";
 
 const policies: Record<string, ConversationApprovalPolicy> = {
   "task.create": {
@@ -26,11 +28,15 @@ const policies: Record<string, ConversationApprovalPolicy> = {
   },
 };
 
-export function conversationApprovalPolicy(actionKind: string): ConversationApprovalPolicy {
+export function conversationApprovalPolicy(
+  actionKind: string,
+  surface: ConversationSurface = "slack_dm",
+): ConversationApprovalPolicy {
   const policy = policies[actionKind];
   if (!policy) throw new Error(`Action ${actionKind} is not allowed from a conversation.`);
   return {
     ...policy,
+    surface,
     allowedDecisions: [...policy.allowedDecisions],
   };
 }

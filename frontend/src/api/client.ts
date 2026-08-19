@@ -273,6 +273,7 @@ export type AssistantMessage = {
 export type AssistantThread = {
   id: string
   title: string
+  surface?: 'web' | 'slack_dm' | 'teams_personal'
   lastMessageAt?: string | null
   createdAt?: string | null
 }
@@ -474,7 +475,7 @@ export type ActionApprovalItem = {
     blockId: string
   } | {
     kind: 'conversation'
-    surface: 'slack_dm'
+    surface: 'slack_dm' | 'teams_personal'
     threadId: string
     sessionId: string
     messageId: string
@@ -502,7 +503,7 @@ export type ActionApprovalItem = {
     version: string
     riskTier: 'internal_write' | 'external_draft'
     approvalMode: 'named_person_each_version'
-    surface: 'slack_dm'
+    surface: 'slack_dm' | 'teams_personal'
     allowedDecisions: Array<'approve' | 'reject' | 'request_changes'>
     effectBoundary: string
   } | null
@@ -513,7 +514,7 @@ export type ActionApprovalItem = {
   executedAt?: string | null
 }
 
-export type ConnectorId = 'odorik' | 'google_workspace' | 'microsoft_365' | 'github' | 'slack' | 'grok_subscription'
+export type ConnectorId = 'odorik' | 'google_workspace' | 'microsoft_365' | 'microsoft_teams' | 'github' | 'slack' | 'grok_subscription'
 export type SourceCapabilityId =
   | 'context.call.read'
   | 'context.calendar.read'
@@ -597,7 +598,7 @@ export type SourceConnection = {
   tenantId?: string
   displayName: string
   status: 'configuring' | 'active' | 'attention' | 'disconnected'
-  authKind: 'basic_upload' | 'oauth2' | 'github_app' | 'subscription_oauth'
+  authKind: 'basic_upload' | 'oauth2' | 'github_app' | 'subscription_oauth' | 'bot_installation'
   credentialMode: 'encrypted' | 'legacy_secret' | 'shared_secret' | 'managed_secret' | 'none'
   uploadUrl?: string
   accountLabel?: string
@@ -1006,7 +1007,8 @@ export async function createAssistantThread(): Promise<AssistantThread> {
 }
 
 export async function askAssistant(question: string, threadId = 'general'): Promise<AssistantAnswer> {
-  return trpc.assistant.ask.mutate({ threadId, question }) as Promise<AssistantAnswer>
+  const requestId = `web_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`
+  return trpc.assistant.ask.mutate({ threadId, question, requestId }) as Promise<AssistantAnswer>
 }
 
 export async function listWorkflows(): Promise<WorkflowListItem[]> {
@@ -1218,6 +1220,28 @@ export async function inspectSlackIdentityLink(token: string): Promise<SlackLink
 
 export async function linkSlackIdentity(token: string) {
   return trpc.sources.slack.linkIdentity.mutate({ token })
+}
+
+export async function enableMicrosoftTeams(microsoftConnectionId: string) {
+  return trpc.sources.microsoftTeams.enable.mutate({ microsoftConnectionId }) as Promise<{
+    connectionId: string
+    tenantId: string
+    installUrl: string | null
+  }>
+}
+
+export type MicrosoftTeamsLinkPreview = {
+  tenantId: string
+  entraObjectId: string
+  expiresAt: string
+}
+
+export async function inspectMicrosoftTeamsIdentityLink(token: string) {
+  return trpc.sources.microsoftTeams.linkPreview.query({ token }) as Promise<MicrosoftTeamsLinkPreview>
+}
+
+export async function linkMicrosoftTeamsIdentity(token: string) {
+  return trpc.sources.microsoftTeams.linkIdentity.mutate({ token })
 }
 
 export async function startGoogleWorkspaceAuthorization(

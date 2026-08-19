@@ -2,12 +2,23 @@
 
 **Status:** core execution active
 
-**Current implementation slice:** bounded durable conversation sessions
-(Slice 9A / H2A continuity). H1 notification and Slice 8 Slack conversational
-correctness are complete and accepted.
+**Current implementation slice:** intentional multi-surface continuity (Slice
+15A). Exact Slack/Teams handoffs into the same Erik thread, visible surface
+binding, and session-aware web continuation are implemented locally and
+verified without waiting on Store publication. Teams personal conversation and decision parity (Slice 14)
+is deployed with its Azure bot, Teams channel, production secrets, hosting
+routes, public legal pages, and Store-ready package. Teams Free cannot sideload
+it. Partner Center enrollment is an explicit external blocker: automated trust
+evaluation rejected the first attempt before workspace creation, and the clean
+custom-domain retry did not complete. Microsoft support request
+`2608180010001212` is open and awaiting advocate review. See
+`MICROSOFT_PARTNER_CENTER_BLOCKER.md`. Store publication and subsequent real
+desktop/mobile acceptance therefore remain. Outlook mail, Outlook Calendar,
+Slack notification, and durable Slack conversation slices are complete and
+accepted.
 The core epic (C0–C5, G1–G3) is complete and accepted.
 
-**Last plan revision:** 2026-08-13
+**Last plan revision:** 2026-08-18
 
 This document owns connector sequencing. `PRODUCT_VISION.md` remains
 authoritative for the product boundary, `INTERNAL_WORKFLOW.md` remains

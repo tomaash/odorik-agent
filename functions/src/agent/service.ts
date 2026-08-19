@@ -15,7 +15,7 @@ import {
   type ConversationContextSnapshot,
 } from "./conversation-memory.js";
 
-export type AgentMessageOrigin = "web" | "slack_dm";
+export type AgentMessageOrigin = "web" | "slack_dm" | "teams_personal";
 
 export type ConversationTurnMetadata = {
   route?: string;
@@ -71,6 +71,7 @@ export async function persistCompanyAgentInbound(input: {
     updatedAt: createdAt,
     lastMessageAt: createdAt,
     lastOrigin: input.origin,
+    ...(input.origin === "web" ? {} : { boundSurface: input.origin }),
   }, { merge: true });
   batch.set(messagesRef.doc(input.messageId), {
     role: "user",

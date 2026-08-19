@@ -53,6 +53,16 @@ export const chatDirectScopes = ["im:history"] as const;
 
 export const slackScopes = [...chatNotifyScopes, ...chatDirectScopes] as const;
 
+export const microsoftTeamsDirectCapability: SourceCapabilityDescriptor = {
+  id: "context.chat.direct",
+  serviceId: "chat_direct",
+  direction: "observe",
+  resourceType: "direct_message",
+  requiredScopes: [],
+  syncMode: "webhook",
+  requiresApproval: false,
+};
+
 export const sourceCapabilities: Record<SourceCapabilityId, SourceCapabilityDescriptor> = {
   "context.call.read": {
     id: "context.call.read",
@@ -211,6 +221,13 @@ const descriptors: Record<ConnectorId, ConnectorDescriptor> = {
     // Slice 11 exposes honest permission readiness. The Outlook operating loops
     // promote these grants from permission_granted to active in Slices 12/13.
     capabilities: microsoft365CapabilityIds.map((id) => microsoft365Capabilities[id]),
+  },
+  microsoft_teams: {
+    id: "microsoft_teams",
+    name: "Microsoft Teams",
+    description: "Private one-to-one conversations with the installed Agent Erik Teams app.",
+    availability: "available",
+    capabilities: [microsoftTeamsDirectCapability],
   },
   github: {
     id: "github",

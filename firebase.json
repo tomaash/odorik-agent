@@ -87,6 +87,13 @@
           }
         },
         {
+          "source": "/webhooks/teams",
+          "function": {
+            "functionId": "microsoftTeamsWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
           "source": "/api/**",
           "function": {
             "functionId": "api",
@@ -183,6 +190,13 @@
           "source": "/interactions/slack",
           "function": {
             "functionId": "slackInteractionsWebhook",
+            "region": "europe-west3"
+          }
+        },
+        {
+          "source": "/webhooks/teams",
+          "function": {
+            "functionId": "microsoftTeamsWebhook",
             "region": "europe-west3"
           }
         },

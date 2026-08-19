@@ -86,6 +86,10 @@ GOOGLE_CONNECTOR_CLIENT_ID=...
 GOOGLE_CONNECTOR_CLIENT_SECRET=...
 MICROSOFT_CONNECTOR_CLIENT_ID=...
 MICROSOFT_CONNECTOR_CLIENT_SECRET=...
+MICROSOFT_TEAMS_APP_ID=...             # Teams application ID used for install deep links
+MICROSOFT_TEAMS_BOT_CLIENT_ID=...       # Teams bot / Entra application ID
+MICROSOFT_TEAMS_BOT_CLIENT_SECRET=...   # Teams bot client secret
+MICROSOFT_TEAMS_BOT_TENANT_ID=...       # single work/school tenant for this bot
 SLACK_CLIENT_ID=...
 SLACK_CLIENT_SECRET=...
 SLACK_SIGNING_SECRET=...       # verifies Slack Events and Block Kit interactions
@@ -103,7 +107,24 @@ Slack app's Event Subscriptions request URL as `/webhooks/slack` and its
 Interactivity request URL as `/interactions/slack` on the same public origin.
 Private proposal cards support approve, reject, and request changes. Approved
 effects still execute only through Erik's canonical approval kernel; the first
-conversation actions are one internal task and one Gmail draft (never send).
+conversation actions are one internal task and one provider-mailbox draft
+(never send).
+
+For Teams personal conversation, set `MICROSOFT_TEAMS_APP_ID` in the Functions
+environment and the bot client ID, client secret, and tenant ID above in Secret Manager. Register the
+bot messaging endpoint as `https://<app-origin>/webhooks/teams`, then publish or
+sideload the production package at
+[`teams-app/agent-erik-teams-1.0.0.zip`](teams-app/agent-erik-teams-1.0.0.zip),
+or generate another environment's package from
+[`teams-app/manifest.template.json`](teams-app/manifest.template.json). Its only
+bot scope is `personal`. An administrator enables the separate Microsoft Teams
+connection from an existing Microsoft account on Sources; each member then
+installs the app, messages it privately, and follows the 15-minute exact-identity
+link. Work and school accounts route by tenant; consumer accounts route only
+after the linked Teams identity is known because Microsoft's consumer tenant is
+shared. Teams Free cannot privately sideload a custom app, so that client needs a
+Teams Store publication. Shared chats, teams, channels, and broad message-history
+permissions are not used.
 
 | | Prod backend (default) | Emulators |
 | --- | --- | --- |

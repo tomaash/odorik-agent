@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import { canMemberAccess, normalizeResourceAudience, type ResourceAudience } from "../access.js";
 import { conversationApprovalPolicy } from "../actions/conversation-policy.js";
+import type { ConversationSurface } from "../actions/conversation-policy.js";
 import { requestWorkflowActionApproval } from "../approvals/repository.js";
 import { companyDocumentPath } from "../tenancy.js";
 import type { ConversationContextSnapshot } from "./conversation-memory.js";
@@ -235,6 +236,7 @@ export async function prepareConversationMailDraftProposal(input: {
   context: ConversationContextSnapshot;
   geminiApiKey: string;
   database: FirebaseFirestore.Firestore;
+  surface?: ConversationSurface;
   lineage?: {
     rootApprovalId: string;
     version: number;
@@ -328,7 +330,7 @@ export async function prepareConversationMailDraftProposal(input: {
     action,
     source: {
       kind: "conversation",
-      surface: "slack_dm",
+      surface: input.surface || "slack_dm",
       threadId: input.threadId,
       sessionId: input.sessionId,
       messageId: input.inboundMessageId,
@@ -337,7 +339,7 @@ export async function prepareConversationMailDraftProposal(input: {
       proposalVersion,
       ...(input.lineage ? { supersedesApprovalId: input.lineage.supersedesApprovalId } : {}),
     },
-    policy: conversationApprovalPolicy("mail.draft.create"),
+    policy: conversationApprovalPolicy("mail.draft.create", input.surface),
     proposalLineage: {
       rootApprovalId,
       version: proposalVersion,

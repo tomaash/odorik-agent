@@ -22,6 +22,9 @@ const year = new Date().getFullYear()
         <NuxtLink :to="paths.privacy.value" class="transition hover:text-white">
           {{ t('footer.privacy') }}
         </NuxtLink>
+        <NuxtLink :to="paths.terms.value" class="transition hover:text-white">
+          {{ t('footer.terms') }}
+        </NuxtLink>
         <button type="button" class="transition hover:text-white" @click="contact.open()">
           {{ t('footer.contact') }}
         </button>

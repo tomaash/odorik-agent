@@ -151,7 +151,7 @@ export type WorkflowActionSource = WorkflowSourceBase & (
  */
 export type ConversationActionSource = {
   kind: "conversation";
-  surface: "slack_dm";
+  surface: "slack_dm" | "teams_personal";
   threadId: string;
   sessionId: string;
   messageId: string;

@@ -186,7 +186,8 @@ test("one conversation drains rapid out-of-order messages causally without compa
   assert.deepEqual(result, { acquired: true, processed: 2 });
   assert.equal(factualCalls, 0);
   assert.match(posted[0] || "", /^Hello!/);
-  assert.equal(posted[1], "You’re welcome.");
+  assert.match(posted[1] || "", /^You’re welcome\./);
+  assert.match(posted[1] || "", /<https:\/\/example\.test\/ask\?thread=slack_[^|]+\|Continue this conversation in Agent Erik>/);
   assert.equal(memory.read(slackConversationEventPath(earlier))?.status, "processed");
   assert.equal(memory.read(slackConversationEventPath(later))?.status, "processed");
 });

@@ -13,5 +13,6 @@ export function useSitePaths() {
     isCs,
     howItWorks: computed(() => (isCs.value ? '/jak-to-funguje' : '/how-it-works')),
     privacy: computed(() => (isCs.value ? '/soukromi' : '/privacy')),
+    terms: computed(() => (isCs.value ? '/podminky' : '/terms')),
   }
 }

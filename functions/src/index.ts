@@ -77,6 +77,12 @@ export {
   processSlackApproval,
   syncSlackApprovalDecision,
 } from "./slack-events-webhook.js";
+export {
+  microsoftTeamsWebhook,
+  processMicrosoftTeamsDm,
+  processMicrosoftTeamsApproval,
+  syncMicrosoftTeamsApprovalDecision,
+} from "./microsoft-teams-webhook.js";
 export { sendPartnerForm } from "./partner-form.js";
 export { githubWebhook, processGitHubWebhook } from "./github-webhook.js";
 export { grokAuthCallback } from "./grok-auth-callback.js";

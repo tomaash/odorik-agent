@@ -36,6 +36,7 @@ import {
 } from "../access.js";
 import { callContactId } from "../calls.js";
 import { normalizePhone } from "../phone.js";
+import { microsoftTeamsTenantPath } from "./microsoft-teams.js";
 
 const ingestBaseUrl = process.env.ODORIK_INGEST_BASE_URL?.trim()
   || "https://odorik-ingest-apf5skngva-ey.a.run.app";
@@ -215,7 +216,7 @@ export async function listSources(
       connectorId,
       providerId: connectorId === "google_workspace"
         ? "google"
-        : connectorId === "microsoft_365"
+        : connectorId === "microsoft_365" || connectorId === "microsoft_teams"
           ? "microsoft"
         : connectorId === "github"
           ? "github"
@@ -446,6 +447,9 @@ export async function setConnectionStatus(
       "Microsoft 365 account status is managed through authorization and disconnect",
     );
   }
+  if (snapshot.data()?.connectorId === "microsoft_teams") {
+    throw new Error("Microsoft Teams installation status is managed through install and removal");
+  }
   if (snapshot.data()?.connectorId === "grok_subscription") {
     throw new Error(
       "Grok subscription status is managed through its isolated authorization worker",
@@ -639,7 +643,8 @@ export async function deleteSourceConnection(
   providerAccessRevoked: boolean | null;
 }> {
   const connectionRef = connectionCollection(input.companyId, database).doc(input.connectionId);
-  const [connection, capabilities, resources, contextItems, calls, microsoftSubscriptions, microsoftNotifications] = await Promise.all([
+  const [connection, capabilities, resources, contextItems, calls, microsoftSubscriptions,
+    microsoftNotifications, teamsUsers, teamsGlobalIdentities] = await Promise.all([
     connectionRef.get(),
     connectionRef.collection("capabilities").get(),
     connectionRef.collection("resources").get(),
@@ -656,6 +661,13 @@ export async function deleteSourceConnection(
       : Promise.resolve(null),
     input.connectorId === "microsoft_365"
       ? database.collection("microsoftGraphNotifications")
+        .where("companyId", "==", input.companyId).get()
+      : Promise.resolve(null),
+    input.connectorId === "microsoft_teams"
+      ? connectionRef.collection("teamsUsers").get()
+      : Promise.resolve(null),
+    input.connectorId === "microsoft_teams"
+      ? database.collection("microsoftTeamsIdentities")
         .where("companyId", "==", input.companyId).get()
       : Promise.resolve(null),
   ]);
@@ -705,6 +717,14 @@ export async function deleteSourceConnection(
       batch: FirebaseFirestore.WriteBatch,
     ) => batch.delete(capability.ref)),
     ...resources.docs.map((resource) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(resource.ref)),
+    ...(teamsUsers?.docs || []).map((identity) => (
+      batch: FirebaseFirestore.WriteBatch,
+    ) => batch.delete(identity.ref)),
+    ...(teamsGlobalIdentities?.docs || [])
+      .filter((identity) => identity.data().connectionId === input.connectionId)
+      .map((identity) => (
+        batch: FirebaseFirestore.WriteBatch,
+      ) => batch.delete(identity.ref)),
     ...(microsoftSubscriptions?.docs || [])
       .filter((document) => document.data().connectionId === input.connectionId)
       .map((document) => (batch: FirebaseFirestore.WriteBatch) => batch.delete(document.ref)),
@@ -731,6 +751,9 @@ export async function deleteSourceConnection(
   const githubInstallationId = Number(connection.data()?.installationId);
   if (input.connectorId === "github" && Number.isSafeInteger(githubInstallationId)) {
     batch.delete(database.doc(githubInstallationRoutingPath(githubInstallationId)));
+  }
+  if (input.connectorId === "microsoft_teams" && connection.data()?.tenantId) {
+    batch.delete(database.doc(microsoftTeamsTenantPath(String(connection.data()?.tenantId))));
   }
   batch.delete(connectionRef);
   await batch.commit();

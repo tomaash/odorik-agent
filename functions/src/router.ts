@@ -16,7 +16,7 @@ import {
   qdrantFromEnvironment,
 } from "./agent/search.js";
 import { memberThreadDocumentId } from "./agent/threads.js";
-import { askCompanyFactAgent } from "./agent/service.js";
+import { askFromWebWithBoundSession } from "./agent/cross-surface-continuity.js";
 import { createKnowledgeIndexDependencies } from "./sync-qdrant.js";
 import {
   enqueueKnowledgeIndexBackfill,
@@ -117,6 +117,11 @@ import {
 import { listSlackChannels, selectSlackChannels } from "./chat/channels.js";
 import { consumeSlackLink, inspectSlackLink } from "./chat/slack-link.js";
 import {
+  consumeMicrosoftTeamsLink,
+  inspectMicrosoftTeamsLink,
+} from "./chat/microsoft-teams-link.js";
+import { enableMicrosoftTeamsInstallation } from "./connectors/microsoft-teams.js";
+import {
   listChatNotifications,
   retryApprovalNotifications,
 } from "./chat/deliver.js";
@@ -184,6 +189,7 @@ export const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID"
 export const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 export const microsoftConnectorClientId = defineSecret("MICROSOFT_CONNECTOR_CLIENT_ID");
 export const microsoftConnectorClientSecret = defineSecret("MICROSOFT_CONNECTOR_CLIENT_SECRET");
+export const microsoftTeamsAppId = defineSecret("MICROSOFT_TEAMS_APP_ID");
 export const githubAppPrivateKey = defineSecret("GITHUB_APP_PRIVATE_KEY");
 const executeGrokAuthJob = createCloudRunGrokAuthJobExecutor();
 const codingArtifacts = new GoogleCodingArtifactStore();
@@ -765,6 +771,38 @@ export const appRouter = router({
           uid: ctx.uid,
         })),
     }),
+    microsoftTeams: router({
+      enable: adminProcedure
+        .input(z.object({
+          microsoftConnectionId: z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/),
+        }))
+        .mutation(({ ctx, input }) => enableMicrosoftTeamsInstallation({
+          companyId: ctx.companyId,
+          actorUid: ctx.uid,
+          microsoftConnectionId: input.microsoftConnectionId,
+          appId: microsoftTeamsAppId.value(),
+        })),
+      linkPreview: enabledProcedure
+        .input(z.object({ token: z.string().min(20).max(200) }))
+        .query(async ({ ctx, input }) => {
+          const link = await inspectMicrosoftTeamsLink({
+            token: input.token,
+            companyId: ctx.companyId,
+          });
+          return {
+            tenantId: link.tenantId,
+            entraObjectId: link.entraObjectId,
+            expiresAt: link.expiresAt.toDate().toISOString(),
+          };
+        }),
+      linkIdentity: enabledProcedure
+        .input(z.object({ token: z.string().min(20).max(200) }))
+        .mutation(({ ctx, input }) => consumeMicrosoftTeamsLink({
+          token: input.token,
+          companyId: ctx.companyId,
+          uid: ctx.uid,
+        })),
+    }),
     googleCalendar: router({
       calendars: adminProcedure
         .input(z.object({
@@ -1311,6 +1349,7 @@ export const appRouter = router({
       return jsonSafe(snapshot.docs.map((document) => ({
         id: String(document.data().clientThreadId || document.id),
         title: String(document.data().title || "New chat"),
+        surface: String(document.data().boundSurface || document.data().lastOrigin || "web"),
         lastMessageAt: document.data().lastMessageAt || null,
         createdAt: document.data().createdAt || null,
       })).sort((left, right) => (
@@ -1366,12 +1405,14 @@ export const appRouter = router({
       .input(z.object({
         threadId: z.string().regex(/^[a-zA-Z0-9_-]{1,80}$/).default("general"),
         question: z.string().trim().min(1).max(3000),
+        requestId: z.string().regex(/^[a-zA-Z0-9_-]{8,100}$/).optional(),
       }))
-      .mutation(({ ctx, input }) => askCompanyFactAgent({
+      .mutation(({ ctx, input }) => askFromWebWithBoundSession({
         companyId: ctx.companyId,
         actorUid: ctx.uid,
         threadId: input.threadId,
         question: input.question,
+        requestId: input.requestId || `web_${randomBytes(16).toString("hex")}`,
         geminiApiKey: geminiApiKey.value(),
       })),
     reindex: adminProcedure.mutation(async ({ ctx }) => {

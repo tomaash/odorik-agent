@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute, useRouter } from 'vue-router'
 import Button from 'primevue/button'
 import Card from 'primevue/card'
 import Message from 'primevue/message'
@@ -20,6 +21,8 @@ import {
 } from '../api/client'
 
 const { t, tm } = useI18n()
+const route = useRoute()
+const router = useRouter()
 const messages = ref<AssistantMessage[]>([])
 const question = ref('')
 const loading = ref(true)
@@ -31,6 +34,24 @@ const threads = ref<AssistantThread[]>([])
 const activeThreadId = ref('')
 
 const suggestions = computed(() => tm('assistant.suggestions') as string[])
+const activeThread = computed(() => threads.value.find((thread) => thread.id === activeThreadId.value) || null)
+const activeExternalSurface = computed(() => {
+  const surface = activeThread.value?.surface
+  return surface === 'slack_dm' || surface === 'teams_personal' ? surface : null
+})
+
+function surfaceLabel(surface?: AssistantThread['surface']) {
+  return surface === 'slack_dm'
+    ? t('assistant.surfaces.slack')
+    : surface === 'teams_personal'
+      ? t('assistant.surfaces.teams')
+      : t('assistant.surfaces.web')
+}
+
+async function reflectActiveThread(threadId: string) {
+  if (route.query.thread === threadId) return
+  await router.replace({ name: 'ask', query: { thread: threadId } })
+}
 
 async function scrollToBottom() {
   await nextTick()
@@ -47,7 +68,10 @@ async function load() {
     ])
     if (threadList.length === 0) threadList.push(await createAssistantThread())
     threads.value = threadList
-    activeThreadId.value = threadList[0]!.id
+    const requestedThreadId = typeof route.query.thread === 'string' ? route.query.thread : ''
+    activeThreadId.value = threadList.find((thread) => thread.id === requestedThreadId)?.id
+      || threadList[0]!.id
+    await reflectActiveThread(activeThreadId.value)
     messages.value = await getAssistantHistory(activeThreadId.value)
     status.value = agentStatus
     await scrollToBottom()
@@ -65,6 +89,7 @@ async function selectThread(threadId: string) {
   try {
     messages.value = await getAssistantHistory(threadId)
     activeThreadId.value = threadId
+    await reflectActiveThread(threadId)
     await scrollToBottom()
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
@@ -81,6 +106,7 @@ async function newThread() {
     threads.value = [thread, ...threads.value]
     activeThreadId.value = thread.id
     messages.value = []
+    await reflectActiveThread(thread.id)
   } catch (cause) {
     error.value = cause instanceof Error ? cause.message : String(cause)
   }
@@ -171,9 +197,18 @@ onMounted(load)
         :disabled="sending"
         @click="selectThread(thread.id)"
       >
-        {{ thread.title }}
+        <span class="block truncate">{{ thread.title }}</span>
+        <span class="mt-0.5 block truncate text-[.68rem] font-normal opacity-70">{{ surfaceLabel(thread.surface) }}</span>
       </button>
     </nav>
+    <Message
+      v-if="activeExternalSurface"
+      severity="info"
+      :closable="false"
+      class="mb-5"
+    >
+      {{ t('assistant.surfaceContinuity', { surface: surfaceLabel(activeExternalSurface) }) }}
+    </Message>
     <div v-if="loading" class="flex justify-center py-24"><ProgressSpinner /></div>
 
     <template v-else>

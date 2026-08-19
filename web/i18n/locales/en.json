@@ -3,7 +3,8 @@
     "title": "Agent Erik — AI prepares the work. You make the call.",
     "description": "Agent Erik turns your calls, email, and calendar into concrete proposed actions, each with its evidence. Approve, refine by voice, or reject in seconds, from anywhere.",
     "howTitle": "How it works — Agent Erik",
-    "privacyTitle": "Privacy — Agent Erik"
+    "privacyTitle": "Privacy — Agent Erik",
+    "termsTitle": "Terms of use — Agent Erik"
   },
   "nav": {
     "howItWorks": "How it works",
@@ -247,30 +248,71 @@
   },
   "privacy": {
     "h1": "Privacy",
-    "intro": "This page describes how the Agent Erik website handles your data. It is not yet reviewed by counsel and will be replaced before launch.",
+    "intro": "This notice describes how Agent Erik handles information when you use our website, web application, or Microsoft Teams app.",
     "sections": [
       {
-        "title": "What this site collects",
-        "body": "The marketing site is statically generated and sets no tracking cookies. The only personal data it handles is what you type into the design-partner form: your name, work email, and message."
+        "title": "Information we process",
+        "body": "We process account identifiers, company membership, settings, and the content you intentionally send to Agent Erik. The design-partner form also processes the name, work email, and message you submit. The marketing site sets no tracking cookies."
       },
       {
-        "title": "What we do with it",
-        "body": "We use it to contact you about the design partner programme. We do not sell it and do not share it with third parties for their own marketing."
+        "title": "Microsoft Teams",
+        "body": "In Teams, Agent Erik processes only personal conversations addressed to the bot and the identifiers needed to link that conversation to your Agent Erik account. It does not read channels or group chats."
       },
       {
-        "title": "Where it lives",
-        "body": "Data is stored in Google Cloud in the europe-west3 region."
+        "title": "How we use information",
+        "body": "We use information to provide the assistant, retrieve material you are permitted to access, show proposals for your approval, secure and operate the service, and respond to your requests. We do not sell personal information or share it for third-party advertising."
       },
       {
-        "title": "Your rights",
-        "body": "You can ask us for a copy of your data or ask us to delete it at any time. Write to us and we will action it."
+        "title": "Service providers and location",
+        "body": "We use Microsoft to deliver Teams messages and Google Cloud to run the service. Application data is stored in Google Cloud in the europe-west3 region. These providers process information on our behalf under their applicable terms and safeguards."
+      },
+      {
+        "title": "Retention and security",
+        "body": "We retain information only while needed to provide and secure the service, meet legal obligations, and resolve disputes. Access is limited by account, company membership, and connector permissions; consequential actions require an explicit approval."
+      },
+      {
+        "title": "Your choices and rights",
+        "body": "You can disconnect Microsoft Teams or another connector at any time. You may also ask for access to, correction of, or deletion of your personal information by contacting us; applicable law may provide additional rights."
       }
     ],
     "contact": "Questions about privacy?"
   },
+  "terms": {
+    "h1": "Terms of use",
+    "updated": "Effective 18 August 2026",
+    "intro": "These terms govern your use of the Agent Erik website, web application, and Microsoft Teams app.",
+    "sections": [
+      {
+        "title": "Using the service",
+        "body": "You may use Agent Erik only if you can enter into these terms and are authorised to act for the account or organisation you connect. You are responsible for keeping your account secure and for activity performed through it."
+      },
+      {
+        "title": "Connected services",
+        "body": "Agent Erik can access third-party services only after an authorised user connects them. Separate read and action permissions control what the service may do. Your use of Microsoft Teams and other connected services remains subject to their own terms."
+      },
+      {
+        "title": "Approvals and output",
+        "body": "Agent Erik may prepare answers and proposed actions from connected information. You must review output before relying on it. Consequential actions are presented for explicit approval, but you remain responsible for decisions you approve and for verifying important information."
+      },
+      {
+        "title": "Acceptable use",
+        "body": "Do not use the service unlawfully, to infringe another person's rights, to access information without permission, to distribute harmful software, or to interfere with the service or its security controls."
+      },
+      {
+        "title": "Availability and liability",
+        "body": "The service is provided as available and may change or be interrupted. To the extent permitted by law, we disclaim implied warranties and are not liable for indirect or consequential loss. Nothing in these terms excludes liability that cannot legally be excluded."
+      },
+      {
+        "title": "Changes and termination",
+        "body": "You may stop using the service and disconnect integrations at any time. We may suspend access needed to protect users or the service, or for a breach of these terms. We may update these terms and will publish the current version on this page."
+      }
+    ],
+    "contact": "Questions about these terms?"
+  },
   "footer": {
     "tagline": "AI prepares the work. You make the call.",
     "privacy": "Privacy",
+    "terms": "Terms",
     "contact": "Contact",
     "rights": "All rights reserved."
   }

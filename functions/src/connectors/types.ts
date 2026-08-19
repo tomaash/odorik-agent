@@ -2,6 +2,7 @@ export const connectorIds = [
   "odorik",
   "google_workspace",
   "microsoft_365",
+  "microsoft_teams",
   "github",
   "grok_subscription",
   "slack",
@@ -132,7 +133,7 @@ export type ConnectionPublicView = {
   tenantId?: string;
   displayName: string;
   status: ConnectionStatus;
-  authKind: "basic_upload" | "oauth2" | "github_app" | "subscription_oauth";
+  authKind: "basic_upload" | "oauth2" | "github_app" | "subscription_oauth" | "bot_installation";
   credentialMode:
     | "encrypted"
     | "legacy_secret"

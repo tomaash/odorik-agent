@@ -3,7 +3,8 @@
     "title": "Agent Erik — AI odvede práci. Poslední slovo máte vy.",
     "description": "Agent Erik prochází hovory, e-maily a kalendář a chystá konkrétní návrhy i s podklady. Schválíte, zamítnete nebo hlasem řeknete, co změnit — za pár vteřin, ať jste kdekoli.",
     "howTitle": "Jak to funguje — Agent Erik",
-    "privacyTitle": "Soukromí — Agent Erik"
+    "privacyTitle": "Soukromí — Agent Erik",
+    "termsTitle": "Podmínky používání — Agent Erik"
   },
   "nav": {
     "howItWorks": "Jak to funguje",
@@ -247,30 +248,71 @@
   },
   "privacy": {
     "h1": "Soukromí",
-    "intro": "Tahle stránka popisuje, jak web Agenta Erika nakládá s vašimi údaji. Zatím neprošla právní kontrolou a před spuštěním ji nahradíme.",
+    "intro": "Toto oznámení popisuje, jak Agent Erik nakládá s informacemi při používání webu, webové aplikace a aplikace pro Microsoft Teams.",
     "sections": [
       {
-        "title": "Co web sbírá",
-        "body": "Web je statický a nepoužívá sledovací cookies. Jediné osobní údaje, se kterými pracuje, jsou ty, které sami vyplníte do formuláře pro pilotní partnery: jméno, pracovní e-mail a zpráva."
+        "title": "Jaké informace zpracováváme",
+        "body": "Zpracováváme identifikátory účtu, členství ve firmě, nastavení a obsah, který Agentu Erikovi záměrně pošlete. Formulář pro pilotní partnery zpracovává také zadané jméno, pracovní e-mail a zprávu. Marketingový web nepoužívá sledovací cookies."
       },
       {
-        "title": "K čemu to použijeme",
-        "body": "Ozveme se vám ohledně pilotního programu. Údaje neprodáváme a nepředáváme je nikomu dalšímu pro jeho vlastní marketing."
+        "title": "Microsoft Teams",
+        "body": "V Teams Agent Erik zpracovává pouze osobní konverzace adresované botovi a identifikátory potřebné k propojení konverzace s vaším účtem Agenta Erika. Nečte kanály ani skupinové chaty."
       },
       {
-        "title": "Kde jsou uložené",
-        "body": "Data jsou v Google Cloudu v regionu europe-west3."
+        "title": "Jak informace používáme",
+        "body": "Informace používáme k poskytování asistenta, vyhledávání podkladů, ke kterým máte oprávnění, zobrazování návrhů ke schválení, zabezpečení a provozu služby a vyřizování vašich požadavků. Osobní údaje neprodáváme ani nesdílíme pro reklamu třetích stran."
       },
       {
-        "title": "Vaše práva",
-        "body": "Kdykoli si můžete vyžádat kopii svých údajů nebo jejich smazání. Napište nám a vyřídíme to."
+        "title": "Poskytovatelé a umístění",
+        "body": "Pro doručování zpráv v Teams používáme Microsoft a pro provoz služby Google Cloud. Aplikační data jsou uložena v Google Cloudu v regionu europe-west3. Tito poskytovatelé zpracovávají informace naším jménem podle svých podmínek a bezpečnostních opatření."
+      },
+      {
+        "title": "Uchování a zabezpečení",
+        "body": "Informace uchováváme jen po dobu potřebnou k poskytování a zabezpečení služby, plnění právních povinností a řešení sporů. Přístup je omezen účtem, členstvím ve firmě a oprávněními konektorů; významné akce vyžadují výslovné schválení."
+      },
+      {
+        "title": "Vaše volby a práva",
+        "body": "Microsoft Teams i jiné konektory můžete kdykoli odpojit. Můžete nás také požádat o přístup ke svým osobním údajům, jejich opravu nebo smazání; podle platného práva můžete mít i další práva."
       }
     ],
     "contact": "Máte dotaz k soukromí?"
   },
+  "terms": {
+    "h1": "Podmínky používání",
+    "updated": "Účinné od 18. srpna 2026",
+    "intro": "Tyto podmínky upravují používání webu, webové aplikace a aplikace Agenta Erika pro Microsoft Teams.",
+    "sections": [
+      {
+        "title": "Používání služby",
+        "body": "Agenta Erika můžete používat, jen pokud můžete přijmout tyto podmínky a jste oprávněni jednat za účet nebo organizaci, kterou připojujete. Odpovídáte za zabezpečení svého účtu a za aktivitu provedenou jeho prostřednictvím."
+      },
+      {
+        "title": "Propojené služby",
+        "body": "Agent Erik může přistupovat ke službám třetích stran až poté, co je oprávněný uživatel připojí. Samostatná oprávnění ke čtení a k akcím určují, co smí služba dělat. Na používání Microsoft Teams a dalších propojených služeb se nadále vztahují jejich vlastní podmínky."
+      },
+      {
+        "title": "Schvalování a výstupy",
+        "body": "Agent Erik může z propojených informací připravovat odpovědi a navrhované akce. Před použitím musíte výstupy zkontrolovat. Významné akce se zobrazují k výslovnému schválení, ale za schválená rozhodnutí a ověření důležitých informací odpovídáte vy."
+      },
+      {
+        "title": "Přijatelné používání",
+        "body": "Službu nepoužívejte nezákonně, k porušování cizích práv, k přístupu k informacím bez oprávnění, k šíření škodlivého softwaru ani k narušování služby nebo jejích bezpečnostních prvků."
+      },
+      {
+        "title": "Dostupnost a odpovědnost",
+        "body": "Služba je poskytována podle aktuální dostupnosti a může se měnit nebo být přerušena. V rozsahu dovoleném právem vylučujeme předpokládané záruky a neodpovídáme za nepřímé či následné škody. Nic v těchto podmínkách nevylučuje odpovědnost, kterou podle práva vyloučit nelze."
+      },
+      {
+        "title": "Změny a ukončení",
+        "body": "Službu můžete kdykoli přestat používat a odpojit integrace. Přístup můžeme pozastavit kvůli ochraně uživatelů nebo služby či při porušení těchto podmínek. Podmínky můžeme aktualizovat; aktuální verzi vždy zveřejníme na této stránce."
+      }
+    ],
+    "contact": "Máte dotaz k těmto podmínkám?"
+  },
   "footer": {
     "tagline": "AI odvede práci. Poslední slovo máte vy.",
     "privacy": "Soukromí",
+    "terms": "Podmínky",
     "contact": "Kontakt",
     "rights": "Všechna práva vyhrazena."
   }

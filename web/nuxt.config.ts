@@ -56,7 +56,14 @@ export default defineNuxtConfig({
     preset: 'static',
     output: { dir: `.output-${locale}` },
     prerender: {
-      routes: ['/how-it-works', '/jak-to-funguje', '/privacy', '/soukromi'],
+      routes: [
+        '/how-it-works',
+        '/jak-to-funguje',
+        '/privacy',
+        '/soukromi',
+        '/terms',
+        '/podminky',
+      ],
       failOnError: true,
     },
   },

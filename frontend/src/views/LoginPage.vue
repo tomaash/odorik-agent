@@ -23,6 +23,8 @@ async function signIn() {
         ? '/join'
         : sessionStorage.getItem('pendingSlackLinkToken')
           ? '/slack/link'
+        : sessionStorage.getItem('pendingMicrosoftTeamsLinkToken')
+          ? '/teams/link'
         : pendingReturn
           ? pendingReturn
         : authStore.isEnabled

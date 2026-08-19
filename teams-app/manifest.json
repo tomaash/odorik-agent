@@ -1,0 +1,35 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/teams/v1.28/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.28",
+  "version": "1.0.0",
+  "id": "57a3397f-84a7-4bce-8335-d4763ac65e41",
+  "developer": {
+    "name": "Agent Erik",
+    "websiteUrl": "https://agenterik.cz",
+    "privacyUrl": "https://agenterik.cz/soukromi",
+    "termsOfUseUrl": "https://agenterik.cz/podminky"
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "name": {
+    "short": "Agent Erik",
+    "full": "Agent Erik for Microsoft Teams"
+  },
+  "description": {
+    "short": "Private, permission-aware company assistant and approval surface.",
+    "full": "Ask permission-aware company questions and review exact task or email-draft proposals in a personal conversation. Agent Erik does not read channels or shared chats."
+  },
+  "accentColor": "#047857",
+  "bots": [
+    {
+      "botId": "57a3397f-84a7-4bce-8335-d4763ac65e41",
+      "scopes": ["personal"],
+      "isNotificationOnly": false,
+      "supportsFiles": false
+    }
+  ],
+  "defaultInstallScope": "personal",
+  "validDomains": ["app.agenterik.cz", "agenterik.cz"]
+}

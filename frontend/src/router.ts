@@ -26,6 +26,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresEnabled: true },
     },
     {
+      path: '/teams/link',
+      name: 'microsoft-teams-link',
+      component: lazyRoute(() => import('./views/MicrosoftTeamsLinkPage.vue')),
+      meta: { requiresAuth: true, requiresEnabled: true },
+    },
+    {
       path: '/',
       component: lazyRoute(() => import('./views/AppLayout.vue')),
       meta: { requiresAuth: true, requiresEnabled: true },
@@ -60,6 +66,13 @@ router.beforeEach(async (to) => {
     sessionStorage.setItem('pendingSlackLinkToken', slackLinkToken)
     return { name: 'slack-link', replace: true }
   }
+  const teamsLinkToken = typeof to.query.token === 'string' && to.name === 'microsoft-teams-link'
+    ? to.query.token
+    : ''
+  if (teamsLinkToken) {
+    sessionStorage.setItem('pendingMicrosoftTeamsLinkToken', teamsLinkToken)
+    return { name: 'microsoft-teams-link', replace: true }
+  }
   if (to.name === 'join-team' && invitationToken) {
     sessionStorage.setItem('pendingInvitationToken', invitationToken)
     return { name: 'join-team', replace: true }
@@ -76,6 +89,7 @@ router.beforeEach(async (to) => {
   if (to.name === 'login' && authStore.isAuthenticated) {
     if (sessionStorage.getItem('pendingInvitationToken')) return { name: 'join-team' }
     if (sessionStorage.getItem('pendingSlackLinkToken')) return { name: 'slack-link' }
+    if (sessionStorage.getItem('pendingMicrosoftTeamsLinkToken')) return { name: 'microsoft-teams-link' }
     const pendingReturn = takeAppReturnPath()
     if (pendingReturn) return pendingReturn
     return authStore.isEnabled ? { name: 'tasks' } : { name: 'pending' }
@@ -91,6 +105,12 @@ router.beforeEach(async (to) => {
     && sessionStorage.getItem('pendingSlackLinkToken')
     && authStore.isEnabled
   ) return { name: 'slack-link' }
+  if (
+    to.name === 'pending'
+    && authStore.isAuthenticated
+    && sessionStorage.getItem('pendingMicrosoftTeamsLinkToken')
+    && authStore.isEnabled
+  ) return { name: 'microsoft-teams-link' }
 })
 
 router.onError((error) => {

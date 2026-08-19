@@ -564,6 +564,53 @@ adapter, not a shortcut for broad Teams history ingestion. Shared chats and
 channels remain out of scope until their participant-audience intersection and
 membership-change semantics are explicit.
 
+**Implementation state (2026-08-18): deployed, awaiting Store publication and
+live client acceptance.**
+The repository now has a separate tenant-bound `microsoft_teams` installation,
+personal-only authenticated ingress through the current Microsoft Teams SDK,
+an exact allowlisted conversation reference, short-lived tenant + Entra object
+identity linking, a duplicate-safe ordered activity journal, shared Erik
+sessions/retrieval/proposal generation, and `Action.Execute` Adaptive Cards.
+Approve, reject, and request-changes invokes bind the tenant, channel-scoped
+Teams user, Entra object, conversation, source activity, approver, effect digest,
+and policy before entering the canonical decision kernel. Request changes closes
+the immutable version and posts a newly approved-policy successor; approval
+updates replace all matching Teams cards with factual receipts, so web, Slack,
+and Teams still converge on Firestore's one authoritative approval record.
+Work and school accounts retain tenant routing. Microsoft consumer accounts use
+an identity-scoped global link instead: the shared consumer tenant is never
+claimed by a company, and no company context is available until the exact Teams
+channel identity completes a short-lived authenticated Erik link. This preserves
+multi-company isolation while supporting Teams Free identities whose activities
+may not include an Entra object ID.
+
+Automated coverage proves personal-message filtering, service-URL fail-closed
+behavior, event deduplication, one-company tenant ownership, one-use identity
+links, exact card binding, and duplicate invoke behavior. The UI exposes Teams
+from the verified Microsoft tenant and includes a responsive identity-link page.
+The personal Azure subscription now hosts the single-tenant Bot Service and
+Teams channel, while its app registration accepts organisational and personal
+Microsoft identities. Production credentials are in Google Secret Manager, all
+five Teams/API functions and hosting routes are deployed, and the live endpoint
+rejects unsigned requests. The versioned package at
+`teams-app/agent-erik-teams-1.0.0.zip` contains only its validated manifest and
+required icons; its privacy and terms URLs are live. Remaining acceptance work
+is external: enroll and submit through Partner Center, wait for Teams Store
+publication, then exercise personal chat, desktop/mobile cards, identity-link
+revocation, installation removal, and connector deletion against the published
+app. Do not mark Slice 14 accepted until those live checks pass.
+
+Partner Center publication is blocked as of 2026-08-18. Automated trust
+evaluation rejected enrollment before creating a workspace, and a later clean
+`tomas@headstart.cz` session reached the correct Microsoft 365 and Copilot
+program selector but did not complete enrollment. The verified custom domain,
+primary UPN, tenant identity, bot deployment, and Lark mail routing are healthy;
+do not churn them as an authentication workaround. The exact failure IDs,
+no-workspace support route, escalation text, and restart checklist live in
+`MICROSOFT_PARTNER_CENTER_BLOCKER.md`. This is an external acceptance debt, not
+permission to mark Slice 14 complete or to keep retrying the same enrollment
+flow blindly.
+
 Current Microsoft implementation references:
 
 - [Microsoft identity authorization-code flow with PKCE](https://learn.microsoft.com/en-us/entra/identity-platform/v2-oauth2-auth-code-flow)
@@ -576,6 +623,8 @@ Current Microsoft implementation references:
 - [Create an Outlook draft message](https://learn.microsoft.com/en-us/graph/api/user-post-messages?view=graph-rest-1.0)
 - [Teams proactive personal messages](https://learn.microsoft.com/en-us/microsoftteams/platform/bots/how-to/conversations/send-proactive-messages)
 - [Teams card capabilities and constraints](https://learn.microsoft.com/en-us/microsoftteams/platform/task-modules-and-cards/cards/cards-reference)
+- [Microsoft Teams SDK for TypeScript](https://learn.microsoft.com/en-us/microsoftteams/platform/teams-ai-library/typescript/in-depth-guides/overview)
+- [Adaptive Card universal actions](https://learn.microsoft.com/en-us/adaptive-cards/authoring-cards/universal-action-model)
 
 ### Slice 15: intentional multi-surface continuity
 
@@ -590,6 +639,19 @@ merging.
   memory; and
 - add mentions or shared channels only when a named loop and privacy model
   require them.
+
+**Slice 15A implementation state (2026-08-18): implemented locally and
+verified, independent of Teams Store publication.** External private replies expose an exact
+`/ask?thread=...` handoff plus the existing explicit `new topic` control. The
+Ask page resolves only a thread already owned by the signed-in member, keeps the
+exact thread in the URL, labels whether it is bound to Slack DM, Teams personal
+chat, or Erik, and explains when a web message is continuing an external
+session. Web turns on a bound thread reuse the active bounded session, current
+memory generation, token-budgeted authorized context, fresh-evidence policy,
+and idempotent session completion rather than falling back to an ambient recent
+history merge. This is the smallest useful continuity proof; provider-event
+retention/deletion controls and real Teams-client acceptance remain separate
+exit work.
 
 Direct messages do not justify reading general channel history. A future shared
 conversation must define audience intersection, participant identity, mention

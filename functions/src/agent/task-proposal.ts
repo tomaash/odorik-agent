@@ -16,6 +16,7 @@ import { FirestoreCompanyData } from "./knowledge.js";
 import { qdrantFromEnvironment } from "./search.js";
 import { GeminiRestAgentModel } from "./gemini.js";
 import { conversationApprovalPolicy } from "../actions/conversation-policy.js";
+import type { ConversationSurface } from "../actions/conversation-policy.js";
 
 const proposalSchema = z.object({
   title: z.string().trim().min(1).max(300),
@@ -198,6 +199,7 @@ export async function prepareConversationTaskProposal(input: {
   context: ConversationContextSnapshot;
   geminiApiKey: string;
   database: FirebaseFirestore.Firestore;
+  surface?: ConversationSurface;
   lineage?: {
     rootApprovalId: string;
     version: number;
@@ -283,7 +285,7 @@ export async function prepareConversationTaskProposal(input: {
     action,
     source: {
       kind: "conversation",
-      surface: "slack_dm",
+      surface: input.surface || "slack_dm",
       threadId: input.threadId,
       sessionId: input.sessionId,
       messageId: input.inboundMessageId,
@@ -292,7 +294,7 @@ export async function prepareConversationTaskProposal(input: {
       proposalVersion,
       ...(input.lineage ? { supersedesApprovalId: input.lineage.supersedesApprovalId } : {}),
     },
-    policy: conversationApprovalPolicy("task.create"),
+    policy: conversationApprovalPolicy("task.create", input.surface),
     proposalLineage: {
       rootApprovalId,
       version: proposalVersion,

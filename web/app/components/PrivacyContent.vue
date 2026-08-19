@@ -15,7 +15,7 @@ useHead({
       <p class="mt-6 text-zinc-400">{{ t('privacy.intro') }}</p>
 
       <div class="mt-12 space-y-10">
-        <div v-for="i in 4" :key="i">
+        <div v-for="i in 6" :key="i">
           <h2 class="text-lg font-semibold text-white">
             {{ t(`privacy.sections.${i - 1}.title`) }}
           </h2>

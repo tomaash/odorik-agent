@@ -18,7 +18,7 @@ export type TaskSource = {
   workflowVersion?: number;
   runId?: string;
   blockId?: string;
-  surface?: "slack_dm";
+  surface?: "slack_dm" | "teams_personal";
   threadId?: string;
   sessionId?: string;
   messageId?: string;

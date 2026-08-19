@@ -9,6 +9,7 @@ import {
   googleConnectorClientSecret,
   microsoftConnectorClientId,
   microsoftConnectorClientSecret,
+  microsoftTeamsAppId,
   qdrantApiKey,
   qdrantUrl,
 } from "./router.js";
@@ -39,6 +40,7 @@ export const api = onRequest(
       googleConnectorClientSecret,
       microsoftConnectorClientId,
       microsoftConnectorClientSecret,
+      microsoftTeamsAppId,
       slackConnectorClientId,
       slackConnectorClientSecret,
       githubAppPrivateKey,
