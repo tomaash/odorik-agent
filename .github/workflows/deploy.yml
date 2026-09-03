@@ -52,6 +52,10 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
+      - name: Prepare Functions runtime parameters
+        run: |
+          node -e 'const fs = require("node:fs"); const names = ["GOOGLE_CONNECTOR_CLIENT_ID", "MICROSOFT_CONNECTOR_CLIENT_ID", "MICROSOFT_TEAMS_APP_ID", "MICROSOFT_TEAMS_BOT_CLIENT_ID", "MICROSOFT_TEAMS_BOT_TENANT_ID", "SLACK_CLIENT_ID"]; const missing = names.filter((name) => !process.env[name]); if (missing.length) throw new Error(`Missing repository variables: ${missing.join(", ")}`); fs.writeFileSync("functions/.env.odorik-tx-260720-c58d", `${names.map((name) => `${name}=${process.env[name]}`).join("\n")}\n`, { mode: 0o600 });'
+
       # Hosting targets are named explicitly: a bare `hosting` would also pick up
       # the marketing site, whose build output this job never produces.
       - name: Deploy Firebase resources
