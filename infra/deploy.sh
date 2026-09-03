@@ -8,6 +8,19 @@ source infra/project.env
 : "${ODORIK_UPLOAD_PASSWORD:?Set ODORIK_UPLOAD_PASSWORD}"
 : "${DEEPGRAM_API_KEY:?Set DEEPGRAM_API_KEY}"
 
+TRANSCRIPTION_PROVIDER="${TRANSCRIPTION_PROVIDER:-gemini}"
+GEMINI_TRANSCRIPTION_MODEL="${GEMINI_TRANSCRIPTION_MODEL:-gemini-3.5-transcribe}"
+if [[ "$TRANSCRIPTION_PROVIDER" != "gemini" && "$TRANSCRIPTION_PROVIDER" != "deepgram" ]]; then
+  echo "TRANSCRIPTION_PROVIDER must be gemini or deepgram." >&2
+  exit 1
+fi
+
+ODORIK_UPLOAD_CREDENTIALS_JSON="$(
+  ODORIK_UPLOAD_USER="$ODORIK_UPLOAD_USER" \
+  ODORIK_UPLOAD_PASSWORD="$ODORIK_UPLOAD_PASSWORD" \
+  node -e 'process.stdout.write(JSON.stringify({username: process.env.ODORIK_UPLOAD_USER, password: process.env.ODORIK_UPLOAD_PASSWORD}))'
+)"
+
 # The Gemini key lives in GEMINI_API_KEY, owned by the Functions deploy
 # (`firebase functions:secrets:set GEMINI_API_KEY`). This script only reads it,
 # so it must not upsert a value here: a mismatched value would rotate the secret
@@ -59,8 +72,7 @@ destroy_superseded_versions() {
 }
 
 upsert_secret dashboard-token "$DASHBOARD_TOKEN"
-upsert_secret odorik-upload-user "$ODORIK_UPLOAD_USER"
-upsert_secret odorik-upload-password "$ODORIK_UPLOAD_PASSWORD"
+upsert_secret odorik-upload-credentials "$ODORIK_UPLOAD_CREDENTIALS_JSON"
 upsert_secret DEEPGRAM_API_KEY "$DEEPGRAM_API_KEY"
 if [[ -n "${CONNECTOR_CREDENTIAL_KEY:-}" ]]; then
   upsert_secret CONNECTOR_CREDENTIAL_KEY "$CONNECTOR_CREDENTIAL_KEY"
@@ -70,12 +82,10 @@ gcloud secrets add-iam-policy-binding dashboard-token \
   --member="serviceAccount:odorik-api@$PROJECT_ID.iam.gserviceaccount.com" \
   --role=roles/secretmanager.secretAccessor \
   --project="$PROJECT_ID" >/dev/null
-for secret in odorik-upload-user odorik-upload-password; do
-  gcloud secrets add-iam-policy-binding "$secret" \
-    --member="serviceAccount:odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
-    --role=roles/secretmanager.secretAccessor \
-    --project="$PROJECT_ID" >/dev/null
-done
+gcloud secrets add-iam-policy-binding odorik-upload-credentials \
+  --member="serviceAccount:odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
+  --role=roles/secretmanager.secretAccessor \
+  --project="$PROJECT_ID" >/dev/null
 if gcloud secrets describe CONNECTOR_CREDENTIAL_KEY --project="$PROJECT_ID" >/dev/null 2>&1; then
   gcloud secrets add-iam-policy-binding CONNECTOR_CREDENTIAL_KEY \
     --member="serviceAccount:odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
@@ -94,6 +104,7 @@ gcloud secrets add-iam-policy-binding DEEPGRAM_API_KEY \
 gcloud builds submit --tag="$IMAGE" --project="$PROJECT_ID"
 
 COMMON_ENV="PROJECT_ID=$PROJECT_ID,FIRESTORE_DATABASE_ID=$FIRESTORE_DATABASE_ID,GEMINI_MODEL=gemini-3.5-flash-lite"
+PROCESSOR_ENV="$COMMON_ENV,TRANSCRIPTION_PROVIDER=$TRANSCRIPTION_PROVIDER,GEMINI_TRANSCRIPTION_MODEL=$GEMINI_TRANSCRIPTION_MODEL"
 
 gcloud run deploy odorik-api \
   --image="$IMAGE" \
@@ -116,7 +127,7 @@ gcloud run deploy odorik-ingest \
   --region="$REGION" \
   --service-account="odorik-ingest@$PROJECT_ID.iam.gserviceaccount.com" \
   --set-env-vars="$COMMON_ENV,RECORDINGS_BUCKET=$RECORDINGS_BUCKET" \
-  --set-secrets="ODORIK_UPLOAD_USER=odorik-upload-user:latest,ODORIK_UPLOAD_PASSWORD=odorik-upload-password:latest,CONNECTOR_CREDENTIAL_KEY=CONNECTOR_CREDENTIAL_KEY:latest" \
+  --set-secrets="ODORIK_UPLOAD_CREDENTIALS=odorik-upload-credentials:latest,CONNECTOR_CREDENTIAL_KEY=CONNECTOR_CREDENTIAL_KEY:latest" \
   --allow-unauthenticated \
   --min=0 \
   --max=3 \
@@ -130,7 +141,7 @@ gcloud run deploy odorik-processor \
   --args=dist/processor.js \
   --region="$REGION" \
   --service-account="odorik-processor@$PROJECT_ID.iam.gserviceaccount.com" \
-  --set-env-vars="$COMMON_ENV" \
+  --set-env-vars="$PROCESSOR_ENV" \
   --set-secrets="GEMINI_API_KEY=GEMINI_API_KEY:latest,DEEPGRAM_API_KEY=DEEPGRAM_API_KEY:latest" \
   --no-allow-unauthenticated \
   --min=0 \

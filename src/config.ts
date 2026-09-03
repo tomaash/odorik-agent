@@ -21,4 +21,21 @@ export const firestoreDatabaseId =
 export const geminiModel =
   process.env.GEMINI_MODEL?.trim() || "gemini-3.5-flash-lite";
 
+export function transcriptionProviderFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
+): "gemini" | "deepgram" {
+  const provider = environment.TRANSCRIPTION_PROVIDER?.trim().toLowerCase() || "gemini";
+  if (provider !== "gemini" && provider !== "deepgram") {
+    throw new Error(
+      `TRANSCRIPTION_PROVIDER must be "gemini" or "deepgram", received: ${provider}`,
+    );
+  }
+  return provider;
+}
+
+export const transcriptionProvider = transcriptionProviderFromEnvironment();
+
+export const geminiTranscriptionModel =
+  process.env.GEMINI_TRANSCRIPTION_MODEL?.trim() || "gemini-3.5-transcribe";
+
 export const port = Number.parseInt(process.env.PORT || "8080", 10);

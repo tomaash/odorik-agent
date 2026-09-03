@@ -2,6 +2,13 @@
 
 Project `odorik-tx-260720-c58d`, audited 2026-08-02.
 
+**Production update, 2026-09-02:** the remaining consolidation is complete.
+Public Google, Microsoft, Teams, and Slack identifiers now use ordinary runtime
+parameters; the Odorik upload username/password pair is one JSON secret; and the
+eight superseded secrets were deleted after every live consumer was migrated.
+Production now has **17 secrets with one active version each**. The detailed
+consumer map below is the historical 2026-08-02 audit that motivated the work.
+
 Secret Manager bills roughly **$0.06 per active secret version per month**, where
 "active" means anything not `DESTROYED` — disabled versions still cost. Six
 versions are free per billing account. Cost therefore tracks the *number of

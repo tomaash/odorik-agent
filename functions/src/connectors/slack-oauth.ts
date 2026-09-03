@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
 import { Timestamp } from "firebase-admin/firestore";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 
 import { db } from "../firestore.js";
 import { sha256Hex } from "../hash.js";
@@ -9,7 +9,7 @@ import { capabilityConfigRef, connectionRef } from "./google-oauth.js";
 import { chatDirectScopes, chatNotifyScopes } from "./registry.js";
 import { slackOAuthRedirectUri, slackOAuthReturnUrl } from "./slack-oauth-return.js";
 
-export const slackConnectorClientId = defineSecret("SLACK_CLIENT_ID");
+export const slackConnectorClientId = defineString("SLACK_CLIENT_ID");
 export const slackConnectorClientSecret = defineSecret("SLACK_CLIENT_SECRET");
 
 export const slackAuthorizationLifetimeMs = 60 * 60 * 1000;

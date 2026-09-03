@@ -1,5 +1,5 @@
 import { Timestamp } from "firebase-admin/firestore";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 
 import type { ApprovedActionExecutionContext } from "../actions/registry.js";
 import { db } from "../firestore.js";
@@ -28,7 +28,7 @@ export type MailDraftExecutor = (
   action: MailDraftCreateAction,
 ) => Promise<MailDraftCreatedResult>;
 
-const googleConnectorClientId = defineSecret("GOOGLE_CONNECTOR_CLIENT_ID");
+const googleConnectorClientId = defineString("GOOGLE_CONNECTOR_CLIENT_ID");
 const googleConnectorClientSecret = defineSecret("GOOGLE_CONNECTOR_CLIENT_SECRET");
 const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
 

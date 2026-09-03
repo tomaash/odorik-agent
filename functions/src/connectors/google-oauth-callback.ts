@@ -21,7 +21,6 @@ export const googleOAuthCallback = onRequest(
     serviceAccount: runtimeServiceAccount,
     secrets: [
       connectorCredentialKey,
-      googleConnectorClientId,
       googleConnectorClientSecret,
     ],
   },

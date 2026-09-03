@@ -11,7 +11,7 @@
     "name": "keep-recent-releases",
     "action": { "type": "Keep" },
     "mostRecentVersions": {
-      "keepCount": 5
+      "keepCount": 1
     }
   },
   {
@@ -19,7 +19,7 @@
     "action": { "type": "Delete" },
     "condition": {
       "tagState": "tagged",
-      "olderThan": "14d"
+      "olderThan": "1d"
     }
   }
 ]

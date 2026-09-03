@@ -56,7 +56,6 @@ export const processMicrosoftGraphWebhook = onDocumentCreated(
     serviceAccount: runtimeServiceAccount,
     secrets: [
       connectorCredentialKey,
-      microsoftConnectorClientId,
       microsoftConnectorClientSecret,
     ],
   },

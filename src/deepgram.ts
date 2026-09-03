@@ -1,17 +1,7 @@
 import { requiredEnv } from "./config.js";
+import type { SpeechTranscriptionResult } from "./transcription.js";
 
-export type DeepgramTranscriptionResult = {
-  language: string;
-  transcript: string;
-  summary: string;
-  segments: Array<{
-    speaker: string;
-    text: string;
-    startSeconds?: number;
-    endSeconds?: number;
-  }>;
-  actionItems: string[];
-};
+export type DeepgramTranscriptionResult = SpeechTranscriptionResult;
 
 export async function transcribeAudioWithDeepgram(input: {
   audio: Buffer;
@@ -118,10 +108,10 @@ export async function transcribeAudioWithDeepgram(input: {
   }
 
   return {
+    provider: "deepgram",
+    model: "deepgram-nova-3",
     language: detectedLanguage,
     transcript: fullTranscript || segments.map((s) => `${s.speaker}: ${s.text}`).join("\n"),
-    summary: "",
     segments,
-    actionItems: [],
   };
 }

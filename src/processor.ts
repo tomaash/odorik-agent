@@ -1,10 +1,16 @@
 import { FieldValue } from "@google-cloud/firestore";
 import Fastify from "fastify";
 import { loadAudioObject } from "./audio-store.js";
-import { geminiModel, port, requiredEnv } from "./config.js";
+import {
+  geminiModel,
+  port,
+  requiredEnv,
+  transcriptionProvider,
+} from "./config.js";
 import { db } from "./firestore.js";
 import { summarizeTranscriptWithGemini } from "./gemini.js";
 import { transcribeAudioWithDeepgram } from "./deepgram.js";
+import { transcribeAudioWithGemini } from "./gemini-transcribe.js";
 import { audioMimeType } from "./recording.js";
 
 type StorageEvent = {
@@ -75,13 +81,21 @@ server.post("/events/storage", async (request, reply) => {
 
     const mimeType = event.contentType || metadata.contentType || audioMimeType(objectName);
 
-    const sttResult = await transcribeAudioWithDeepgram({
-      audio,
-      mimeType,
-      ...(process.env.DEEPGRAM_API_KEY
-        ? { deepgramApiKey: process.env.DEEPGRAM_API_KEY }
-        : {}),
-    });
+    const transcriptionStartedAt = Date.now();
+    const sttResult = transcriptionProvider === "gemini"
+      ? await transcribeAudioWithGemini({
+          audio,
+          mimeType,
+          apiKey: requiredEnv("GEMINI_API_KEY"),
+        })
+      : await transcribeAudioWithDeepgram({
+          audio,
+          mimeType,
+          ...(process.env.DEEPGRAM_API_KEY
+            ? { deepgramApiKey: process.env.DEEPGRAM_API_KEY }
+            : {}),
+        });
+    const sttDurationMs = Date.now() - transcriptionStartedAt;
 
     const summaryResult = await summarizeTranscriptWithGemini({
       transcript: sttResult.transcript,
@@ -92,7 +106,9 @@ server.post("/events/storage", async (request, reply) => {
     await callRef.set(
       {
         status: "completed",
-        sttModel: "deepgram-nova-3",
+        sttProvider: sttResult.provider,
+        sttModel: sttResult.model,
+        sttDurationMs,
         summaryModel: geminiModel,
         model: geminiModel,
         language: summaryResult.language || sttResult.language,

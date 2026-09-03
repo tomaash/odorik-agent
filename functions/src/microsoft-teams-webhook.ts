@@ -1,4 +1,4 @@
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { onRequest } from "firebase-functions/v2/https";
 
@@ -19,18 +19,16 @@ import { productionAppOrigin } from "./connectors/google-oauth-return.js";
 import {
   connectorCredentialKey,
   geminiApiKey,
-  googleConnectorClientId,
   googleConnectorClientSecret,
-  microsoftConnectorClientId,
   microsoftConnectorClientSecret,
   qdrantApiKey,
   qdrantUrl,
 } from "./router.js";
 import { sha256Hex } from "./hash.js";
 
-export const microsoftTeamsBotClientId = defineSecret("MICROSOFT_TEAMS_BOT_CLIENT_ID");
+export const microsoftTeamsBotClientId = defineString("MICROSOFT_TEAMS_BOT_CLIENT_ID");
 export const microsoftTeamsBotClientSecret = defineSecret("MICROSOFT_TEAMS_BOT_CLIENT_SECRET");
-export const microsoftTeamsBotTenantId = defineSecret("MICROSOFT_TEAMS_BOT_TENANT_ID");
+export const microsoftTeamsBotTenantId = defineString("MICROSOFT_TEAMS_BOT_TENANT_ID");
 const runtimeServiceAccount = "odorik-crm@odorik-tx-260720-c58d.iam.gserviceaccount.com";
 
 let cachedRuntime: Awaited<ReturnType<typeof createMicrosoftTeamsInboundRuntime>> | null = null;
@@ -82,7 +80,7 @@ export const microsoftTeamsWebhook = onRequest(
     minInstances: 0,
     maxInstances: 5,
     serviceAccount: runtimeServiceAccount,
-    secrets: [microsoftTeamsBotClientId, microsoftTeamsBotClientSecret, microsoftTeamsBotTenantId],
+    secrets: [microsoftTeamsBotClientSecret],
     cors: false,
   },
   async (request, response) => {
@@ -119,7 +117,7 @@ export const processMicrosoftTeamsDm = onDocumentCreated(
     maxInstances: 3,
     retry: true,
     serviceAccount: runtimeServiceAccount,
-    secrets: [microsoftTeamsBotClientId, microsoftTeamsBotClientSecret, microsoftTeamsBotTenantId,
+    secrets: [microsoftTeamsBotClientSecret,
       connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl],
   },
   async (event) => {
@@ -146,10 +144,10 @@ export const processMicrosoftTeamsApproval = onDocumentCreated(
     maxInstances: 5,
     retry: false,
     serviceAccount: runtimeServiceAccount,
-    secrets: [microsoftTeamsBotClientId, microsoftTeamsBotClientSecret, microsoftTeamsBotTenantId,
+    secrets: [microsoftTeamsBotClientSecret,
       connectorCredentialKey, geminiApiKey, qdrantApiKey, qdrantUrl,
-      googleConnectorClientId, googleConnectorClientSecret,
-      microsoftConnectorClientId, microsoftConnectorClientSecret],
+      googleConnectorClientSecret,
+      microsoftConnectorClientSecret],
   },
   async (event) => {
     try {
@@ -181,7 +179,7 @@ export const syncMicrosoftTeamsApprovalDecision = onDocumentUpdated(
     maxInstances: 5,
     retry: false,
     serviceAccount: runtimeServiceAccount,
-    secrets: [microsoftTeamsBotClientId, microsoftTeamsBotClientSecret, microsoftTeamsBotTenantId],
+    secrets: [microsoftTeamsBotClientSecret],
   },
   async (event) => {
     const before = event.data?.before.data() || {};

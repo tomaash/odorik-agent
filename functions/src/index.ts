@@ -215,7 +215,54 @@ export const notifyApprovalRequested = onDocumentCreated(
   },
 );
 
-export const recoverKnowledgeIndexDeliveries = onSchedule(
+type ScheduledTask = { name: string; run: () => Promise<void> };
+
+async function runScheduledTasks(tasks: ScheduledTask[]): Promise<void> {
+  const results = await Promise.allSettled(tasks.map(async ({ name, run }) => {
+    await run();
+    console.info("Scheduled task completed", { name });
+  }));
+  const failures = results.flatMap((result, index) => (
+    result.status === "rejected"
+      ? [{
+        name: tasks[index]?.name || `task-${index}`,
+        error: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      }]
+      : []
+  ));
+  if (failures.length) {
+    console.error("Scheduled task batch completed with failures", { failures });
+    throw new Error(`${failures.length} scheduled task(s) failed`);
+  }
+}
+
+function googleConnectorConfiguration() {
+  return {
+    clientId: googleConnectorClientId.value(),
+    clientSecret: googleConnectorClientSecret.value(),
+    credentialKey: connectorCredentialKey.value(),
+  };
+}
+
+function microsoftConnectorConfiguration() {
+  return {
+    clientId: microsoftConnectorClientId.value(),
+    clientSecret: microsoftConnectorClientSecret.value(),
+    credentialKey: connectorCredentialKey.value(),
+  };
+}
+
+function logAttention(label: string, results: Array<{ status: string }>): void {
+  const attention = results.filter((result) => result.status === "attention");
+  if (attention.length) console.error(`${label} need attention`, attention);
+}
+
+function logFailures(label: string, results: Array<{ ok: boolean }>): void {
+  const failures = results.filter((result) => !result.ok);
+  if (failures.length) console.error(`${label} failed`, failures);
+}
+
+export const recoverScheduledWork = onSchedule(
   {
     schedule: "every 5 minutes",
     timeZone: "Europe/Prague",
@@ -225,15 +272,82 @@ export const recoverKnowledgeIndexDeliveries = onSchedule(
     maxInstances: 1,
     retryCount: 0,
     serviceAccount: runtimeServiceAccount,
-    secrets: [geminiApiKey, qdrantApiKey, qdrantUrl],
+    secrets: [
+      connectorCredentialKey,
+      geminiApiKey,
+      qdrantApiKey,
+      qdrantUrl,
+      googleConnectorClientSecret,
+      microsoftConnectorClientSecret,
+      githubAppPrivateKey,
+    ],
   },
-  async () => {
-    const results = await recoverDueKnowledgeIndexDeliveries(knowledgeIndexDependencies());
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more knowledge-index deliveries need attention", attention);
-    }
-  },
+  async () => runScheduledTasks([
+    {
+      name: "knowledge-index-deliveries",
+      run: async () => logAttention(
+        "Knowledge-index deliveries",
+        await recoverDueKnowledgeIndexDeliveries(knowledgeIndexDependencies()),
+      ),
+    },
+    {
+      name: "google-calendar",
+      run: async () => logAttention(
+        "Google Calendar recovery runs",
+        await retryDueGoogleCalendarSyncRuns(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "google-drive",
+      run: async () => logAttention(
+        "Google Drive recovery runs",
+        await retryDueGoogleDriveSyncRuns(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "google-mail",
+      run: async () => logAttention(
+        "Google Mail recovery runs",
+        await retryDueGoogleGmailSyncRuns(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "outlook-mail",
+      run: async () => logAttention(
+        "Outlook Mail recovery runs",
+        await retryDueMicrosoftOutlookSyncRuns(microsoftConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "outlook-calendar",
+      run: async () => logAttention(
+        "Outlook Calendar recovery runs",
+        await retryDueMicrosoftOutlookCalendarSyncRuns(microsoftConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "github",
+      run: async () => logAttention(
+        "GitHub recovery runs",
+        await retryDueGitHubSyncRuns({
+          configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+        }),
+      ),
+    },
+    {
+      name: "coding-run-executions",
+      run: async () => {
+        const result = await reconcileCodingRuns({
+          artifactStore: new GoogleCodingArtifactStore(),
+          inspectExecution: createCloudRunExecutionInspector(),
+          queuePublisher: (companyId, runId) => queueCodingPublisher({ companyId, runId }),
+        });
+        if (result.failures) {
+          throw new Error(`${result.failures} coding run reconciliation check(s) failed`);
+        }
+      },
+    },
+  ]),
 );
 
 export const projectCallContext = onDocumentWritten(
@@ -256,65 +370,7 @@ export const projectCallContext = onDocumentWritten(
   },
 );
 
-export const syncCalendarSources = onSchedule(
-  {
-    schedule: "every 30 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 3,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      googleConnectorClientId,
-      googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await syncAllGoogleCalendarConnections({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Google Calendar connections failed to synchronize", failures);
-    }
-  },
-);
-
-export const recoverCalendarSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      googleConnectorClientId,
-      googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await retryDueGoogleCalendarSyncRuns({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more Calendar synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const syncDriveSources = onSchedule(
+export const syncScheduledSources = onSchedule(
   {
     schedule: "every 30 minutes",
     timeZone: "Europe/Prague",
@@ -326,340 +382,100 @@ export const syncDriveSources = onSchedule(
     serviceAccount: runtimeServiceAccount,
     secrets: [
       connectorCredentialKey,
-      googleConnectorClientId,
       googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await syncAllGoogleDriveConnections({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Google Drive connections failed to synchronize", failures);
-    }
-  },
-);
-
-export const recoverDriveSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      googleConnectorClientId,
-      googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await retryDueGoogleDriveSyncRuns({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more Drive synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const syncMailSources = onSchedule(
-  {
-    schedule: "every 30 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      googleConnectorClientId,
-      googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await syncAllGoogleGmailConnections({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Gmail connections failed to synchronize", failures);
-    }
-  },
-);
-
-export const recoverMailSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      googleConnectorClientId,
-      googleConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await retryDueGoogleGmailSyncRuns({
-      clientId: googleConnectorClientId.value(),
-      clientSecret: googleConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more Gmail synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const syncOutlookMailSources = onSchedule(
-  {
-    schedule: "every 30 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      microsoftConnectorClientId,
       microsoftConnectorClientSecret,
+      githubAppPrivateKey,
     ],
   },
-  async () => {
-    const results = await syncAllMicrosoftOutlookConnections({
-      clientId: microsoftConnectorClientId.value(),
-      clientSecret: microsoftConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Outlook connections failed to synchronize", failures);
-    }
-  },
+  async () => runScheduledTasks([
+    {
+      name: "google-calendar",
+      run: async () => logFailures(
+        "Google Calendar connections",
+        await syncAllGoogleCalendarConnections(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "google-drive",
+      run: async () => logFailures(
+        "Google Drive connections",
+        await syncAllGoogleDriveConnections(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "google-mail",
+      run: async () => logFailures(
+        "Google Mail connections",
+        await syncAllGoogleGmailConnections(googleConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "outlook-mail",
+      run: async () => logFailures(
+        "Outlook Mail connections",
+        await syncAllMicrosoftOutlookConnections(microsoftConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "outlook-calendar",
+      run: async () => logFailures(
+        "Outlook Calendar connections",
+        await syncAllMicrosoftOutlookCalendarConnections(microsoftConnectorConfiguration()),
+      ),
+    },
+    {
+      name: "github",
+      run: async () => logFailures(
+        "GitHub connections",
+        await syncAllGitHubConnections({
+          configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
+        }),
+      ),
+    },
+  ]),
 );
 
-export const recoverOutlookMailSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      microsoftConnectorClientId,
-      microsoftConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await retryDueMicrosoftOutlookSyncRuns({
-      clientId: microsoftConnectorClientId.value(),
-      clientSecret: microsoftConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more Outlook synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const syncOutlookCalendarSources = onSchedule(
-  {
-    schedule: "every 30 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      microsoftConnectorClientId,
-      microsoftConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await syncAllMicrosoftOutlookCalendarConnections({
-      clientId: microsoftConnectorClientId.value(),
-      clientSecret: microsoftConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Outlook calendars failed to synchronize", failures);
-    }
-  },
-);
-
-export const recoverOutlookCalendarSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      microsoftConnectorClientId,
-      microsoftConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await retryDueMicrosoftOutlookCalendarSyncRuns({
-      clientId: microsoftConnectorClientId.value(),
-      clientSecret: microsoftConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more Outlook calendar synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const renewOutlookMailSubscriptions = onSchedule(
-  {
-    schedule: "every 12 hours",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [
-      connectorCredentialKey,
-      microsoftConnectorClientId,
-      microsoftConnectorClientSecret,
-    ],
-  },
-  async () => {
-    const results = await ensureAllMicrosoftOutlookSubscriptions({
-      clientId: microsoftConnectorClientId.value(),
-      clientSecret: microsoftConnectorClientSecret.value(),
-      credentialKey: connectorCredentialKey.value(),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more Outlook subscriptions failed to renew", failures);
-    }
-  },
-);
-
-export const syncGitHubSources = onSchedule(
-  {
-    schedule: "every 30 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 3,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [githubAppPrivateKey],
-  },
-  async () => {
-    const results = await syncAllGitHubConnections({
-      configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
-    });
-    const failures = results.filter((result) => !result.ok);
-    if (failures.length) {
-      console.error("One or more GitHub connections failed to reconcile", failures);
-    }
-  },
-);
-
-export const recoverGitHubSourceSyncs = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 540,
-    memory: "512MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-    secrets: [githubAppPrivateKey],
-  },
-  async () => {
-    const results = await retryDueGitHubSyncRuns({
-      configuration: githubConfigurationFromEnvironment(githubAppPrivateKey.value()),
-    });
-    const attention = results.filter((result) => result.status === "attention");
-    if (attention.length) {
-      console.error("One or more GitHub synchronization runs exhausted recovery", attention);
-    }
-  },
-);
-
-export const reconcileCodingRunExecutions = onSchedule(
-  {
-    schedule: "every 5 minutes",
-    timeZone: "Europe/Prague",
-    region: "europe-west3",
-    timeoutSeconds: 240,
-    memory: "256MiB",
-    maxInstances: 1,
-    retryCount: 0,
-    serviceAccount: runtimeServiceAccount,
-  },
-  async () => {
-    const result = await reconcileCodingRuns({
-      artifactStore: new GoogleCodingArtifactStore(),
-      inspectExecution: createCloudRunExecutionInspector(),
-      queuePublisher: (companyId, runId) => queueCodingPublisher({ companyId, runId }),
-    });
-    if (result.failures) {
-      throw new Error(`${result.failures} coding run reconciliation check(s) failed`);
-    }
-  },
-);
-
-export const redactExpiredConversations = onSchedule(
+export const runScheduledMaintenance = onSchedule(
   {
     schedule: "every 1 hours",
     timeZone: "Europe/Prague",
     region: "europe-west3",
-    timeoutSeconds: 300,
-    memory: "256MiB",
+    timeoutSeconds: 540,
+    memory: "512MiB",
     maxInstances: 1,
     retryCount: 0,
     serviceAccount: runtimeServiceAccount,
+    secrets: [
+      connectorCredentialKey,
+      microsoftConnectorClientSecret,
+    ],
   },
   async () => {
-    const migration = await backfillLegacyConversationRetentionMetadata();
-    const result = await redactExpiredConversationContent();
-    if (migration.examined || result.redacted) {
-      console.info("Applied conversation retention maintenance", { migration, ...result });
+    const tasks: ScheduledTask[] = [{
+      name: "conversation-retention",
+      run: async () => {
+        const migration = await backfillLegacyConversationRetentionMetadata();
+        const result = await redactExpiredConversationContent();
+        if (migration.examined || result.redacted) {
+          console.info("Applied conversation retention maintenance", { migration, ...result });
+        }
+      },
+    }];
+
+    const pragueHour = Number(new Intl.DateTimeFormat("en-US", {
+      timeZone: "Europe/Prague",
+      hour: "2-digit",
+      hourCycle: "h23",
+    }).format(new Date()));
+    if (pragueHour === 0 || pragueHour === 12) {
+      tasks.push({
+        name: "outlook-subscriptions",
+        run: async () => logFailures(
+          "Outlook subscriptions",
+          await ensureAllMicrosoftOutlookSubscriptions(microsoftConnectorConfiguration()),
+        ),
+      });
     }
+    await runScheduledTasks(tasks);
   },
 );

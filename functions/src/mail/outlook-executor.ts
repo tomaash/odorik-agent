@@ -1,5 +1,5 @@
 import { Timestamp } from "firebase-admin/firestore";
-import { defineSecret } from "firebase-functions/params";
+import { defineSecret, defineString } from "firebase-functions/params";
 
 import type { ApprovedActionExecutionContext } from "../actions/registry.js";
 import { authorizedMicrosoftCapability } from "../connectors/microsoft-oauth.js";
@@ -15,7 +15,7 @@ import {
   type MailDraftExecutor,
 } from "./executor.js";
 
-const microsoftClientId = defineSecret("MICROSOFT_CONNECTOR_CLIENT_ID");
+const microsoftClientId = defineString("MICROSOFT_CONNECTOR_CLIENT_ID");
 const microsoftClientSecret = defineSecret("MICROSOFT_CONNECTOR_CLIENT_SECRET");
 const connectorCredentialKey = defineSecret("CONNECTOR_CREDENTIAL_KEY");
 

@@ -24,7 +24,6 @@ export const microsoftOAuthCallback = onRequest(
     serviceAccount: runtimeServiceAccount,
     secrets: [
       connectorCredentialKey,
-      microsoftConnectorClientId,
       microsoftConnectorClientSecret,
     ],
   },

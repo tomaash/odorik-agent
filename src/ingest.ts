@@ -22,6 +22,16 @@ import {
 const maxUploadBytes = 31 * 1024 * 1024;
 const server = Fastify({ logger: true, bodyLimit: maxUploadBytes });
 const bucketName = requiredEnv("RECORDINGS_BUCKET");
+const legacyCredentials = (() => {
+  const parsed = JSON.parse(requiredEnv("ODORIK_UPLOAD_CREDENTIALS")) as {
+    username?: unknown;
+    password?: unknown;
+  };
+  if (typeof parsed.username !== "string" || typeof parsed.password !== "string") {
+    throw new Error("ODORIK_UPLOAD_CREDENTIALS must contain username and password strings");
+  }
+  return { username: parsed.username, password: parsed.password };
+})();
 
 await server.register(multipart, {
   limits: {
@@ -45,8 +55,8 @@ async function receiveRecording(
       companyId,
       connectionId,
       authorization: request.headers.authorization,
-      legacyUsername: process.env.ODORIK_UPLOAD_USER?.trim(),
-      legacyPassword: process.env.ODORIK_UPLOAD_PASSWORD?.trim(),
+      legacyUsername: legacyCredentials.username,
+      legacyPassword: legacyCredentials.password,
     });
   } catch {
     reply.header("www-authenticate", 'Basic realm="Odorik uploads"');

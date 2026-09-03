@@ -102,6 +102,11 @@ Secret Manager. Google connector OAuth on emulators needs
 `http://127.0.0.1:5173/oauth/google/callback` registered on the connectors
 OAuth client; Vite proxies it into the Functions emulator.
 
+The recording processor uses Gemini 3.5 Transcribe by default. Set
+`TRANSCRIPTION_PROVIDER=deepgram` to temporarily restore the legacy Deepgram
+Nova-3 path; `GEMINI_TRANSCRIPTION_MODEL` can override the default
+`gemini-3.5-transcribe` model independently of the summary model.
+
 For Slack direct conversation and Slack-native proposal decisions, configure the
 Slack app's Event Subscriptions request URL as `/webhooks/slack` and its
 Interactivity request URL as `/interactions/slack` on the same public origin.

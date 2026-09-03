@@ -3,8 +3,8 @@ set -euo pipefail
 
 # Artifact Registry bills storage above the 0.5 GB free tier. Every deploy pushes
 # a fresh timestamped image and nothing removed the old ones, so the repositories
-# grow without bound. These policies keep the last 5 versions per package plus
-# anything tagged in the past 14 days, and drop the rest.
+# grow without bound. This non-critical deployment keeps only the latest image
+# per package after a one-day safety window and drops the rest.
 #
 # Run with DRY_RUN=1 first: that records what the policy *would* delete without
 # deleting anything, visible in the repository's cleanup policy dry-run output.

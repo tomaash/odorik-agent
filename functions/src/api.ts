@@ -5,18 +5,14 @@ import {
   connectorCredentialKey,
   geminiApiKey,
   githubAppPrivateKey,
-  googleConnectorClientId,
   googleConnectorClientSecret,
-  microsoftConnectorClientId,
   microsoftConnectorClientSecret,
-  microsoftTeamsAppId,
   qdrantApiKey,
   qdrantUrl,
 } from "./router.js";
 import { createContext } from "./trpc.js";
 import { resendApiKey } from "./teams.js";
 import {
-  slackConnectorClientId,
   slackConnectorClientSecret,
 } from "./connectors/slack-oauth.js";
 
@@ -36,12 +32,8 @@ export const api = onRequest(
       qdrantApiKey,
       qdrantUrl,
       connectorCredentialKey,
-      googleConnectorClientId,
       googleConnectorClientSecret,
-      microsoftConnectorClientId,
       microsoftConnectorClientSecret,
-      microsoftTeamsAppId,
-      slackConnectorClientId,
       slackConnectorClientSecret,
       githubAppPrivateKey,
       resendApiKey,
